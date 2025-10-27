@@ -49,7 +49,6 @@ multirun/
 *.swo
 *~
 .cursor/
-.model_context/
 
 # OS
 .DS_Store
