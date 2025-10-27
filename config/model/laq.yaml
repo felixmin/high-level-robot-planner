@@ -1,0 +1,40 @@
+# LAQ Model Configuration
+# VQ-VAE for latent action quantization
+
+name: laq_base
+
+encoder:
+  in_channels: 6  # Concatenated frame_t and frame_t+1
+  base_channels: 64
+  channel_multipliers: [1, 2, 4, 8]  # [64, 128, 256, 512]
+  num_res_blocks: 2
+  latent_dim: 256
+  activation: silu
+  norm_type: groupnorm
+  norm_groups: 32
+
+quantizer:
+  num_tokens: 4  # Action sequence length
+  vocab_size: 8  # Embeddings per token position
+  embedding_dim: 256
+  beta: 0.25  # Commitment loss weight
+  ema_decay: 0.99  # EMA updates for codebook
+  use_ema: false  # Enable EMA updates
+
+decoder:
+  latent_dim: 256
+  base_channels: 32
+  channel_multipliers: [1, 2, 4, 8]
+  num_res_blocks: 2
+  out_channels: 3  # RGB output
+  activation: silu
+  norm_type: groupnorm
+  norm_groups: 32
+  output_activation: tanh
+
+# Loss weights
+loss_weights:
+  reconstruction: 1.0
+  codebook: 1.0
+  commitment: 0.25
+

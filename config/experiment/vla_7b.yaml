@@ -1,0 +1,30 @@
+# @package _global_
+
+# Foundation VLA 7B training configuration
+# Multi-node FSDP training
+
+defaults:
+  - /model@_here_: foundation_vla
+  - /data@_here_: latent_labeled
+  - /training@_here_: vla_fsdp
+  - /cluster@_here_: lrz_h100_multinode
+
+experiment:
+  name: vla_7b_foundation
+  description: "Foundation VLA training with Llama-2 7B"
+
+# Multi-node settings
+cluster:
+  compute:
+    num_nodes: 4
+    gpus_per_node: 4
+
+training:
+  effective_batch_size: 4096
+  batch_size_per_gpu: 16
+  gradient_accumulation_steps: 64
+
+logging:
+  tags: ["production", "foundation", "7b", "fsdp"]
+  log_model: true
+

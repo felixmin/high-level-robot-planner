@@ -1,0 +1,97 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# PyTorch
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# Hydra
+outputs/
+multirun/
+.hydra/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+.model_context/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logging and experiment tracking
+wandb/
+logs/
+mlruns/
+lightning_logs/
+*.log
+
+# Data (large files should not be committed)
+
+datasets/
+*.tar
+*.tar.gz
+*.zip
+*.h5
+*.hdf5
+
+# Checkpoints and models
+checkpoints/
+models/
+*.sqsh
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Documentation
+docs/_build/
+docs/api/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Slurm
+slurm-*.out
+*.sbatch.log
+

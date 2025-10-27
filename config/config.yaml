@@ -1,0 +1,19 @@
+# Base configuration for LAPA project
+# This is the entry point for Hydra configuration composition
+
+defaults:
+  - _self_
+  - experiment: laq_debug  # Default experiment (override with experiment=X)
+
+# Global settings
+experiment_name: ${experiment.name}
+seed: 42
+
+# Logging configuration
+logging:
+  project: lapa
+  save_dir: ./logs
+  log_model: false
+  tags: []
+  level: INFO
+

@@ -1,0 +1,27 @@
+# @package _global_
+
+# Full LAQ training configuration
+# Production training on full dataset
+
+defaults:
+  - /model@_here_: laq
+  - /data@_here_: openx_webdataset
+  - /training@_here_: laq_optimizer
+  - /cluster@_here_: lrz_h100
+
+experiment:
+  name: laq_openx_v1
+  description: "LAQ training on OpenX dataset"
+
+# Production settings
+data:
+  batch_size: 256
+  num_workers: 8
+
+training:
+  epochs: 100
+
+logging:
+  tags: ["production", "laq", "openx"]
+  log_model: true
+

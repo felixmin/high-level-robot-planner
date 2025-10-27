@@ -1,0 +1,28 @@
+# @package _global_
+
+# Debug configuration for LAQ training
+# Small dataset, fast iterations for development
+
+defaults:
+  - /model@_here_: laq
+  - /data@_here_: debug_frames
+  - /training@_here_: laq_optimizer
+  - /cluster@_here_: local_dev
+
+experiment:
+  name: laq_debug
+  description: "LAQ debug training on small dataset"
+
+# Override for debugging
+data:
+  batch_size: 8
+  num_workers: 2
+
+training:
+  epochs: 5
+  gradient:
+    clip_val: 1.0
+
+logging:
+  tags: ["debug", "laq"]
+

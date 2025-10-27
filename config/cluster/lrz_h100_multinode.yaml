@@ -1,0 +1,39 @@
+# LRZ H100 Multi-Node Configuration
+# 4+ nodes with 4x H100 GPUs each
+
+name: lrz_h100_multinode
+
+compute:
+  num_nodes: 4
+  gpus_per_node: 4
+  cpus_per_task: 18
+  mem_gb: 500
+  time_limit: "48:00:00"
+
+slurm:
+  enabled: true
+  partition: mcml-hgx-h100-94x4
+  qos: mcml
+  account: null
+  
+distributed:
+  backend: nccl
+  precision: bf16-mixed
+  strategy: fsdp  # FSDP for multi-node
+  
+  # NCCL settings (critical for multi-node)
+  nccl_socket_ifname: ib0
+  nccl_debug: WARN
+  nccl_ib_timeout: 22
+  nccl_ib_retry_cnt: 7
+
+storage:
+  data_root: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/datasets
+  checkpoint_dir: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/checkpoints
+  log_dir: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/logs
+
+container:
+  image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/lapa.sqsh
+  mounts:
+    - /dss/dssmcmlfs01:/data
+

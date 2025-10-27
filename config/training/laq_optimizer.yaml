@@ -1,0 +1,53 @@
+# LAQ Training Configuration
+# Optimizer and scheduler settings for LAQ training
+
+epochs: 100
+max_steps: null  # If set, overrides epochs
+
+optimizer:
+  type: AdamW
+  lr: 1.0e-4
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  eps: 1.0e-8
+
+scheduler:
+  type: cosine  # 'cosine', 'step', 'plateau'
+  warmup_steps: 1000
+  warmup_start_lr: 1.0e-6
+  min_lr: 1.0e-6
+  
+  # For CosineAnnealingLR
+  T_max: ${training.epochs}
+  
+  # For StepLR (if used)
+  step_size: 30
+  gamma: 0.1
+  
+  # For ReduceLROnPlateau (if used)
+  mode: min
+  factor: 0.5
+  patience: 10
+
+gradient:
+  clip_val: 1.0
+  clip_algorithm: norm  # 'norm' or 'value'
+
+# Loss configuration
+loss_weights:
+  reconstruction: 1.0
+  vq: 1.0  # Combined codebook + commitment
+
+# Validation settings
+validation:
+  interval_epochs: 1
+  num_samples_to_log: 8  # Number of reconstructions to visualize
+
+# Checkpointing
+checkpoint:
+  monitor: val/loss_total
+  mode: min
+  save_top_k: 3
+  save_last: true
+  every_n_epochs: 5
+
