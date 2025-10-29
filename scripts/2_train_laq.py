@@ -1,50 +1,226 @@
 #!/usr/bin/env python3
 """
-Script 2: Train LAQ (Latent Action Quantization)
+LAQ Training Script
 
-Train the VQ-VAE model to compress frame-to-frame transitions into discrete latent codes.
+Train LAQ (Latent Action Quantization) model on video datasets.
+Supports both real datasets and dummy test data for validation.
 
 Usage:
-    # Local debug
-    python scripts/2_train_laq.py experiment=laq_debug
+    # Train with dummy data (overfitting test)
+    python scripts/2_train_laq.py experiment=laq_debug data.data_dir=./datasets/dummy_videos training.overfit_batches=5
     
-    # Full training on LRZ
-    sbatch slurm/train.sbatch scripts/2_train_laq.py experiment=laq_full
+    # Train on full dataset
+    python scripts/2_train_laq.py experiment=laq_full data.data_dir=/dss/.../datasets/openx_frames
+    
+    # Override specific parameters
+    python scripts/2_train_laq.py experiment=laq_debug training.lr=1e-3 data.batch_size=16
 """
 
 import sys
-from pathlib import Path
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-# Add packages to path
-workspace_root = Path(__file__).parent.parent
-sys.path.insert(0, str(workspace_root / "packages"))
-
+import torch
+import pytorch_lightning as pl
+from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
 import hydra
 from omegaconf import DictConfig, OmegaConf
+from pathlib import Path
+
+from packages.laq.task import create_laq_module_from_config
+from packages.laq.data import create_dataloader
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="config")
+def train_laq(cfg: DictConfig):
+    """
+    Train LAQ model using Hydra configuration.
+    
+    Args:
+        cfg: Hydra configuration object
+        
+    Returns:
+        bool: True if training completed successfully
+    """
+    
+    print(f"Config: {OmegaConf.to_yaml(cfg)}")
+    print("=" * 60)
+    print("LAQ Training")
+    print("=" * 60)
+    print(f"Experiment: {cfg.experiment.name}")
+    print(f"Data directory: {cfg.data.data_dir}")
+    print(f"Max epochs: {cfg.training.epochs}")
+    print(f"Batch size: {cfg.data.batch_size}")
+    print(f"Learning rate: {cfg.optimizer.lr}")
+    print(f"Accelerator: auto")
+    print(f"Devices: 1")
+    if cfg.training.get('overfit_batches'):
+        print(f"Overfit batches: {cfg.training.overfit_batches}")
+    if cfg.training.get('fast_dev_run'):
+        print("Fast dev run: True")
+    print()
+    
+    # Check if data exists
+    data_path = Path(cfg.data.data_dir)
+    if not data_path.exists():
+        print(f"ERROR: Data directory not found: {cfg.data.data_dir}")
+        print("Please run: python scripts/download_test_data.py --dummy")
+        return False
+    
+    # Create model
+    try:
+        model_config = {
+            'encoder': cfg.model.encoder,
+            'quantizer': cfg.model.quantizer,
+            'decoder': cfg.model.decoder,
+            'loss_weights': cfg.model.get('loss_weights', {}),
+            'learning_rate': cfg.optimizer.lr
+        }
+        
+        model = create_laq_module_from_config(model_config)
+        print("✓ LAQ model created successfully")
+    except Exception as e:
+        print(f"ERROR: Failed to create model: {e}")
+        return False
+    
+    # Create data loaders
+    try:
+        # For single sample testing, don't drop incomplete batches
+        drop_last = not cfg.training.get('overfit_batches', False)
+        
+        train_loader = create_dataloader(
+            video_dir=cfg.data.data_dir,
+            batch_size=cfg.data.batch_size,
+            num_workers=cfg.data.num_workers,
+            shuffle=True,
+            drop_last=drop_last,
+            frame_spacing=cfg.data.get('frame_spacing', 1),
+            max_frames_per_video=cfg.data.get('max_frames_per_video', 5)
+        )
+        
+        # For validation, use same data (or create separate val set)
+        val_loader = create_dataloader(
+            video_dir=cfg.data.data_dir,
+            batch_size=cfg.data.batch_size,
+            num_workers=cfg.data.num_workers,
+            shuffle=False,
+            drop_last=drop_last,
+            frame_spacing=cfg.data.get('frame_spacing', 1),
+            max_frames_per_video=cfg.data.get('max_frames_per_video', 5)
+        )
+        
+        print(f"✓ Data loaders created successfully")
+        print(f"  - Training batches: {len(train_loader)}")
+        print(f"  - Validation batches: {len(val_loader)}")
+    except Exception as e:
+        print(f"ERROR: Failed to create data loaders: {e}")
+        return False
+    
+    # Setup logging
+    if cfg.training.get('use_wandb', False):
+        logger = WandbLogger(
+            project=cfg.training.get('project_name', 'lapa-laq'),
+            name=f"{cfg.experiment.name}-{Path(cfg.data.data_dir).name}",
+            config=OmegaConf.to_container(cfg, resolve=True)
+        )
+    else:
+        logger = TensorBoardLogger("logs", name=f"{cfg.experiment.name}-{Path(cfg.data.data_dir).name}")
+    
+    # Setup callbacks
+    callbacks = [
+        ModelCheckpoint(
+            monitor='val/loss_total',
+            mode='min',
+            save_top_k=3,
+            save_last=True,
+            filename='best-{epoch:02d}-{val/loss_total:.4f}',
+            every_n_epochs=1
+        ),
+        LearningRateMonitor(logging_interval='epoch')
+    ]
+    
+    # Add early stopping for normal training (not overfitting)
+    if not cfg.training.get('overfit_batches'):
+        callbacks.append(
+            EarlyStopping(
+                monitor='val/loss_total',
+                mode='min',
+                patience=cfg.training.get('early_stopping_patience', 20),
+                min_delta=1e-6
+            )
+        )
+    
+    # Create trainer
+    trainer_kwargs = {
+        'max_epochs': cfg.training.epochs,
+        'logger': logger,
+        'callbacks': callbacks,
+        'enable_progress_bar': True,
+        'enable_model_summary': True,
+        'log_every_n_steps': cfg.training.get('log_every_n_steps', 10),
+        'val_check_interval': cfg.training.get('val_check_interval', 1.0),
+        'check_val_every_n_epoch': cfg.training.get('check_val_every_n_epoch', 1),
+        'gradient_clip_val': cfg.training.gradient.clip_val,
+        'accelerator': 'auto',
+        'devices': 1
+    }
+    
+    # Add overfitting or fast dev run options
+    if cfg.training.get('overfit_batches'):
+        trainer_kwargs['overfit_batches'] = cfg.training.overfit_batches
+        print(f"✓ Overfitting mode: {cfg.training.overfit_batches} batches")
+    elif cfg.training.get('fast_dev_run'):
+        trainer_kwargs['fast_dev_run'] = True
+        print("✓ Fast dev run mode enabled")
+    
+    trainer = pl.Trainer(**trainer_kwargs)
+    
+    print("✓ Trainer configured successfully")
+    print()
+    
+    # Train the model
+    try:
+        print("Starting training...")
+        trainer.fit(model, train_loader, val_loader)
+        
+        # Get final validation loss
+        final_loss = trainer.callback_metrics.get('val/loss_total', float('inf'))
+        
+        print()
+        print("=" * 60)
+        print("Training Results")
+        print("=" * 60)
+        print(f"Final validation loss: {final_loss:.6f}")
+        print(f"Best model saved to: {trainer.checkpoint_callback.best_model_path}")
+        
+        if cfg.training.get('overfit_batches'):
+            # For overfitting test, check if loss is low enough
+            target_loss = cfg.training.get('overfit_target_loss', 0.01)
+            if final_loss <= target_loss:
+                print("✓ OVERFITTING TEST PASSED!")
+                print(f"  Loss converged to {final_loss:.6f} <= {target_loss}")
+            else:
+                print("✗ OVERFITTING TEST FAILED")
+                print(f"  Loss {final_loss:.6f} > {target_loss}")
+        
+        print("✓ Training completed successfully!")
+        return True
+            
+    except Exception as e:
+        print(f"ERROR: Training failed: {e}")
+        return False
+
+
+@hydra.main(config_path="../config", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     """
-    Main training function.
+    Main entry point for LAQ training.
     
-    TODO: Implement LAQ training:
-    1. Setup logging and seed
-    2. Initialize data module
-    3. Initialize LAQ model
-    4. Setup Lightning trainer
-    5. Train the model
-    6. Save final checkpoint
+    Uses Hydra for configuration management as specified in PLAN.md.
     """
-    print("=" * 80)
-    print("LAPA Stage 1: LAQ Training")
-    print("=" * 80)
-    print("\nConfiguration:")
-    print(OmegaConf.to_yaml(cfg))
-    print("\nTODO: Implement LAQ training (Task 1.6, 1.7)")
-    print("See PLAN.md Section 2.1 for detailed specifications")
+    success = train_laq(cfg)
+    return 0 if success else 1
 
 
 if __name__ == "__main__":
-    main()
-
+    exit(main())

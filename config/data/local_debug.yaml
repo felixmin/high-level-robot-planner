@@ -1,0 +1,38 @@
+# Local Debug Dataset Configuration
+# Uses dummy videos for testing
+
+name: local_debug
+task: laq
+
+# Use single-sample directory with your recorded video
+data_dir: ./datasets/single_sample
+
+# Small batches for debugging
+batch_size: 2
+num_workers: 0  # No workers for small dataset
+prefetch_factor: 2
+pin_memory: true
+persistent_workers: false
+
+# Frame spacing: how many frames apart frame_t and frame_t+1 should be
+frame_spacing: 50  # 50 frames apart for more noticeable difference
+
+# Load more frames to support larger spacing
+max_frames_per_video: 100
+
+# Image preprocessing
+image_size: 224
+normalize:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+# No augmentation for debugging
+augmentation:
+  random_horizontal_flip: 0.0
+  color_jitter:
+    brightness: 0.0
+    contrast: 0.0
+    saturation: 0.0
+    hue: 0.0
+  random_erasing: 0.0
+

@@ -1,0 +1,37 @@
+# @package _global_
+
+# Single sample overfitting configuration for LAQ training
+# Uses only 1 sample for rapid debugging
+
+defaults:
+  - /model: laq
+  - /data: local_debug
+  - /training: laq_optimizer
+  - /cluster: local_dev
+
+experiment:
+  name: laq_single_sample
+  description: "LAQ single sample overfitting test"
+
+# Override for single sample overfitting
+data:
+  batch_size: 1
+  num_workers: 0
+
+training:
+  epochs: 5000  # More epochs for single sample
+  overfit_batches: 1  # Only 1 batch = 1 sample
+  overfit_target_loss: 0.05  # Should be achievable with single sample
+  gradient:
+    clip_val: 1.0
+  use_wandb: true
+  project_name: lapa-laq-single-sample
+  # Validation frequency controls
+  val_check_interval: 1.0  # Validate every epoch
+  check_val_every_n_epoch: 50  # Validate every epoch
+
+optimizer:
+  lr: 2e-3  # Slightly higher LR for single sample
+
+logging:
+  tags: ["debug", "laq", "single-sample", "overfit"]
