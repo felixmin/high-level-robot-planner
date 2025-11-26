@@ -72,11 +72,11 @@ def log_reconstruction_images(
     images = []
     for i in range(B):
         # Original image
-        orig_img = original[i].permute(1, 2, 0).cpu().numpy()
+        orig_img = original[i].permute(1, 2, 0).detach().cpu().numpy()
         orig_img = (orig_img * 255).astype(np.uint8)
         
         # Reconstructed image
-        recon_img = reconstructed[i].permute(1, 2, 0).cpu().numpy()
+        recon_img = reconstructed[i].permute(1, 2, 0).detach().cpu().numpy()
         recon_img = (recon_img * 255).astype(np.uint8)
         
         # Create side-by-side comparison
@@ -110,12 +110,12 @@ def compute_codebook_utilization(
         Dictionary with utilization metrics
     """
     # Flatten all indices
-    all_indices = codebook_indices.flatten().cpu().numpy()
+    all_indices = codebook_indices.flatten().detach().cpu().numpy()
     
     # Count usage per token position
     utilization_per_token = []
     for token_idx in range(num_tokens):
-        token_indices = codebook_indices[:, token_idx].cpu().numpy()
+        token_indices = codebook_indices[:, token_idx].detach().cpu().numpy()
         unique_indices = len(np.unique(token_indices))
         utilization = unique_indices / vocab_size
         utilization_per_token.append(utilization)
@@ -149,7 +149,7 @@ def compute_perplexity(codebook_indices: torch.Tensor) -> float:
         Perplexity value
     """
     # Flatten all indices
-    all_indices = codebook_indices.flatten().cpu().numpy()
+    all_indices = codebook_indices.flatten().detach().cpu().numpy()
     
     # Compute probability distribution
     unique_indices, counts = np.unique(all_indices, return_counts=True)
@@ -186,7 +186,7 @@ def log_codebook_heatmap(
     usage_matrix = np.zeros((num_tokens, vocab_size))
     
     for token_idx in range(num_tokens):
-        token_indices = codebook_indices[:, token_idx].cpu().numpy()
+        token_indices = codebook_indices[:, token_idx].detach().cpu().numpy()
         unique_indices, counts = np.unique(token_indices, return_counts=True)
         usage_matrix[token_idx, unique_indices] = counts
     

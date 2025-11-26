@@ -1,18 +1,22 @@
 """
-LAQ Lightning Module for training
+LAPA Lightning Module for training
+
+Updated for LAPA transformer-based architecture with:
+- MSE loss only (no VQ losses)
+- Input format: [B, 3, 2, 256, 256]
+- Output format: [B, 3, 1, 256, 256]
 """
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import pytorch_lightning as pl
 from typing import Dict, Any, Tuple
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
-from packages.laq.models.encoder import Encoder
-from packages.laq.models.quantizer import VectorQuantizer
-from packages.laq.models.decoder import Decoder
+from packages.laq.models.lapa import LAPA, create_lapa_from_config
 from packages.common.logging import (
     log_reconstruction_images,
     log_training_metrics,
@@ -22,189 +26,221 @@ from packages.common.logging import (
 
 class LAQModule(pl.LightningModule):
     """
-    Lightning module for LAQ (Latent Action Quantization) training.
+    Lightning module for LAPA (Latent Action Pretraining from Videos) training.
     
-    This module combines the encoder, quantizer, and decoder into a complete
-    VQ-VAE system for learning discrete latent representations of video transitions.
+    This module implements the LAPA architecture with:
+    - Transformer-based encoder (spatial + temporal)
+    - NSVQ quantizer (delta quantization, single codebook)
+    - Cross-attention decoder
+    - MSE loss only (no VQ-specific losses)
     """
     
     def __init__(
         self,
-        encoder_config: Dict[str, Any],
-        quantizer_config: Dict[str, Any],
-        decoder_config: Dict[str, Any],
-        loss_weights: Dict[str, float] = None,
+        model_config: Dict[str, Any],
         learning_rate: float = 1e-4,
+        weight_decay: float = 0.01,
+        warmup_steps: int = 1000,
         **kwargs
     ):
         super().__init__()
         self.save_hyperparameters()
         
-        # Initialize components
-        self.encoder = Encoder(**encoder_config)
-        self.quantizer = VectorQuantizer(**quantizer_config)
-        self.decoder = Decoder(**decoder_config)
+        # Initialize LAPA model
+        self.lapa = create_lapa_from_config({'model': model_config})
         
-        # Loss weights (focus heavily on reconstruction)
-        self.loss_weights = loss_weights or {
-            'reconstruction': 10.0,  # Increased to prioritize reconstruction
-            'codebook': 0.01,  # Further reduced
-            'commitment': 0.01  # Further reduced
-        }
-        
-        # Learning rate
+        # Training parameters
         self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.warmup_steps = warmup_steps
         
-        # Loss function
+        # Loss function (MSE only for LAPA)
         self.reconstruction_loss = nn.MSELoss()
     
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+    def forward(self, frames: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Forward pass through the LAQ pipeline.
+        Forward pass through LAPA pipeline.
         
         Args:
-            x: Input tensor of shape [B, 6, H, W] (concatenated frames)
+            frames: Input frame pairs [B, 3, 2, 256, 256]
             
         Returns:
-            reconstructed: Reconstructed output [B, 3, H, W]
-            quantized: Quantized latent features [B, num_tokens, embedding_dim]
-            losses: Dictionary of VQ losses
+            reconstructed: Reconstructed next frame [B, 3, 1, 256, 256]
+            indices: Discrete latent action codes [B, 4]
+            perplexity: Codebook usage metric
         """
-        # Encode
-        encoded = self.encoder(x)
-        
-        # Quantize
-        quantized, indices, vq_losses = self.quantizer(encoded)
-        
-        # Decode
-        reconstructed = self.decoder(quantized)
-        
-        return reconstructed, quantized, vq_losses
+        return self.lapa(frames)
     
-    def compute_loss(self, x: torch.Tensor, reconstructed: torch.Tensor, vq_losses: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def compute_loss(
+        self,
+        frames: torch.Tensor,
+        reconstructed: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
         """
-        Compute total loss from reconstruction and VQ losses.
+        Compute loss (MSE only for LAPA).
         
         Args:
-            x: Input tensor
-            reconstructed: Reconstructed tensor
-            vq_losses: VQ losses from quantizer
+            frames: Input frame pairs [B, 3, 2, 256, 256]
+            reconstructed: Reconstructed frame [B, 3, 1, 256, 256]
             
         Returns:
-            Dictionary of all losses
+            Dictionary with loss_recon key
         """
-        # Reconstruction loss (reconstruct frame_t+1 from concatenated input)
-        target_frame = x[:, 3:]  # Take last 3 channels as target (frame_t+1)
+        # Target is the second frame: [B, 3, 2, 256, 256] → [B, 3, 1, 256, 256]
+        target_frame = frames[:, :, 1:2, :, :]
+        
+        # Compute MSE loss
         recon_loss = self.reconstruction_loss(reconstructed, target_frame)
         
-        # VQ losses
-        codebook_loss = vq_losses['codebook_loss']
-        commitment_loss = vq_losses['commitment_loss']
-        
-        # Total loss
-        total_loss = (
-            self.loss_weights['reconstruction'] * recon_loss +
-            self.loss_weights['codebook'] * codebook_loss +
-            self.loss_weights['commitment'] * commitment_loss
-        )
-        
         return {
-            'loss_total': total_loss,
-            'loss_reconstruction': recon_loss,
-            'loss_codebook': codebook_loss,
-            'loss_commitment': commitment_loss
+            'loss_recon': recon_loss
         }
     
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """Training step with comprehensive logging."""
-        x = batch
+        # Handle batch from dataloader (may be list or tensor)
+        if isinstance(batch, list):
+            frames = batch[0]  # Extract tensor from list
+        else:
+            frames = batch
         
         # Forward pass
-        reconstructed, quantized, vq_losses = self(x)
+        reconstructed, indices, perplexity = self(frames)
         
-        # Compute losses
-        losses = self.compute_loss(x, reconstructed, vq_losses)
+        # Compute loss (MSE only)
+        losses = self.compute_loss(frames, reconstructed)
         
-        # Get quantizer indices for logging
-        _, indices, _ = self.quantizer(self.encoder(x))
+        # Log metrics
+        self.log('train/loss_recon', losses['loss_recon'], on_step=True, on_epoch=True, prog_bar=True)
+        self.log('train/perplexity', perplexity, on_step=True, on_epoch=True, prog_bar=True)
         
-        # Log comprehensive metrics
-        metrics = log_training_metrics(
-            losses,
-            indices,
-            self.quantizer.vocab_size,
-            self.quantizer.num_tokens,
-            self.global_step
-        )
+        # Log codebook utilization
+        codebook_util = self.lapa.get_codebook_utilization()
+        self.log('train/codebook_utilization', codebook_util, on_step=True, on_epoch=True, prog_bar=True)
         
-        # Log all metrics
-        for key, value in metrics.items():
-            if key != 'step':
-                self.log(f'train/{key}', value, on_step=True, on_epoch=True, prog_bar=True)
+        # Compute additional metrics
+        with torch.no_grad():
+            # PSNR
+            target_frame = frames[:, :, 1:2, :, :]
+            mse = F.mse_loss(reconstructed, target_frame)
+            psnr = 10 * torch.log10(4.0 / mse)  # Assuming values in [-1, 1], range = 2, range^2 = 4
+            self.log('train/psnr', psnr, on_step=True, on_epoch=True, prog_bar=False)
         
-        return losses['loss_total']
+        return losses['loss_recon']
     
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """Validation step with reconstruction visualization."""
-        x = batch
+        # Handle batch from dataloader (may be list or tensor)
+        if isinstance(batch, list):
+            frames = batch[0]  # Extract tensor from list
+        else:
+            frames = batch
         
         # Forward pass
-        reconstructed, quantized, vq_losses = self(x)
+        reconstructed, indices, perplexity = self(frames)
         
-        # Compute losses
-        losses = self.compute_loss(x, reconstructed, vq_losses)
+        # Compute loss
+        losses = self.compute_loss(frames, reconstructed)
         
-        # Get quantizer indices for logging
-        _, indices, _ = self.quantizer(self.encoder(x))
+        # Log metrics
+        self.log('val/loss_recon', losses['loss_recon'], on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val/perplexity', perplexity.detach(), on_step=False, on_epoch=True, prog_bar=True)
         
-        # Log comprehensive metrics
-        metrics = log_training_metrics(
-            losses,
-            indices,
-            self.quantizer.vocab_size,
-            self.quantizer.num_tokens,
-            self.global_step
-        )
+        # Log codebook utilization
+        codebook_util = self.lapa.get_codebook_utilization()
+        self.log('val/codebook_utilization', codebook_util, on_step=False, on_epoch=True, prog_bar=True)
         
-        # Log all metrics
-        for key, value in metrics.items():
-            if key != 'step':
-                self.log(f'val/{key}', value, on_step=False, on_epoch=True, prog_bar=True)
+        # Compute additional metrics
+        with torch.no_grad():
+            # PSNR
+            target_frame = frames[:, :, 1:2, :, :]
+            mse = F.mse_loss(reconstructed, target_frame)
+            psnr = 10 * torch.log10(4.0 / mse)
+            self.log('val/psnr', psnr, on_step=False, on_epoch=True, prog_bar=False)
         
-        # Log reconstruction images (as specified in PLAN.md)
-        if batch_idx == 0:  # Only log on first batch to avoid spam
-            target_frame = x[:, 3:]  # Take last 3 channels as target (frame_t+1)
+        # Log reconstruction images (first batch only)
+        if batch_idx == 0:
+            target_frame = frames[:, :, 1:2, :, :].squeeze(2)  # [B, 3, 256, 256]
+            recon_frame = reconstructed.squeeze(2)  # [B, 3, 256, 256]
+            
             recon_images = log_reconstruction_images(
-                target_frame, reconstructed, self.global_step, max_images=8
+                target_frame, recon_frame, self.global_step, max_images=8
             )
             
-            # Log reconstruction images
-            self.logger.experiment.log({
-                "val/reconstruction_images": recon_images["reconstruction_images"],
-                "step": self.global_step
-            })
+            # Log to WandB (TensorBoard doesn't support .log() method)
+            if hasattr(self.logger, 'experiment'):
+                # Check if it's WandB (has .log method) or TensorBoard (has .add_image)
+                if hasattr(self.logger.experiment, 'log'):
+                    # WandB logger
+                    self.logger.experiment.log({
+                        "val/reconstruction_images": recon_images["reconstruction_images"],
+                        "step": self.global_step
+                    })
+                # TensorBoard logging is handled via self.log() calls above
             
-            # Log codebook usage table
+            # Log codebook usage heatmap
             usage_data = log_codebook_heatmap(
-                indices, self.quantizer.vocab_size, self.quantizer.num_tokens, self.global_step
+                indices,
+                self.lapa.codebook_size,
+                self.lapa.code_seq_len,
+                self.global_step
             )
-            self.logger.experiment.log({
-                "val/codebook_usage_table": usage_data["codebook_usage_table"],
-                "step": self.global_step
-            })
+            
+            # Log codebook usage to WandB (TensorBoard doesn't support tables)
+            if hasattr(self.logger, 'experiment'):
+                if hasattr(self.logger.experiment, 'log'):
+                    # WandB logger
+                    self.logger.experiment.log({
+                        "val/codebook_usage_table": usage_data["codebook_usage_table"],
+                        "step": self.global_step
+                    })
+                # TensorBoard doesn't support table logging, skip
         
-        return losses['loss_total']
+        return losses['loss_recon']
+    
+    def predict_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        """
+        Prediction step for latent label generation.
+        
+        Used by script 3_generate_latent_labels.py to extract discrete latent codes.
+        """
+        frames = batch
+        
+        # Get latent action indices
+        indices = self.lapa.predict_latent_actions(frames)
+        
+        return indices
     
     def configure_optimizers(self):
-        """Configure optimizer."""
+        """Configure optimizer with warmup and cosine annealing."""
         optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.learning_rate,
             betas=(0.9, 0.999),
-            weight_decay=0.01
+            weight_decay=self.weight_decay,
+            eps=1e-8
         )
         
-        return optimizer
+        # Cosine annealing with warmup
+        def lr_lambda(step):
+            if step < self.warmup_steps:
+                # Linear warmup
+                return step / self.warmup_steps
+            else:
+                # Cosine decay
+                progress = (step - self.warmup_steps) / max(1, self.trainer.estimated_stepping_batches - self.warmup_steps)
+                return 0.5 * (1 + torch.cos(torch.tensor(progress * 3.14159)))
+        
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': {
+                'scheduler': scheduler,
+                'interval': 'step',
+                'frequency': 1
+            }
+        }
 
 
 def create_laq_module_from_config(config: Dict[str, Any]) -> LAQModule:
@@ -212,15 +248,17 @@ def create_laq_module_from_config(config: Dict[str, Any]) -> LAQModule:
     Create LAQ module from configuration dictionary.
     
     Args:
-        config: Configuration dictionary with encoder, quantizer, decoder configs
+        config: Configuration dictionary with model and training parameters
         
     Returns:
         LAQModule instance
     """
+    model_config = config.get('model', {})
+    training_config = config.get('training', {})
+    
     return LAQModule(
-        encoder_config=config['encoder'],
-        quantizer_config=config['quantizer'],
-        decoder_config=config['decoder'],
-        loss_weights=config.get('loss_weights', None),
-        learning_rate=config.get('learning_rate', 1e-4)
+        model_config=model_config,
+        learning_rate=training_config.get('lr', 1e-4),
+        weight_decay=training_config.get('weight_decay', 0.01),
+        warmup_steps=training_config.get('warmup_steps', 1000)
     )

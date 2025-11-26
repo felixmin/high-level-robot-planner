@@ -21,7 +21,8 @@ frame_spacing: 50  # 50 frames apart for more noticeable difference
 max_frames_per_video: 100
 
 # Image preprocessing
-image_size: 224
+# LAPA uses 256x256 for better patch alignment (256/32 = 8×8 patches)
+image_size: 256
 normalize:
   mean: [0.485, 0.456, 0.406]
   std: [0.229, 0.224, 0.225]

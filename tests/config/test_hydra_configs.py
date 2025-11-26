@@ -19,7 +19,14 @@ def test_laq_debug_config(config_dir):
         cfg = compose(config_name="config", overrides=["experiment=laq_debug"])
         
         assert cfg.experiment.name == "laq_debug"
-        assert cfg.encoder.in_channels == 6  # Check encoder config directly
+        # New LAPA config structure: model config is merged at top level via @_here_
+        # Check that model config exists (channels should be at top level)
+        assert hasattr(cfg, 'channels') or hasattr(cfg, 'model')
+        # If model is merged, channels should be accessible directly
+        if hasattr(cfg, 'channels'):
+            assert cfg.channels == 3
+        elif hasattr(cfg, 'model'):
+            assert cfg.model.channels == 3
         assert cfg.data.batch_size == 8
         assert cfg.training.epochs == 5
 

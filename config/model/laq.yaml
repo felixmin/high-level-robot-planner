@@ -1,40 +1,47 @@
-# LAQ Model Configuration
-# VQ-VAE for latent action quantization
+# LAPA Model Configuration
+# Transformer-based architecture for latent action quantization
 
-name: laq_base
+name: laq_transformer  # Changed from laq_base
 
-encoder:
-  in_channels: 6  # Concatenated frame_t and frame_t+1
-  base_channels: 64
-  channel_multipliers: [1, 2, 4, 8]  # [64, 128, 256, 512]
-  num_res_blocks: 2
-  latent_dim: 256
-  activation: silu
-  norm_type: groupnorm
-  norm_groups: 32
+# Image and patch configuration
+image_size: 256  # Changed from 224 for better patch alignment
+patch_size: 32  # 256/32 = 8×8 = 64 patches
+channels: 3
 
-quantizer:
-  num_tokens: 4  # Action sequence length
-  vocab_size: 8  # Embeddings per token position
-  embedding_dim: 256
-  beta: 0.25  # Commitment loss weight
-  ema_decay: 0.99  # EMA updates for codebook
-  use_ema: false  # Enable EMA updates
+# Transformer dimensions
+dim: 1024  # Model dimension
+quant_dim: 32  # Quantization dimension
 
-decoder:
-  latent_dim: 256
-  base_channels: 32
-  channel_multipliers: [1, 2, 4, 8]
-  num_res_blocks: 2
-  out_channels: 3  # RGB output
-  activation: silu
-  norm_type: groupnorm
-  norm_groups: 32
-  output_activation: tanh
+# Encoder configuration
+spatial_depth: 8  # Spatial transformer layers
+temporal_depth: 8  # Temporal transformer layers
+heads: 16  # Attention heads
+dim_head: 64  # Dimension per head (heads × dim_head = dim)
+mlp_ratio: 4  # FFN expansion ratio
 
-# Loss weights
-loss_weights:
-  reconstruction: 1.0
-  codebook: 1.0
-  commitment: 0.25
+# NSVQ configuration (replaces old quantizer)
+code_seq_len: 4  # 2×2 action grid = 4 tokens
+codebook_size: 8  # Single shared codebook
+# NO beta, NO ema_decay - LAPA uses noise-substitution STE
 
+# Decoder configuration
+decoder_depth: 8  # Cross-attention decoder layers
+decoder_heads: 16  # Decoder attention heads (usually same as encoder)
+
+# Dropout (typically 0.0 for deterministic training)
+dropout: 0.0
+
+# Training parameters (can be overridden by training config)
+learning_rate: 1e-4
+weight_decay: 0.01
+warmup_steps: 1000
+
+# NO loss_weights section - LAPA uses ONLY MSE loss
+# Removed: reconstruction, codebook, commitment weights
+
+# Notes:
+# - LAPA uses MSE loss only (no VQ-specific losses)
+# - Input format: [B, 3, 2, 256, 256]
+# - Output format: [B, 3, 1, 256, 256]
+# - Single shared codebook (not per-position)
+# - Delta quantization (last_frame - first_frame)

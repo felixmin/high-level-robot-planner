@@ -5,11 +5,48 @@
 This document provides a **complete technical blueprint** for implementing LAPA (Latent Action Pretraining from Videos), a three-stage robot learning system. It covers architectural decisions, implementation details, and a phased task breakdown suitable for distribution to junior developers.
 
 **System Overview:** LAPA learns robot policies from videos without action labels through:
-1. **Stage 1 (LAQ)**: VQ-VAE that compresses frame-to-frame transitions into discrete latent codes
+1. **Stage 1 (LAQ)**: Transformer-based model with NSVQ that compresses frame-to-frame transitions into discrete latent codes
 2. **Stage 2 (Foundation)**: 7B Vision-Language model that predicts latent actions from image + text
 3. **Stage 3 (Finetuning)**: Adapts the foundation model to output continuous robot commands
 
 **Infrastructure:** LRZ cluster (H100 GPUs, GPFS storage, Slurm scheduler)
+
+---
+
+## Key Architectural Updates (LAPA Paper Alignment)
+
+This plan implements the **LAPA paper architecture** with the following key differences from standard VQ-VAE approaches:
+
+### Stage 1: LAQ Architecture Changes
+
+| Component | Standard VQ-VAE | LAPA (This Implementation) |
+|-----------|----------------|----------------------------|
+| **Encoder** | Convolutional layers + ResBlocks | Patch embedding + Spatial/Temporal Transformers |
+| **Quantization** | VQ-VAE with per-position codebooks | NSVQ with **delta quantization** and single shared codebook |
+| **Quantization Target** | Absolute latent features | **Frame delta** (last_frame - first_frame) |
+| **Codebook Structure** | Multiple codebooks [num_tokens, vocab_size, dim] | **Single codebook** [vocab_size, dim] |
+| **Straight-Through Estimator** | Standard STE with commitment loss | **Noise-substitution STE** (no extra losses) |
+| **Loss Function** | MSE + codebook loss + commitment loss | **MSE only** (simpler, more stable) |
+| **Decoder** | Deconvolutional layers | **Cross-attention** conditioning on action tokens |
+| **Image Size** | 224×224 | **256×256** (better patch alignment) |
+
+### Key LAPA Innovations
+
+1. **Delta Quantization**: Quantizes the *change* between frames, not absolute features
+2. **Single Shared Codebook**: All action token positions share the same 8 embeddings
+3. **Noise-Substitution STE**: Gradients flow without requiring codebook/commitment losses
+4. **Transformer Architecture**: Better temporal modeling than convolutional approaches
+5. **Cross-Attention Decoder**: Explicitly conditions reconstruction on learned actions
+
+### Infrastructure (Unchanged)
+
+✅ All infrastructure decisions remain excellent and are preserved:
+- Hydra configuration management
+- PyTorch Lightning + Fabric hybrid approach
+- WebDataset with TAR shards for LRZ GPFS
+- Enroot containers + Slurm integration
+- Weights & Biases tracking
+- Multi-stage training pipeline
 
 ---
 
@@ -49,7 +86,7 @@ lapa-project/
 
 | Stage | Framework | Rationale |
 |-------|-----------|-----------|
-| **Stage 1 (LAQ)** | PyTorch Lightning | Standard supervised learning; auto-DDP, checkpointing, logging |
+| **Stage 1 (LAQ)** | PyTorch Lightning | Transformer-based supervised learning; auto-DDP, checkpointing, logging |
 | **Stage 2 (Foundation)** | Lightning Fabric | Raw training loop control for complex FSDP; eliminates boilerplate |
 | **Stage 3 (Finetuning)** | PyTorch Lightning | Small dataset; fast iteration; reuse Stage 1 patterns |
 
@@ -190,102 +227,142 @@ python scripts/2_train_laq.py experiment=laq_full \
 
 ### 2.1 Stage 1: Latent Action Quantization (LAQ)
 
-#### 2.1.1 Model Architecture
+#### 2.1.1 Model Architecture (LAPA Transformer-Based)
+
+**Overview:**
+LAPA uses a transformer-based architecture with three key components:
+1. **Spatial-Temporal Encoder**: Processes frame pairs with separate spatial and temporal attention
+2. **NSVQ (Noise-Substitution Vector Quantization)**: Quantizes frame deltas with single shared codebook
+3. **Cross-Attention Decoder**: Reconstructs next frame conditioned on actions
 
 **Encoder (Frame Pair → Latent Embeddings):**
 ```
-Input: Concatenated frames [B, 6, 224, 224]  # (frame_t | frame_{t+1})
+Input: Frame pair [B, C, 2, H, W]  # C=3, H=W=256, 2 frames
 
 Architecture:
-├─ Conv2D(6 → 64, kernel=4, stride=2, padding=1)    # → [B, 64, 112, 112]
-├─ ResBlock(64)  × 2
-├─ Conv2D(64 → 128, kernel=4, stride=2, padding=1)  # → [B, 128, 56, 56]
-├─ ResBlock(128) × 2
-├─ Conv2D(128 → 256, kernel=4, stride=2, padding=1) # → [B, 256, 28, 28]
-├─ ResBlock(256) × 2
-├─ Conv2D(256 → 512, kernel=4, stride=2, padding=1) # → [B, 512, 14, 14]
-├─ ResBlock(512) × 2
-└─ Conv2D(512 → latent_dim, kernel=3, stride=1, padding=1)
-
-Output: [B, latent_dim, 14, 14]
-```
-
-**ResBlock Structure:**
-```
-Input: [B, C, H, W]
-├─ GroupNorm(32 groups)
-├─ SiLU activation
-├─ Conv2D(C → C, kernel=3, stride=1, padding=1)
-├─ GroupNorm(32 groups)
-├─ SiLU activation
-└─ Conv2D(C → C, kernel=3, stride=1, padding=1) + Skip connection
-Output: [B, C, H, W]
-```
-
-**Vector Quantizer (Critical Component):**
-```
-Input: [B, latent_dim, 14, 14]
+├─ Patch Embedding (per frame):
+│  ├─ frame_t: [B, 3, 1, 256, 256] → [B, 1, 64, 1024]     # 64 patches (8×8 grid)
+│  └─ frame_t+1: [B, 3, 1, 256, 256] → [B, 1, 64, 1024]
+│  └─ Concatenate: [B, 2, 64, 1024]  # 2 frames × 64 patches
+│
+├─ Spatial Transformer (8 layers):
+│  ├─ Self-attention across 64 patches within each frame
+│  ├─ Heads: 16, dim_head: 64 (total dim: 1024)
+│  ├─ 2D Relative Position Bias for spatial relationships
+│  └─ PEG (Positional Encoding Generator via 3D depthwise conv)
+│
+├─ Temporal Transformer (8 layers):
+│  ├─ Self-attention across 2 frames for each patch position
+│  ├─ Learns temporal dynamics between frame_t and frame_t+1
+│  └─ Output: [B, 2, 64, 1024]
+│
+└─ Split tokens:
+   ├─ first_frame_tokens: [B, 64, 1024]  # Represents state at t
+   └─ last_frame_tokens: [B, 64, 1024]   # Represents state at t+1
 
 Parameters:
-- num_tokens: 4           # Action sequence length
-- vocab_size: 8           # Embeddings per token position
-- embedding_dim: 256      # Dimension of each embedding
-- beta: 0.25              # Commitment loss weight
+- Image size: 256×256 (larger than 224 for better patch alignment)
+- Patch size: 32×32 → 8×8 = 64 patches per frame
+- Model dim: 1024
+- Quantization dim: 32
+- Spatial depth: 8 layers
+- Temporal depth: 8 layers
+- Heads: 16, dim_head: 64
+```
 
-Codebook: [4, 8, 256]     # 4 positions × 8 embeddings × 256 dims
+**NSVQ Quantizer (LAPA's Key Innovation):**
+```
+Input: 
+- first_frame_tokens: [B, 64, 1024]
+- last_frame_tokens: [B, 64, 1024]
+
+Parameters:
+- code_seq_len: 4         # Action sequence length (2×2 action grid)
+- codebook_size: 8        # Single shared codebook
+- quant_dim: 32           # Quantization dimension
+
+Codebook: [8, 32]         # SINGLE codebook for all positions (not per-position)
 
 Process:
-1. Spatial pooling: [B, latent_dim, 14, 14] → [B, num_tokens, embedding_dim]
-   Options:
-   - Learned linear projection
-   - Adaptive average pooling
-   - Attention pooling
+1. Project to quant space:
+   ├─ first_quant = Linear(1024 → 32): [B, 64, 1024] → [B, 64, 32]
+   └─ last_quant = Linear(1024 → 32): [B, 64, 1024] → [B, 64, 32]
 
-2. For each token position (0-3):
-   a. Compute distances to codebook[position]: [B, 8]
-   b. Select nearest: indices[position] ∈ {0,1,2,3,4,5,6,7}
-   c. Replace with embedding: e = codebook[position, indices[position]]
+2. Compute delta (key LAPA insight):
+   delta = last_quant - first_quant  # [B, 64, 32]
+   
+3. CNN downsample to action grid:
+   ├─ Reshape: [B, 64, 32] → [B, 32, 8, 8]  # Spatial layout
+   ├─ Conv2D(32 → 32, kernel=4, stride=2): → [B, 32, 4, 4]
+   ├─ Conv2D(32 → 32, kernel=4, stride=2): → [B, 32, 2, 2]
+   └─ Reshape: [B, 32, 2, 2] → [B, 4, 32]  # 4 action tokens
 
-3. Straight-through estimator:
-   quantized = continuous + stop_gradient(embedding - continuous)
+4. Quantize with SINGLE codebook:
+   ├─ For each of 4 positions, compute distances to ALL 8 embeddings
+   ├─ indices = argmin(||delta[i] - codebook||²)  # [B, 4], each ∈ {0..7}
+   └─ quantized = codebook[indices]  # [B, 4, 32]
 
-Output: 
-- quantized: [B, num_tokens, embedding_dim]
-- indices: [B, num_tokens]  # The discrete latent action
-- losses: {codebook_loss, commitment_loss}
+5. Noise-Substitution Straight-Through Estimator (NOT standard STE):
+   ├─ Forward: output = quantized
+   ├─ Backward: ∇output flows to BOTH delta AND codebook
+   └─ NO commitment loss or codebook loss!
+
+6. Project back to model dim:
+   quantized_actions = Linear(32 → 1024): [B, 4, 32] → [B, 4, 1024]
+
+7. Reshape for spatial decoder:
+   └─ [B, 4, 1024] → [B, 1, 2, 2, 1024]  # 2×2 action grid
+
+Output:
+- quantized_actions: [B, 1, 2, 2, 1024]
+- indices: [B, 4]  # The discrete latent action codes
+- perplexity: codebook usage metric
 ```
+
+**Key Differences from Standard VQ-VAE:**
+- ✅ Quantizes DELTA (last - first) instead of absolute features
+- ✅ SINGLE codebook shared across all positions (not per-position)
+- ✅ Noise-substitution STE (no codebook/commitment losses)
+- ✅ Periodic unused codebook vector replacement for stability
 
 **Loss Components:**
 ```
-1. Reconstruction Loss:
-   L_recon = MSE(decoder(quantized), frame_{t+1})
+SIMPLIFIED: Only reconstruction loss!
 
-2. Codebook Loss (update embeddings):
-   L_codebook = ||stop_gradient(z_continuous) - embedding||²
+1. Reconstruction Loss (ONLY loss):
+   L_total = MSE(decoder(quantized_actions, first_frame_tokens), frame_{t+1})
 
-3. Commitment Loss (commit encoder to codebook):
-   L_commit = β × ||z_continuous - stop_gradient(embedding)||²
-
-Total Loss:
-   L_total = L_recon + L_codebook + β × L_commit
+NO codebook loss, NO commitment loss
+This is a key LAPA simplification that improves training stability
 ```
 
-**Decoder (Quantized → Reconstructed Frame):**
+**Cross-Attention Decoder (Quantized Actions → Reconstructed Frame):**
 ```
-Input: [B, num_tokens, embedding_dim]
+Input:
+- Context: first_frame_tokens [B, 1, 64, 1024]  # What we see at time t
+- Actions: quantized_actions [B, 1, 4, 1024]    # What action to take
 
 Architecture:
-├─ Reshape/Upsample: [B, num_tokens, embedding_dim] → [B, 512, 14, 14]
-├─ ConvTranspose2D(512 → 256, kernel=4, stride=2)   # → [B, 256, 28, 28]
-├─ ResBlock(256) × 2
-├─ ConvTranspose2D(256 → 128, kernel=4, stride=2)   # → [B, 128, 56, 56]
-├─ ResBlock(128) × 2
-├─ ConvTranspose2D(128 → 64, kernel=4, stride=2)    # → [B, 64, 112, 112]
-├─ ResBlock(64) × 2
-├─ ConvTranspose2D(64 → 32, kernel=4, stride=2)     # → [B, 32, 224, 224]
-└─ Conv2D(32 → 3, kernel=3, padding=1) + Tanh       # → [B, 3, 224, 224]
+├─ Flatten action grid: [B, 1, 2, 2, 1024] → [B, 1, 4, 1024]
+│
+├─ Spatial Transformer with Cross-Attention (8 layers):
+│  ├─ Self-Attention on context patches
+│  ├─ Cross-Attention:
+│  │  ├─ Query: context patches (what we observe)
+│  │  ├─ Key/Value: action tokens (what we intend to do)
+│  │  └─ Attend to condition reconstruction on intended actions
+│  ├─ Feedforward
+│  └─ Output: [B, 1, 64, 1024]
+│
+├─ Patch to Pixels:
+│  ├─ Reshape: [B, 1, 64, 1024] → [B, 1, 8, 8, 1024]
+│  ├─ Linear: 1024 → (32 × 32 × 3) = 3072  # Patch size × channels
+│  ├─ Reshape: [B, 1, 8, 8, 3072] → [B, 1, 8, 8, 32, 32, 3]
+│  └─ Rearrange: → [B, 3, 1, 256, 256]
+│
+└─ Final activation: Tanh (normalize to [-1, 1])
 
-Output: Reconstructed frame [B, 3, 224, 224]
+Output: Reconstructed next frame [B, 3, 1, 256, 256]
 ```
 
 #### 2.1.2 Data Pipeline
@@ -298,7 +375,7 @@ Process:
 1. For each video:
    - Extract frames at 10 fps (or native framerate)
    - Generate consecutive pairs: (frame_t, frame_{t+1})
-   - Resize to 256×256, center crop to 224×224
+   - Resize to 256×256 (LAPA uses 256 for better patch alignment)
    - Save as JPEG (quality=95 for minimal loss)
 
 2. Pack into TAR shards:
@@ -337,8 +414,17 @@ class LAPADataModule(pl.LightningDataModule):
     8. wds.batched(batch_size)
     
     Returns:
-    - For LAQ: {frame_t: [B,3,224,224], frame_t1: [B,3,224,224]}
-    - For Foundation: {image: [B,3,224,224], text: List[str], latents: [B,4]}
+    - For LAQ: {frames: [B,3,2,256,256]}  # Stacked frame pairs for LAPA
+    - For Foundation: {image: [B,3,256,256], text: List[str], latents: [B,4]}
+    
+    Collate Function for LAQ:
+    def collate_fn(batch):
+        # Stack frame_t and frame_t1 into [B, C, 2, H, W] format
+        frames = torch.stack([
+            torch.stack([item['frame_t'], item['frame_t1']], dim=1)
+            for item in batch
+        ])  # [B, 3, 2, 256, 256]
+        return {'frames': frames}
 ```
 
 **Transforms:**
@@ -358,28 +444,35 @@ Augmentations (training only):
 **Model Config (`config/model/laq.yaml`):**
 ```yaml
 model:
-  name: laq_base
+  name: laq_transformer  # LAPA transformer architecture
   
-  encoder:
-    in_channels: 6
-    base_channels: 64
-    channel_multipliers: [1, 2, 4, 8]  # [64, 128, 256, 512]
-    num_res_blocks: 2
-    latent_dim: 256
+  # Image and patch configuration
+  image_size: 256
+  patch_size: 32
+  channels: 3
   
-  quantizer:
-    num_tokens: 4
-    vocab_size: 8
-    embedding_dim: 256
-    beta: 0.25
-    ema_decay: 0.99  # Optional: EMA for codebook updates
+  # Transformer dimensions
+  dim: 1024              # Model dimension
+  quant_dim: 32          # Quantization dimension
   
-  decoder:
-    latent_dim: 256
-    base_channels: 32
-    channel_multipliers: [1, 2, 4, 8]
-    num_res_blocks: 2
-    out_channels: 3
+  # Encoder configuration
+  spatial_depth: 8       # Spatial transformer layers
+  temporal_depth: 8      # Temporal transformer layers
+  heads: 16              # Attention heads
+  dim_head: 64           # Dimension per head (heads × dim_head = dim)
+  mlp_ratio: 4           # FFN expansion ratio
+  
+  # NSVQ configuration
+  code_seq_len: 4        # 2×2 action grid = 4 tokens
+  codebook_size: 8       # Single shared codebook
+  noise_substitution: true  # Use NSVQ instead of standard VQ-VAE
+  
+  # Decoder configuration
+  decoder_depth: 8       # Cross-attention decoder layers
+  decoder_heads: 16
+  
+  # NO VQ-VAE specific parameters (no beta, no ema_decay)
+  # LAPA uses only MSE loss
 ```
 
 **Training Config (`config/training/laq_optimizer.yaml`):**
@@ -404,9 +497,8 @@ training:
     clip_val: 1.0
     clip_algorithm: norm
   
-  loss_weights:
-    reconstruction: 1.0
-    vq: 1.0  # Codebook + commitment combined
+  # LAPA uses ONLY MSE loss (no VQ-specific losses)
+  # No loss_weights needed - single reconstruction loss
   
   validation:
     interval_epochs: 1
@@ -447,53 +539,58 @@ cluster:
 ```python
 Key Methods:
 
-__init__(encoder_cfg, decoder_cfg, quantizer_cfg, optimizer_cfg):
-  - Initialize encoder, decoder, quantizer
+__init__(model_cfg, optimizer_cfg):
+  - Initialize LAPA model (encoder, NSVQ, decoder)
   - Store configs for optimizer/scheduler
 
-forward(frame_t, frame_t1):
-  1. Concatenate: [B,3,H,W] + [B,3,H,W] → [B,6,H,W]
-  2. Encode: continuous_latents = encoder(concat)
-  3. Quantize: quantized, indices, vq_losses = quantizer(continuous_latents)
-  4. Decode: reconstructed = decoder(quantized)
-  5. Return: reconstructed, indices, vq_losses
+forward(frames):
+  # frames: [B, C, 2, H, W] - stacked frame pairs
+  1. Encode: first_tokens, last_tokens = encoder(frames)
+     # first_tokens: [B, 64, 1024], last_tokens: [B, 64, 1024]
+  2. Quantize: quantized_actions, indices, perplexity = nsvq(first_tokens, last_tokens)
+     # quantized_actions: [B, 1, 2, 2, 1024], indices: [B, 4]
+  3. Decode: reconstructed = decoder(first_tokens, quantized_actions)
+     # reconstructed: [B, 3, 1, 256, 256]
+  4. Return: reconstructed, indices, perplexity
 
 training_step(batch, batch_idx):
-  1. Forward pass
-  2. Compute reconstruction loss: MSE(reconstructed, frame_t1)
-  3. Compute total loss: recon + vq_losses['codebook'] + vq_losses['commitment']
-  4. Log all losses
-  5. Return total_loss
+  1. Forward pass on stacked frames
+  2. Extract target: frame_t1 = batch['frames'][:, :, 1:2, :, :]  # [B, 3, 1, 256, 256]
+  3. Compute ONLY reconstruction loss: MSE(reconstructed, frame_t1)
+  4. Log loss and perplexity
+  5. Return loss  # Single loss, no VQ losses!
 
 validation_step(batch, batch_idx):
   1. Same as training_step
   2. If batch_idx == 0: log reconstruction visualizations
+  3. Track codebook usage statistics
 
 predict_step(batch, batch_idx):
   # Used by script 3 (latent label generation)
   1. Forward pass
-  2. Return indices only (the discrete latent codes)
+  2. Return indices only (the discrete latent codes) [B, 4]
 
 configure_optimizers():
-  1. Create optimizer from config
-  2. Create scheduler with warmup
+  1. Create AdamW optimizer from config
+  2. Create cosine scheduler with warmup
   3. Return {optimizer, scheduler}
 ```
 
 **Metrics to Track:**
 ```
 Training:
-- train/loss_total
-- train/loss_reconstruction
-- train/loss_codebook
-- train/loss_commitment
+- train/loss_recon (ONLY loss - no VQ losses)
 - train/perplexity (codebook usage diversity)
+- train/codebook_utilization (% of 8 embeddings actively used)
 
 Validation:
-- val/loss_total
-- val/loss_reconstruction
-- val/codebook_utilization (% of embeddings used)
+- val/loss_recon
+- val/perplexity
+- val/codebook_utilization
+- val/psnr (reconstruction quality)
 - val/reconstruction_images (WandB grid)
+
+Note: NO codebook_loss or commitment_loss (LAPA uses noise-substitution STE)
 ```
 
 ***
@@ -1062,7 +1159,9 @@ class ActionFinetuneTask(pl.LightningModule):
 
 ***
 
-### Phase 1: LAQ Implementation (Weeks 2-4)
+### Phase 1: LAPA Implementation (Weeks 2-4)
+
+**Architecture Note:** This phase implements the LAPA paper's transformer-based approach with NSVQ, NOT a standard convolutional VQ-VAE. See Section 2.1.1 for detailed architecture.
 
 **Task 1.1: Data Preprocessing Pipeline** (5 days)
 - **Owner:** Junior Dev 2
@@ -1091,62 +1190,105 @@ class ActionFinetuneTask(pl.LightningModule):
   - Iterate 1000 batches, measure throughput (target: >500 samples/sec on 1 GPU)
   - Test on 2 nodes × 4 GPUs (no duplicate samples)
 
-**Task 1.3: Encoder Network** (4 days)
+**Task 1.3: Transformer Components** (5 days)
 - **Owner:** Senior Dev
-- **Description:** Implement encoder architecture (Section 2.1.1)
+- **Description:** Implement core transformer building blocks for LAPA
 - **Requirements:**
-  - Modular ResBlock implementation
-  - Configurable channel dimensions via Hydra
+  - Transformer block with self-attention and optional cross-attention
+  - PEG (Positional Encoding Generator via 3D depthwise conv)
+  - ContinuousPositionBias for 2D spatial relationships
   - Support BF16 precision
 - **Deliverables:**
-  - `laq/models/encoder.py`
-  - Unit tests (shape consistency, gradient flow)
+  - `laq/models/attention.py` with:
+    - `Transformer` class (self + cross attention + FFN)
+    - `PEG` class (3D depthwise conv for positional encoding)
+    - `ContinuousPositionBias` class (2D relative position bias)
+  - Unit tests (attention shapes, gradient flow, position bias computation)
 - **Validation:**
-  - Input  → Output[1][2][3]
+  - Transformer: Input [B,64,1024] → Output [B,64,1024]
+  - PEG works with 5D tensors [B,C,T,H,W]
+  - Position bias produces correct [heads, H×W, H×W] matrix
+
+**Task 1.4: NSVQ Implementation** (6 days)
+- **Owner:** Senior Dev
+- **Description:** Implement NSVQ with delta quantization (Section 2.1.1)
+- **Requirements:**
+  - SINGLE shared codebook (not per-position like VQ-VAE)
+  - Delta quantization: quantize(last_tokens - first_tokens)
+  - Noise-substitution straight-through estimator
+  - Periodic unused codebook vector replacement
+  - CNN downsampling from 64 patches to 4 action tokens
+- **Deliverables:**
+  - `laq/models/nsvq.py`
+  - Unit tests (delta computation, quantization, codebook usage)
+- **Validation:**
+  - Input: [B,64,1024] (first), [B,64,1024] (last)
+  - Output: quantized [B,1,2,2,1024], indices [B,4]
+  - Codebook utilization increases over dummy training
+  - NO codebook/commitment losses computed
+
+**Task 1.5: Spatial-Temporal Encoder** (4 days)
+- **Owner:** Senior Dev
+- **Description:** Implement patch embedding + spatial/temporal transformers
+- **Requirements:**
+  - Patch embedding for video frames
+  - Spatial transformer (8 layers) with 2D position bias
+  - Temporal transformer (8 layers)
+  - Split output into first/last frame tokens
+- **Deliverables:**
+  - `laq/models/encoder.py`
+  - Unit tests
+- **Validation:**
+  - Input [B,3,2,256,256] → first [B,64,1024], last [B,64,1024]
   - Forward + backward passes succeed
 
-**Task 1.4: Vector Quantizer** (5 days)
-- **Owner:** Senior Dev
-- **Description:** Implement VQ-VAE quantization layer (Section 2.1.1)
+**Task 1.6: Cross-Attention Decoder** (4 days)
+- **Owner:** Junior Dev 2 + Senior Dev
+- **Description:** Implement cross-attention decoder (Section 2.1.1)
 - **Requirements:**
-  - Codebook management (4 positions × 8 embeddings)
-  - Straight-through estimator
-  - Compute codebook + commitment losses
-  - Optional: EMA updates
-- **Deliverables:**
-  - `laq/models/quantizer.py`
-  - Unit tests (quantization, loss computation)
-- **Validation:**
-  - Codebook utilization increases over dummy training
-  - Commitment loss decreases
-
-**Task 1.5: Decoder Network** (3 days)
-- **Owner:** Junior Dev 2
-- **Description:** Implement decoder (Section 2.1.1)
-- **Requirements:**
-  - Mirror encoder architecture (transposed convs)
-  - Output normalized images
+  - Spatial transformer with cross-attention
+  - Query from first_frame_tokens, K/V from action_tokens
+  - Patch-to-pixel projection
 - **Deliverables:**
   - `laq/models/decoder.py`
   - Unit tests
 - **Validation:**
-  - Input  → Output[3][4][1]
+  - Input: context [B,1,64,1024], actions [B,1,4,1024]
+  - Output: [B,3,1,256,256]
+  - Cross-attention weights have expected patterns
 
-**Task 1.6: LAQ Lightning Module** (4 days)
+**Task 1.7: LAPA Model Integration** (4 days)
 - **Owner:** Senior Dev
+- **Description:** Wire together all LAPA components into single model
+- **Requirements:**
+  - Combine patch embedding, encoder, NSVQ, decoder
+  - Implement forward pass with proper tensor routing
+  - Add model initialization and weight loading
+- **Deliverables:**
+  - `laq/models/lapa.py` (main model class)
+  - End-to-end integration test
+- **Validation:**
+  - Input [B,3,2,256,256] → Output [B,3,1,256,256], indices [B,4]
+  - Gradients flow through all components
+  - Model can overfit 5 samples
+
+**Task 1.8: LAQ Lightning Module** (3 days)
+- **Owner:** Junior Dev 1
 - **Description:** Implement `LAQTask` (Section 2.1.4)
 - **Requirements:**
-  - Wire encoder, quantizer, decoder
-  - Implement training/validation steps
+  - Wire LAPA model into Lightning module
+  - Implement training/validation steps with MSE loss only
   - Add reconstruction visualization callback
+  - Track perplexity and codebook utilization
 - **Deliverables:**
   - `laq/task.py`
   - Integration test (overfit 10 samples)
 - **Validation:**
   - Loss decreases on tiny dataset
   - Reconstructions logged to WandB
+  - No VQ-specific losses in logs
 
-**Task 1.7: Training Script** (2 days)
+**Task 1.9: Training Script** (2 days)
 - **Owner:** Junior Dev 1
 - **Description:** Implement `scripts/2_train_laq.py`
 - **Requirements:**
@@ -1160,33 +1302,35 @@ class ActionFinetuneTask(pl.LightningModule):
   - Train on 1 GPU for 5 epochs (small dataset)
   - Checkpoints save correctly
 
-**Task 1.8: Full LAQ Training** (5 days)
+**Task 1.10: Full LAQ Training** (5 days)
 - **Owner:** All team
-- **Description:** Train LAQ on full dataset (OpenX or STHv2)
+- **Description:** Train LAPA on full dataset (OpenX or STHv2)
 - **Requirements:**
   - Use 1-2 nodes (4-8 H100s)
-  - Monitor training curves
+  - Monitor training curves (only MSE loss, no VQ losses)
   - Validate reconstruction quality
 - **Deliverables:**
-  - Trained LAQ checkpoint (`laq_final.ckpt`)
-  - Training report (losses, codebook usage, example reconstructions)
+  - Trained LAPA checkpoint (`laq_final.ckpt`)
+  - Training report (MSE loss, perplexity, codebook usage, example reconstructions)
 - **Success Criteria:**
-  - Reconstruction PSNR > 20 dB
-  - Codebook utilization > 80%
+  - Reconstruction PSNR > 22 dB (LAPA typically better than VQ-VAE)
+  - Codebook utilization > 70% (all 8 embeddings should be used)
+  - Perplexity close to codebook_size (indicating diverse usage)
 
-**Task 1.9: Latent Label Generation** (3 days)
+**Task 1.11: Latent Label Generation** (3 days)
 - **Owner:** Junior Dev 2
 - **Description:** Implement `scripts/3_generate_latent_labels.py`
 - **Requirements:**
-  - Load LAQ checkpoint
-  - Run inference on full dataset
+  - Load LAPA checkpoint
+  - Run inference on full dataset (extract indices only)
   - Save new WebDataset with latent labels
 - **Deliverables:**
   - Label generation script
   - New dataset: `/dss/.../datasets/openx_latent_labeled/`
 - **Validation:**
-  - Load random samples, verify latent codes ∈[5]
+  - Load random samples, verify latent codes ∈ {0..7} for all 4 positions
   - Check file sizes (should be smaller than original)
+  - Verify codebook usage distribution in generated labels
 
 ---
 
@@ -1703,35 +1847,52 @@ if is_best_val_loss:
 **LAQ Models (`tests/test_laq_models.py`):**
 ```python
 def test_encoder_shapes():
-    """Verify encoder output dimensions"""
-    encoder = Encoder(in_channels=6, latent_dim=256)
-    x = torch.randn(2, 6, 224, 224)
-    out = encoder(x)
-    assert out.shape == (2, 256, 14, 14)
+    """Verify LAPA encoder output dimensions"""
+    encoder = LAPAEncoder(dim=1024, spatial_depth=8, temporal_depth=8)
+    x = torch.randn(2, 3, 2, 256, 256)  # Batch, channels, 2 frames, H, W
+    first_tokens, last_tokens = encoder(x)
+    assert first_tokens.shape == (2, 64, 1024)  # 64 patches per frame
+    assert last_tokens.shape == (2, 64, 1024)
 
-def test_quantizer_discreteness():
-    """Verify quantizer outputs discrete codes"""
-    quantizer = VectorQuantizer(num_tokens=4, vocab_size=8)
-    z = torch.randn(2, 4, 256)
-    quantized, indices, losses = quantizer(z)
+def test_nsvq_discreteness():
+    """Verify NSVQ outputs discrete codes"""
+    nsvq = NSVQ(dim=1024, quant_dim=32, codebook_size=8, code_seq_len=4)
+    first = torch.randn(2, 64, 1024)
+    last = torch.randn(2, 64, 1024)
+    quantized, indices, perplexity = nsvq(first, last)
+    assert indices.shape == (2, 4)  # 4 action tokens
     assert indices.min() >= 0 and indices.max() < 8
     assert indices.dtype == torch.long
 
-def test_quantizer_gradient_flow():
-    """Verify gradients flow through straight-through estimator"""
-    quantizer = VectorQuantizer(num_tokens=4, vocab_size=8)
-    z = torch.randn(2, 4, 256, requires_grad=True)
-    quantized, _, _ = quantizer(z)
+def test_nsvq_delta_quantization():
+    """Verify NSVQ quantizes delta, not absolute values"""
+    nsvq = NSVQ(dim=1024, quant_dim=32, codebook_size=8, code_seq_len=4)
+    first = torch.randn(2, 64, 1024)
+    # Last is identical to first -> delta should be near zero
+    last = first.clone()
+    quantized, indices, _ = nsvq(first, last)
+    # With zero delta, all positions might select same embedding
+    # Just verify shape and range
+    assert quantized.shape == (2, 1, 2, 2, 1024)
+
+def test_nsvq_gradient_flow():
+    """Verify gradients flow through noise-substitution STE"""
+    nsvq = NSVQ(dim=1024, quant_dim=32, codebook_size=8, code_seq_len=4)
+    first = torch.randn(2, 64, 1024, requires_grad=True)
+    last = torch.randn(2, 64, 1024, requires_grad=True)
+    quantized, _, _ = nsvq(first, last)
     loss = quantized.sum()
     loss.backward()
-    assert z.grad is not None
+    assert first.grad is not None
+    assert last.grad is not None
 
-def test_decoder_reconstruction():
-    """Verify decoder output shape and range"""
-    decoder = Decoder(latent_dim=256, out_channels=3)
-    z = torch.randn(2, 4, 256)
-    out = decoder(z)
-    assert out.shape == (2, 3, 224, 224)
+def test_decoder_cross_attention():
+    """Verify decoder output shape and cross-attention"""
+    decoder = LAPADecoder(dim=1024, depth=8, heads=16)
+    context = torch.randn(2, 1, 64, 1024)  # First frame tokens
+    actions = torch.randn(2, 1, 4, 1024)   # Action tokens
+    out = decoder(context, actions)
+    assert out.shape == (2, 3, 1, 256, 256)
     assert out.min() >= -1 and out.max() <= 1  # Tanh output
 ```
 
@@ -1786,9 +1947,9 @@ def test_distributed_sampling():
 
 **Overfitting Test:**
 ```python
-def test_laq_overfit():
-    """Verify LAQ can overfit small dataset"""
-    # Create tiny dataset (10 samples)
+def test_lapa_overfit():
+    """Verify LAPA can overfit small dataset"""
+    # Create tiny dataset (10 samples of frame pairs)
     dataset = create_dummy_dataset(num_samples=10)
     
     # Train for 100 steps
@@ -1796,8 +1957,10 @@ def test_laq_overfit():
     trainer = pl.Trainer(max_steps=100, overfit_batches=10)
     trainer.fit(model, dataset)
     
-    # Loss should be near zero
-    assert trainer.callback_metrics['train/loss'] < 0.01
+    # MSE loss should be near zero (no VQ losses to check)
+    assert trainer.callback_metrics['train/loss_recon'] < 0.01
+    # Codebook should be utilized
+    assert trainer.callback_metrics['val/codebook_utilization'] > 0.5
 
 def test_foundation_multinode():
     """Test foundation training runs on 2 nodes"""
@@ -1818,15 +1981,17 @@ def test_foundation_multinode():
 
 **Model Quality Tests:**
 ```python
-def test_laq_reconstruction_quality():
-    """Verify LAQ reconstructions are reasonable"""
+def test_lapa_reconstruction_quality():
+    """Verify LAPA reconstructions are reasonable"""
     model = LAQTask.load_from_checkpoint('laq_final.ckpt')
-    test_images = load_test_set()
+    test_frames = load_test_set()  # Frame pairs
     
-    reconstructions = model.predict(test_images)
-    psnr = compute_psnr(test_images, reconstructions)
+    reconstructions = model.predict(test_frames)
+    # Compare reconstruction to second frame
+    target_frames = test_frames[:, :, 1:2, :, :]
+    psnr = compute_psnr(target_frames, reconstructions)
     
-    assert psnr > 20, f"PSNR too low: {psnr}"
+    assert psnr > 22, f"PSNR too low: {psnr} (LAPA should achieve >22 dB)"
 
 def test_foundation_accuracy():
     """Verify foundation model predictions"""
@@ -1957,7 +2122,7 @@ Contact: [Tech Lead] on [Slack/Email]
 
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
-| **LAQ codebook collapse** | Medium | High | Monitor codebook utilization; add regularization; try EMA updates |
+| **NSVQ codebook collapse** | Medium | High | Monitor codebook utilization; LAPA's periodic replacement helps; verify delta computation |
 | **Foundation OOM on multi-node** | Medium | High | Start with 1 node; test FSDP carefully; use gradient checkpointing |
 | **Data loading bottleneck** | High | Medium | Profile early; use WebDataset; preprocess offline |
 | **Multi-node hangs** | Medium | High | Test incrementally (1→2→4 nodes); use NCCL debug logs |
@@ -1966,10 +2131,12 @@ Contact: [Tech Lead] on [Slack/Email]
 
 ### 7.2 Contingency Plans
 
-**If LAQ doesn't learn:**
-1. Reduce complexity (smaller encoder, fewer tokens)
-2. Try deterministic encoder (no quantization) as baseline
-3. Validate on standard VQ-VAE dataset (e.g., CIFAR-10)
+**If LAPA doesn't learn:**
+1. Reduce complexity (fewer transformer layers, smaller dim)
+2. Verify delta quantization is working correctly (visualize deltas)
+3. Try standard VQ-VAE as baseline to isolate NSVQ issues
+4. Check spatial/temporal transformer separation is correct
+5. Validate on simpler video dataset (e.g., moving MNIST)
 
 **If Foundation training is too slow:**
 1. Reduce model size (use Llama-2 3B instead of 7B)
@@ -1990,19 +2157,42 @@ Contact: [Tech Lead] on [Slack/Email]
 
 ## Summary
 
-This specification provides:
+This specification provides a complete implementation plan for **LAPA (Latent Action Pretraining from Videos)** using the transformer-based architecture from the original paper, adapted to modern infrastructure.
 
-1. **High-Level Decisions:** Monorepo, hybrid training framework, WebDataset, Enroot containers
-2. **Detailed Architectures:** LAQ (encoder/quantizer/decoder), Foundation (vision/LLM/action head), Finetuning
-3. **Implementation Details:** FSDP config, data pipelines, loss functions, training loops
-4. **Phased Task Breakdown:** 5 phases, 50+ tasks, ~12 weeks
-5. **Testing Strategy:** Unit tests, integration tests, validation criteria
-6. **Operational Guides:** Debugging, monitoring, checkpointing, risk mitigation
+### What This Plan Provides:
 
-**Next Steps for Tech Lead:**
-1. Review and customize configs for your specific dataset/cluster
-2. Assign Phase 0 tasks to team
-3. Setup weekly milestones and check-ins
-4. Begin with Task 0.1 (repository setup)
+1. **High-Level Decisions:** Monorepo, hybrid training framework (Lightning + Fabric), WebDataset for LRZ cluster, Enroot containers
+2. **LAPA-Aligned Architecture:** 
+   - Transformer-based encoder with spatial/temporal attention
+   - NSVQ with delta quantization and single shared codebook
+   - Cross-attention decoder
+3. **Foundation & Finetuning:** Dual vision encoders + Llama-2 7B with FSDP
+4. **Implementation Details:** Complete FSDP config, data pipelines, loss functions, training loops
+5. **Phased Task Breakdown:** 5 phases, 50+ tasks, ~12 weeks
+6. **Testing Strategy:** Unit tests, integration tests, validation criteria
+7. **Operational Guides:** Multi-node debugging, monitoring, checkpointing, risk mitigation
 
-This document should serve as the **single source of truth** for the implementation. Update it as decisions change, and refer all developers to relevant sections for their tasks.
+### Key Architectural Highlights:
+
+- ✅ **LAPA Stage 1**: Transformer encoder + NSVQ (not conv-based VQ-VAE)
+- ✅ **Delta Quantization**: Quantizes frame changes, not absolute features
+- ✅ **Simplified Loss**: MSE only (no VQ-specific losses)
+- ✅ **Modern Infrastructure**: Hydra configs, Lightning ecosystem, cluster-optimized data loading
+
+### Next Steps for Tech Lead:
+
+1. **Review** configs in `config/model/laq.yaml` - adjust `dim`, `spatial_depth`, `temporal_depth` if needed
+2. **Assign Phase 0 tasks** to team (infrastructure setup)
+3. **Setup monitoring**: Create WandB project, configure metric tracking
+4. **Begin implementation**: Task 0.1 (repository setup)
+5. **Key milestone**: End of Week 4 - trained LAPA model with >22 dB PSNR
+
+### Implementation Priority:
+
+**Week 1-2**: Core transformer components (`attention.py`, `nsvq.py`)  
+**Week 3-4**: LAPA integration and Stage 1 training  
+**Week 5-8**: Foundation policy training  
+**Week 9-10**: Action finetuning  
+**Week 11-12**: Evaluation and optimization  
+
+This document serves as the **single source of truth** for the LAPA implementation. Update it as decisions change, and refer all developers to relevant sections for their tasks.

@@ -43,6 +43,11 @@ validation:
   interval_epochs: 1
   num_samples_to_log: 8  # Number of reconstructions to visualize
 
+# Overfitting and debugging options
+overfit_batches: null  # Set to number of batches to overfit (for testing)
+fast_dev_run: false  # Fast dev run mode
+overfit_target_loss: 0.01  # Target loss for overfitting test
+
 # Checkpointing
 checkpoint:
   monitor: val/loss_total

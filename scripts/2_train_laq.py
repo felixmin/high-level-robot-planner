@@ -48,10 +48,12 @@ def train_laq(cfg: DictConfig):
     print("LAQ Training")
     print("=" * 60)
     print(f"Experiment: {cfg.experiment.name}")
-    print(f"Data directory: {cfg.data.data_dir}")
+    data_dir = cfg.data.get('data_dir', cfg.data.get('train_shards', 'NOT SPECIFIED'))
+    print(f"Data directory: {data_dir}")
     print(f"Max epochs: {cfg.training.epochs}")
     print(f"Batch size: {cfg.data.batch_size}")
-    print(f"Learning rate: {cfg.optimizer.lr}")
+    lr = cfg.get('optimizer', {}).get('lr', cfg.training.get('optimizer', {}).get('lr', 1e-4))
+    print(f"Learning rate: {lr}")
     print(f"Accelerator: auto")
     print(f"Devices: 1")
     if cfg.training.get('overfit_batches'):
@@ -61,26 +63,49 @@ def train_laq(cfg: DictConfig):
     print()
     
     # Check if data exists
-    data_path = Path(cfg.data.data_dir)
-    if not data_path.exists():
-        print(f"ERROR: Data directory not found: {cfg.data.data_dir}")
-        print("Please run: python scripts/download_test_data.py --dummy")
-        return False
+    # Handle both data_dir (for video files) and train_shards (for WebDataset)
+    data_dir = cfg.data.get('data_dir', None)
+    if data_dir:
+        data_path = Path(data_dir)
+        if not data_path.exists():
+            print(f"ERROR: Data directory not found: {data_dir}")
+            print("Please ensure video files are in the specified directory")
+            return False
+    else:
+        print("WARNING: No data_dir specified. Using train_shards if available.")
     
     # Create model
     try:
-        model_config = {
-            'encoder': cfg.model.encoder,
-            'quantizer': cfg.model.quantizer,
-            'decoder': cfg.model.decoder,
-            'loss_weights': cfg.model.get('loss_weights', {}),
-            'learning_rate': cfg.optimizer.lr
+        # New LAPA config structure: model params are merged at top level via @_here_
+        # Check if model config exists at top level or under cfg.model
+        if hasattr(cfg, 'model'):
+            model_config = OmegaConf.to_container(cfg.model, resolve=True)
+        else:
+            # Model config merged at top level - extract model params
+            model_config = {}
+            model_keys = ['image_size', 'patch_size', 'channels', 'dim', 'quant_dim',
+                         'spatial_depth', 'temporal_depth', 'decoder_depth', 'heads',
+                         'dim_head', 'mlp_ratio', 'dropout', 'codebook_size', 'code_seq_len']
+            for key in model_keys:
+                if hasattr(cfg, key):
+                    model_config[key] = getattr(cfg, key)
+        
+        # Create LAQ module with model config and training params
+        config_dict = {
+            'model': model_config,
+            'training': {
+                'lr': cfg.get('optimizer', {}).get('lr', cfg.training.get('optimizer', {}).get('lr', 1e-4)),
+                'weight_decay': cfg.get('optimizer', {}).get('weight_decay', cfg.training.get('optimizer', {}).get('weight_decay', 0.01)),
+                'warmup_steps': cfg.training.get('scheduler', {}).get('warmup_steps', cfg.training.get('warmup_steps', 1000))
+            }
         }
         
-        model = create_laq_module_from_config(model_config)
+        model = create_laq_module_from_config(config_dict)
         print("✓ LAQ model created successfully")
     except Exception as e:
         print(f"ERROR: Failed to create model: {e}")
+        import traceback
+        traceback.print_exc()
         return False
     
     # Create data loaders
@@ -88,8 +113,19 @@ def train_laq(cfg: DictConfig):
         # For single sample testing, don't drop incomplete batches
         drop_last = not cfg.training.get('overfit_batches', False)
         
+        # Get data directory (for video files) or use train_shards path
+        video_dir = cfg.data.get('data_dir', None)
+        if not video_dir:
+            # If using WebDataset, extract directory from shard path
+            train_shards = cfg.data.get('train_shards', '')
+            if train_shards:
+                # Extract directory from shard path (e.g., /path/to/dir/train_shard_00000.tar -> /path/to/dir)
+                video_dir = str(Path(train_shards).parent)
+            else:
+                raise ValueError("Either data_dir or train_shards must be specified in config.data")
+        
         train_loader = create_dataloader(
-            video_dir=cfg.data.data_dir,
+            video_dir=video_dir,
             batch_size=cfg.data.batch_size,
             num_workers=cfg.data.num_workers,
             shuffle=True,
@@ -100,7 +136,7 @@ def train_laq(cfg: DictConfig):
         
         # For validation, use same data (or create separate val set)
         val_loader = create_dataloader(
-            video_dir=cfg.data.data_dir,
+            video_dir=video_dir,
             batch_size=cfg.data.batch_size,
             num_workers=cfg.data.num_workers,
             shuffle=False,
@@ -129,11 +165,11 @@ def train_laq(cfg: DictConfig):
     # Setup callbacks
     callbacks = [
         ModelCheckpoint(
-            monitor='val/loss_total',
+            monitor='val/loss_recon',  # LAPA uses loss_recon, not loss_total
             mode='min',
             save_top_k=3,
             save_last=True,
-            filename='best-{epoch:02d}-{val/loss_total:.4f}',
+            filename='best-{epoch:02d}-{val/loss_recon:.4f}',
             every_n_epochs=1
         ),
         LearningRateMonitor(logging_interval='epoch')
@@ -143,7 +179,7 @@ def train_laq(cfg: DictConfig):
     if not cfg.training.get('overfit_batches'):
         callbacks.append(
             EarlyStopping(
-                monitor='val/loss_total',
+                monitor='val/loss_recon',  # LAPA uses loss_recon
                 mode='min',
                 patience=cfg.training.get('early_stopping_patience', 20),
                 min_delta=1e-6
@@ -183,8 +219,9 @@ def train_laq(cfg: DictConfig):
         print("Starting training...")
         trainer.fit(model, train_loader, val_loader)
         
-        # Get final validation loss
-        final_loss = trainer.callback_metrics.get('val/loss_total', float('inf'))
+        # Get final validation loss (LAPA uses loss_recon, not loss_total)
+        final_loss = trainer.callback_metrics.get('val/loss_recon', 
+                                                  trainer.callback_metrics.get('val/loss_total', float('inf')))
         
         print()
         print("=" * 60)

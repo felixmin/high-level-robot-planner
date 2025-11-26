@@ -136,3 +136,7 @@ The LAQ components are now ready to be wired together into a PyTorch Lightning m
 🚀 **Tasks 1.3-1.5 Complete - Ready for Task 1.6 (LAQ Lightning Module)**
 
 
+
+
+
+
