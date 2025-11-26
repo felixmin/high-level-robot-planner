@@ -4,10 +4,10 @@
 # Production training on full dataset
 
 defaults:
-  - /model@_here_: laq
-  - /data@_here_: openx_webdataset
-  - /training@_here_: laq_optimizer
-  - /cluster@_here_: lrz_h100
+  - /model@model: laq
+  - /data@data: openx_webdataset
+  - /training@training: laq_optimizer
+  - /cluster@cluster: lrz_h100
 
 experiment:
   name: laq_openx_v1

@@ -5,6 +5,7 @@ Tests for Hydra configuration composition.
 import pytest
 from hydra import compose, initialize_config_dir
 from pathlib import Path
+from omegaconf import OmegaConf
 
 
 @pytest.fixture
@@ -13,51 +14,160 @@ def config_dir():
     return str(Path(__file__).parent.parent / "config")
 
 
-def test_laq_debug_config(config_dir):
-    """Test LAQ debug configuration loads correctly."""
-    with initialize_config_dir(version_base=None, config_dir=config_dir):
-        cfg = compose(config_name="config", overrides=["experiment=laq_debug"])
-        
-        assert cfg.experiment.name == "laq_debug"
-        assert cfg.model.name == "laq_base"
-        assert cfg.data.batch_size == 8
-        assert cfg.training.epochs == 5
+class TestExperimentConfigs:
+    """Test experiment configuration composition."""
+
+    def test_laq_debug_config(self, config_dir):
+        """Test LAQ debug configuration loads correctly."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(config_name="config", overrides=["experiment=laq_debug"])
+
+            # Validate experiment metadata
+            assert cfg.experiment.name == "laq_debug"
+            assert "debug" in cfg.experiment.description.lower()
+
+            # Validate model config
+            assert cfg.model.name == "laq_base"
+            assert hasattr(cfg.model, "encoder")
+            assert hasattr(cfg.model, "quantizer")
+            assert hasattr(cfg.model, "decoder")
+
+            # Validate data config
+            assert cfg.data.name == "debug"
+            assert cfg.data.batch_size == 8
+            assert cfg.data.num_workers == 2
+
+            # Validate training config
+            assert cfg.training.epochs == 5
+            assert hasattr(cfg.training, "optimizer")
+            assert cfg.training.optimizer.type == "AdamW"
+
+            # Validate cluster config
+            assert cfg.cluster.name == "local"
+            assert cfg.cluster.compute.num_nodes == 1
+            assert cfg.cluster.compute.gpus_per_node == 1
+
+    def test_laq_full_config(self, config_dir):
+        """Test LAQ full configuration loads correctly."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(config_name="config", overrides=["experiment=laq_full"])
+
+            # Validate experiment
+            assert cfg.experiment.name == "laq_openx_v1"
+
+            # Validate model (same LAQ model)
+            assert cfg.model.name == "laq_base"
+
+            # Validate larger dataset config
+            assert cfg.data.name == "openx"
+            assert cfg.data.batch_size == 256
+            assert cfg.data.num_workers == 8
+
+            # Validate training (full training)
+            assert cfg.training.epochs == 100
+
+            # Validate cluster config (single node H100)
+            assert cfg.cluster.name == "lrz_h100"
+            assert cfg.cluster.compute.num_nodes == 1
+            assert cfg.cluster.compute.gpus_per_node == 4
+
+    def test_vla_7b_config(self, config_dir):
+        """Test VLA 7B configuration loads correctly."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(config_name="config", overrides=["experiment=vla_7b"])
+
+            # Validate experiment
+            assert cfg.experiment.name == "vla_7b_foundation"
+            assert "foundation" in cfg.experiment.description.lower()
+
+            # Validate VLA model
+            assert cfg.model.name == "vla_7b"
+            assert hasattr(cfg.model, "vision")
+            assert hasattr(cfg.model, "llm")
+            assert cfg.model.llm.model_name == "meta-llama/Llama-2-7b-hf"
+
+            # Validate latent-labeled data
+            assert cfg.data.name == "openx_latent_labeled"
+            assert cfg.data.task == "foundation"
+
+            # Validate FSDP training
+            assert hasattr(cfg.training, "fsdp")
+            assert cfg.training.fsdp.sharding_strategy == "FULL_SHARD"
+
+            # Validate multi-node cluster
+            assert cfg.cluster.name == "lrz_h100_multinode"
+            assert cfg.cluster.compute.num_nodes == 4
+            assert cfg.cluster.compute.gpus_per_node == 4
 
 
-def test_laq_full_config(config_dir):
-    """Test LAQ full configuration loads correctly."""
-    with initialize_config_dir(version_base=None, config_dir=config_dir):
-        cfg = compose(config_name="config", overrides=["experiment=laq_full"])
-        
-        assert cfg.experiment.name == "laq_openx_v1"
-        assert cfg.data.batch_size == 256
-        assert cfg.training.epochs == 100
+class TestConfigComposition:
+    """Test configuration composition and overrides."""
+
+    def test_cli_overrides(self, config_dir):
+        """Test CLI parameter overrides work correctly."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "experiment=laq_debug",
+                    "data.batch_size=16",
+                    "training.optimizer.lr=5e-5",
+                    "seed=123"
+                ]
+            )
+
+            # Verify overrides
+            assert cfg.data.batch_size == 16
+            assert cfg.training.optimizer.lr == 5e-5
+            assert cfg.seed == 123
+
+            # Verify base config still loaded
+            assert cfg.experiment.name == "laq_debug"
+
+    def test_nested_overrides(self, config_dir):
+        """Test deeply nested configuration overrides."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "experiment=laq_debug",
+                    "model.encoder.base_channels=32",
+                    "training.optimizer.betas=[0.95,0.999]"
+                ]
+            )
+
+            assert cfg.model.encoder.base_channels == 32
+            assert cfg.training.optimizer.betas == [0.95, 0.999]
+
+    def test_config_is_valid_omegaconf(self, config_dir):
+        """Test that loaded config is a valid OmegaConf DictConfig."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(config_name="config", overrides=["experiment=laq_debug"])
+
+            # Should be DictConfig, not plain dict
+            assert OmegaConf.is_config(cfg)
+            assert OmegaConf.is_dict(cfg)
 
 
-def test_vla_config(config_dir):
-    """Test VLA 7B configuration loads correctly."""
-    with initialize_config_dir(version_base=None, config_dir=config_dir):
-        cfg = compose(config_name="config", overrides=["experiment=vla_7b"])
-        
-        assert cfg.model.name == "vla_7b"
-        assert cfg.model.llm.model_name == "meta-llama/Llama-2-7b-hf"
-        assert cfg.cluster.compute.num_nodes == 4
+class TestExperimentConsistency:
+    """Test that all experiments load without errors."""
 
+    @pytest.mark.parametrize("experiment", ["laq_debug", "laq_full", "vla_7b"])
+    def test_all_experiments_load(self, config_dir, experiment):
+        """Test that all available experiments load successfully."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(config_name="config", overrides=[f"experiment={experiment}"])
 
-def test_config_override(config_dir):
-    """Test CLI overrides work correctly."""
-    with initialize_config_dir(version_base=None, config_dir=config_dir):
-        cfg = compose(
-            config_name="config",
-            overrides=[
-                "experiment=laq_debug",
-                "data.batch_size=16",
-                "training.optimizer.lr=5e-5"
-            ]
-        )
-        
-        assert cfg.data.batch_size == 16
-        assert cfg.training.optimizer.lr == 5e-5
+            # All configs should have these top-level keys
+            assert hasattr(cfg, "experiment")
+            assert hasattr(cfg, "model")
+            assert hasattr(cfg, "data")
+            assert hasattr(cfg, "training")
+            assert hasattr(cfg, "cluster")
+
+            # Experiment should have name and description
+            assert cfg.experiment.name is not None
+            assert cfg.experiment.description is not None
 
 
 if __name__ == "__main__":

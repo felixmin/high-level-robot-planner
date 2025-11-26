@@ -2,8 +2,15 @@
 Tests for common utilities.
 """
 
+import sys
+from pathlib import Path
+
 import pytest
 import torch
+
+# Add packages to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "packages"))
+
 from common.utils import set_seed, count_parameters
 
 

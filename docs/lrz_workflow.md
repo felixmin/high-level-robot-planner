@@ -1,6 +1,6 @@
 # LRZ AI Systems Workflow Guide
 
-Complete guide for using the LAPA project on LRZ AI Systems.
+Complete guide for using this project on LRZ AI Systems.
 
 ## Table of Contents
 1. [Initial Setup](#initial-setup)
@@ -31,9 +31,9 @@ pn57pi-dss-0001 at /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001
 ```bash
 # Download and run setup
 cd /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001
-git clone <repo-url> lapa
-cd lapa
-./setup_lrz.sh
+git clone <repo-url> project-repo
+cd project-repo
+# Follow installation steps in README.md
 ```
 
 This creates:
@@ -50,34 +50,18 @@ source ~/.bashrc
 
 ## Building Containers
 
-### Option 1: Build on LRZ (Recommended)
+### Building the Container
 
 ```bash
-cd /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/lapa/containers
-./build_container_lrz.sh
-```
+# Build on LRZ in project containers/ directory
+cd /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/project-repo/containers
+./build_container.sh  # or enroot build commands if needed
 
-### Option 2: Build Locally and Transfer
+# Test the container
+enroot create --name project-test /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/project.sqsh
+enroot start --root --rw --mount /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001:/workspace project-test
 
-```bash
-# Local machine
-cd containers
-./build_container.sh
-
-# Transfer to LRZ
-scp lapa.sqsh <TUM-ID>@login.ai.lrz.de:/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/
-```
-
-### Test the Container
-
-```bash
-# Create a test container instance
-enroot create --name lapa-test /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/lapa.sqsh
-
-# Start it interactively
-enroot start --root --rw --mount $LAPA_PROJECT:/workspace lapa-test
-
-# Inside container
+# Inside container: verify setup
 python scripts/0_setup_environment.py
 exit
 ```
@@ -97,66 +81,37 @@ sinfo -p mcml-hgx-h100-94x4
 ### Single-Node Training
 
 ```bash
-cd $LAPA_PROJECT
-
-# LAQ training (debug)
-sbatch slurm/train_container.sbatch \
-    scripts/2_train_laq.py \
-    experiment=laq_debug
-
-# LAQ training (full)
-sbatch slurm/train_container.sbatch \
-    scripts/2_train_laq.py \
-    experiment=laq_full
+# Submit training job (see README.md for available experiments)
+sbatch slurm/train.sbatch scripts/2_train_laq.py experiment=laq_full
+sbatch slurm/train.sbatch scripts/4_train_foundation.py experiment=vla_7b
 ```
 
 ### Monitor Jobs
 
 ```bash
-# Watch your jobs
-lapa-watch
-
-# Or manually
+# View your jobs
 squeue --user=$USER -M mcml-hgx-h100
 
 # Check job details
 scontrol show job <JOB_ID>
 
-# View output
+# View job output
 tail -f logs/slurm-<JOB_ID>.out
-```
 
-### Cancel Jobs
-
-```bash
-# Cancel specific job
+# Cancel job
 scancel <JOB_ID> -M mcml-hgx-h100
-
-# Cancel all your jobs
-lapa-cancel-all
 ```
-
-### Array Jobs (Hyperparameter Search)
-
-```bash
-# Submit 10 jobs with different hyperparameters
-# Only 5 run concurrently
-sbatch slurm/array_job.sbatch
-```
-
-Edit `slurm/array_job.sbatch` to customize experiments.
 
 ## Multi-Node Training
 
-### Foundation Model Training (4 Nodes, 16 GPUs)
+### Foundation Model Training
 
 ```bash
-sbatch slurm/train_container.sbatch \
-    scripts/4_train_foundation.py \
-    experiment=vla_7b
+# Multi-node training configured in experiment config
+sbatch slurm/train.sbatch scripts/4_train_foundation.py experiment=vla_7b
 ```
 
-The config `config/experiment/vla_7b.yaml` specifies:
+Configure nodes in `config/experiment/vla_7b.yaml` via:
 ```yaml
 cluster:
   compute:
@@ -209,11 +164,11 @@ exit  # From allocation
 
 ### 1. Container Not Found
 
-**Error**: `No such file or directory: /raid/enroot/data/user-XXX/lapa`
+**Error**: `No such file or directory: /raid/enroot/data/user-XXX/project`
 
 **Solution**: Create container first:
 ```bash
-enroot create --name lapa /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/lapa.sqsh
+enroot create --name project-test /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/project.sqsh
 ```
 
 ### 2. NCCL Timeout
@@ -240,7 +195,7 @@ dssusrinfo all
 **Clean up**:
 ```bash
 # Remove old checkpoints
-rm -rf $LAPA_CHECKPOINTS/old_experiment_*
+rm -rf /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/checkpoints/old_experiment_*
 
 # Clean enroot cache
 rm -rf /raid/enroot/data/user-$(id -u)/*
@@ -270,24 +225,20 @@ sbatch --partition=lrz-hgx-h100-94x4 ...
 
 ```
 /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/
-├── lapa/                    # Code repository
+├── project-repo/            # Code repository
 ├── datasets/                # Training data
-│   ├── openx_frames/
-│   └── openx_latent_labeled/
-├── checkpoints/             # Model checkpoints
-│   ├── laq_final.ckpt
-│   └── vla_foundation.ckpt
+│   └── (WebDataset shards)
+├── checkpoints/             # Model checkpoints (auto-saved)
 ├── logs/                    # Slurm logs
 └── containers/              # Enroot containers
-    └── lapa.sqsh
+    └── project.sqsh
 ```
 
-### Data Management
+### Data Organization
 
-- **Raw videos**: Store in `datasets/videos/`
-- **Processed shards**: Store in `datasets/openx_frames/`
-- **Checkpoints**: Auto-saved to `checkpoints/<experiment_name>/`
-- **Logs**: Auto-saved to `logs/` by Slurm
+- Store raw videos and datasets under `datasets/`
+- Checkpoints auto-save to `checkpoints/<experiment_name>/`
+- Logs auto-save to `logs/` directory by Slurm
 
 ## Performance Tips
 
