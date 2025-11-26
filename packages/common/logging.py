@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-import wandb
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.loggers import WandbLogger
 
@@ -29,23 +28,37 @@ def setup_logger(name: str, log_file: Optional[Path] = None, level=logging.INFO)
     logger = logging.getLogger(name)
     logger.setLevel(level)
     
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
+    # Set propagate to avoid double logging via root logger
+    logger.propagate = False
+    
+    # Create formatter (reused for all handlers)
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
     
-    # File handler if specified
+    # Add console handler only if it doesn't exist
+    if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(level)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+    
+    # File handler can be added conditionally even if logger already has handlers
     if log_file:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(level)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+        # Check if a FileHandler for this specific file already exists
+        log_file_resolved = Path(log_file).resolve()
+        has_file_handler = any(
+            isinstance(h, logging.FileHandler) and 
+            Path(h.baseFilename).resolve() == log_file_resolved
+            for h in logger.handlers
+        )
+        if not has_file_handler:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(level)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
     
     return logger
 
@@ -59,14 +72,23 @@ def setup_wandb_logger(cfg: DictConfig) -> WandbLogger:
         
     Returns:
         Configured WandbLogger instance
+        
+    Note:
+        For large configs, consider logging only a subset:
+        `wandb_config = OmegaConf.to_container(cfg.logging_to_log, resolve=True)`
     """
     wandb_config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    
+    # Ensure save_dir is a string (Hydra may provide Path objects)
+    save_dir = cfg.logging.save_dir
+    if isinstance(save_dir, Path):
+        save_dir = str(save_dir)
     
     wandb_logger = WandbLogger(
         project=cfg.logging.project,
         name=cfg.experiment_name,
         config=wandb_config,
-        save_dir=cfg.logging.save_dir,
+        save_dir=save_dir,
         log_model=cfg.logging.get("log_model", False),
         tags=cfg.logging.get("tags", []),
     )
@@ -81,6 +103,10 @@ def log_hyperparameters(logger: logging.Logger, cfg: DictConfig) -> None:
     Args:
         logger: Logger instance
         cfg: Hydra configuration
+        
+    Note:
+        In distributed training, wrap this call with `rank_zero_only` decorator
+        from pytorch_lightning.utilities.rank_zero to log only from rank 0.
     """
     logger.info("=" * 80)
     logger.info("Hyperparameters:")
