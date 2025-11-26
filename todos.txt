@@ -1,1 +1,1 @@
-move slurm folder to workspace and out of here!
+move slurm folder, containers and docs lrz workflow to workspace and out of here!
