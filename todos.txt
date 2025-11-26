@@ -1,0 +1,1 @@
+move slurm folder to workspace and out of here!
