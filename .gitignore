@@ -72,7 +72,6 @@ datasets/
 
 # Checkpoints and models
 checkpoints/
-models/
 *.sqsh
 
 # Testing
