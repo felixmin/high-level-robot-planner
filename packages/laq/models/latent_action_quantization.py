@@ -265,7 +265,7 @@ class LatentActionQuantization(nn.Module):
             return
         
         tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = action_h, w = action_w)
-        concat_tokens = first_frame_tokens.detach() # + tokens
+        concat_tokens = first_frame_tokens # + tokens
         recon_video = self.decode(concat_tokens, tokens)
 
         returned_recon = rearrange(recon_video, 'b c 1 h w -> b c h w')

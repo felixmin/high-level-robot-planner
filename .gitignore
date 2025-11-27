@@ -60,6 +60,7 @@ logs/
 mlruns/
 lightning_logs/
 *.log
+profiles/
 
 # Data (large files should not be committed)
 

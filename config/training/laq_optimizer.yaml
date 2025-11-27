@@ -53,3 +53,10 @@ checkpoint:
   save_last: true
   every_n_epochs: 5
 
+# Profiling
+profiler:
+  enabled: true           # Enable Lightning SimpleProfiler
+  type: pytorch             # 'simple', 'advanced', or 'pytorch'
+  dirpath: ./profiles      # Where to save profile outputs
+  filename: profile        # Profile filename
+

@@ -166,6 +166,40 @@ def main(cfg: DictConfig):
         logger = None
         print("✓ No logger (WandB disabled)")
 
+    # Setup profiler
+    print("\n" + "=" * 80)
+    print("Setting up Profiler")
+    print("=" * 80)
+
+    profiler = None
+    profiler_type = None
+    if training_config.get("profiler", {}).get("enabled", False):
+        profiler_type = training_config.profiler.get("type", "simple")
+        dirpath = training_config.profiler.get("dirpath", "./profiles")
+        filename = training_config.profiler.get("filename", "profile")
+
+        if profiler_type == "simple":
+            from lightning.pytorch.profilers import SimpleProfiler
+            profiler = SimpleProfiler(dirpath=dirpath, filename=filename)
+            print(f"✓ SimpleProfiler enabled")
+        elif profiler_type == "advanced":
+            from lightning.pytorch.profilers import AdvancedProfiler
+            profiler = AdvancedProfiler(dirpath=dirpath, filename=filename)
+            print(f"✓ AdvancedProfiler enabled")
+        elif profiler_type == "pytorch":
+            from lightning.pytorch.profilers import PyTorchProfiler
+            profiler = PyTorchProfiler(
+                dirpath=dirpath,
+                filename=filename,
+                emit_nvtx=False,
+                export_to_chrome=True,
+                row_limit=20,
+            )
+            print(f"✓ PyTorchProfiler enabled (high overhead!)")
+        print(f"  - Output: {dirpath}/{filename}")
+    else:
+        print("✓ Profiler disabled")
+
     # Setup trainer
     print("\n" + "=" * 80)
     print("Setting up Trainer")
@@ -182,6 +216,7 @@ def main(cfg: DictConfig):
         gradient_clip_algorithm=training_config.gradient.clip_algorithm,
         callbacks=callbacks,
         logger=logger,
+        profiler=profiler,
         log_every_n_steps=10,
         val_check_interval=1.0,  # Validate every epoch
         enable_progress_bar=True,
@@ -193,6 +228,7 @@ def main(cfg: DictConfig):
     print(f"  - Precision: {cfg.get('precision', '32-true')}")
     print(f"  - Accelerator: auto")
     print(f"  - Devices: auto")
+    print(f"  - Profiler: {profiler_type if profiler else 'disabled'}")
 
     # Train
     print("\n" + "=" * 80)
