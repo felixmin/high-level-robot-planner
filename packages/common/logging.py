@@ -5,10 +5,13 @@ Provides consistent logging across all training stages with WandB integration.
 """
 
 import logging
+import random
 import sys
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+import torch
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.loggers import WandbLogger
 
@@ -99,11 +102,11 @@ def setup_wandb_logger(cfg: DictConfig) -> WandbLogger:
 def log_hyperparameters(logger: logging.Logger, cfg: DictConfig) -> None:
     """
     Log hyperparameters to console.
-    
+
     Args:
         logger: Logger instance
         cfg: Hydra configuration
-        
+
     Note:
         In distributed training, wrap this call with `rank_zero_only` decorator
         from pytorch_lightning.utilities.rank_zero to log only from rank 0.
@@ -113,4 +116,33 @@ def log_hyperparameters(logger: logging.Logger, cfg: DictConfig) -> None:
     logger.info("=" * 80)
     logger.info(OmegaConf.to_yaml(cfg))
     logger.info("=" * 80)
+
+
+def set_seed(seed: int) -> None:
+    """
+    Set random seed for reproducibility.
+
+    Args:
+        seed: Random seed value
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # Set deterministic behavior (may impact performance)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def count_parameters(model: torch.nn.Module) -> int:
+    """
+    Count the number of trainable parameters in a model.
+
+    Args:
+        model: PyTorch model
+
+    Returns:
+        Number of trainable parameters
+    """
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 

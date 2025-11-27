@@ -12,7 +12,7 @@ optimizer:
   eps: 1.0e-8
 
 scheduler:
-  type: cosine  # 'cosine', 'step', 'plateau'
+  type: none  # 'cosine', 'step', 'plateau', or 'none' to disable
   warmup_steps: 1000
   warmup_start_lr: 1.0e-6
   min_lr: 1.0e-6
@@ -42,10 +42,12 @@ loss_weights:
 validation:
   interval_epochs: 1
   num_samples_to_log: 8  # Number of reconstructions to visualize
+  visualize_train: true   # Visualize training reconstructions (useful for debugging overfitting)
+  visualize_val: true     # Visualize validation reconstructions
 
 # Checkpointing
 checkpoint:
-  monitor: val/loss_total
+  monitor: val/loss
   mode: min
   save_top_k: 3
   save_last: true

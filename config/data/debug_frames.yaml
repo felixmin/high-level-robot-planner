@@ -1,36 +1,29 @@
 # Debug Dataset Configuration
-# Small dataset for rapid iteration
+# Small dataset for rapid iteration (uses youtube_new dataset)
 
 name: debug
 task: laq
 
-# Use subset of data for debugging
-train_shards: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/datasets/debug_frames/train_shard_00000.tar
-val_shards: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/datasets/debug_frames/val_shard_00000.tar
+# Dataset path
+folder: /mnt/data/datasets/youtube_new/JNBtHDVoNQc_stabilized
 
 # Small batches for debugging
 batch_size: 8
 num_workers: 2
 prefetch_factor: 2
 pin_memory: true
-persistent_workers: false
 
-shuffle_buffer: 100
-resample_shards: false
+# Frame pair settings
+image_size: 256
+offset: 30  # Frame offset between t and t+offset
 
-# Image preprocessing
-image_size: 224
-normalize:
-  mean: [0.485, 0.456, 0.406]
-  std: [0.229, 0.224, 0.225]
+# Subset settings for debugging
+max_samples: 10  # Only use 10 scenes for fast debugging
+val_split: 0.1   # 10% validation split
 
-# No augmentation for debugging
-augmentation:
-  random_horizontal_flip: 0.0
-  color_jitter:
-    brightness: 0.0
-    contrast: 0.0
-    saturation: 0.0
-    hue: 0.0
-  random_erasing: 0.0
+# Metadata filtering (optional)
+use_metadata: true
+return_metadata: false  # Return just tensors, not metadata dicts
+filters: null  # No filtering for debug (use all scenes)
+min_frames: 2  # Minimum frames per scene
 

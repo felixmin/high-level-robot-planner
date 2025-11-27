@@ -97,8 +97,9 @@ class LAQTask(pl.LightningModule):
             ff_dropout=model_config.get("ff_dropout", 0.0),
         )
 
-        # Storage for validation batch (for visualization)
+        # Storage for validation and training batches (for visualization)
         self.validation_batch = None
+        self.training_batch = None
 
     def forward(
         self,
@@ -139,6 +140,10 @@ class LAQTask(pl.LightningModule):
             self.log("train/num_unique_codes", num_unique, prog_bar=True, sync_dist=True)
             self.log("train/lr", self.optimizers().param_groups[0]["lr"], prog_bar=True)
 
+        # Store first batch for visualization
+        if batch_idx == 0 and self.training_batch is None:
+            self.training_batch = frames[:8].detach().cpu()  # Store up to 8 samples
+
         return loss
 
     def validation_step(
@@ -175,6 +180,11 @@ class LAQTask(pl.LightningModule):
             self.validation_batch = frames[:8].detach().cpu()  # Store up to 8 samples
 
         return loss
+
+    def on_train_epoch_end(self) -> None:
+        """Called at the end of training epoch."""
+        # Reset training batch storage
+        self.training_batch = None
 
     def on_validation_epoch_end(self) -> None:
         """Called at the end of validation epoch."""
@@ -217,25 +227,27 @@ class LAQTask(pl.LightningModule):
             eps=opt_config.eps,
         )
 
-        # Create LR scheduler
-        if sched_config.type == "cosine":
+        # Create LR scheduler (optional)
+        if sched_config.get("type") == "none" or sched_config.get("type") is None:
+            # No scheduler - return optimizer only
+            return optimizer
+        elif sched_config.type == "cosine":
             scheduler = CosineAnnealingLR(
                 optimizer,
                 T_max=sched_config.T_max,
                 eta_min=sched_config.min_lr,
             )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "epoch",
+                    "frequency": 1,
+                    "name": "lr",
+                },
+            }
         else:
             raise NotImplementedError(f"Scheduler type '{sched_config.type}' not implemented")
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "epoch",
-                "frequency": 1,
-                "name": "lr",
-            },
-        }
 
     def get_validation_batch(self) -> Optional[torch.Tensor]:
         """
@@ -245,6 +257,15 @@ class LAQTask(pl.LightningModule):
             Validation batch tensor or None
         """
         return self.validation_batch
+
+    def get_training_batch(self) -> Optional[torch.Tensor]:
+        """
+        Get stored training batch for visualization.
+
+        Returns:
+            Training batch tensor or None
+        """
+        return self.training_batch
 
     def generate_reconstructions(
         self,

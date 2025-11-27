@@ -7,7 +7,7 @@ Train the VQ-VAE model to compress frame-to-frame transitions into discrete late
 Usage:
     # Local debug
     python scripts/2_train_laq.py experiment=laq_debug
-    
+
     # Full training on LRZ
     sbatch slurm/train.sbatch scripts/2_train_laq.py experiment=laq_full
 """
@@ -21,30 +21,198 @@ sys.path.insert(0, str(workspace_root / "packages"))
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
+import torch
+import lightning.pytorch as pl
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.loggers import WandbLogger
+
+from common.data import LAQDataModule
+from common.logging import set_seed, count_parameters
+from laq import LAQTask, ReconstructionVisualizationCallback, EMACallback
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig):
     """
     Main training function.
-    
-    TODO: Implement LAQ training:
+
+    Steps:
     1. Setup logging and seed
     2. Initialize data module
-    3. Initialize LAQ model
-    4. Setup Lightning trainer
+    3. Initialize LAQ task
+    4. Setup Lightning trainer with callbacks
     5. Train the model
-    6. Save final checkpoint
     """
     print("=" * 80)
     print("LAPA Stage 1: LAQ Training")
     print("=" * 80)
     print("\nConfiguration:")
     print(OmegaConf.to_yaml(cfg))
-    print("\nTODO: Implement LAQ training (Task 1.6, 1.7)")
-    print("See PLAN.md Section 2.1 for detailed specifications")
+    print("=" * 80)
+
+    # Set random seed for reproducibility
+    if hasattr(cfg, "seed"):
+        set_seed(cfg.seed)
+        print(f"✓ Random seed set to {cfg.seed}")
+    else:
+        set_seed(42)
+        print(f"✓ Random seed set to 42 (default)")
+
+    # Initialize data module
+    print("\n" + "=" * 80)
+    print("Initializing Data Module")
+    print("=" * 80)
+
+    data_config = cfg.data
+    datamodule = LAQDataModule(
+        folder=data_config.folder,
+        image_size=data_config.image_size,
+        offset=data_config.offset,
+        batch_size=data_config.batch_size,
+        num_workers=data_config.num_workers,
+        pin_memory=data_config.pin_memory,
+        prefetch_factor=data_config.prefetch_factor,
+        max_samples=data_config.get("max_samples", None),
+        val_split=data_config.val_split,
+        use_metadata=data_config.use_metadata,
+        return_metadata=data_config.return_metadata,
+        filters=data_config.get("filters", None),
+        min_frames=data_config.min_frames,
+    )
+
+    print(f"✓ DataModule initialized")
+    print(f"  - Folder: {data_config.folder}")
+    print(f"  - Image size: {data_config.image_size}")
+    print(f"  - Batch size: {data_config.batch_size}")
+    print(f"  - Max samples: {data_config.get('max_samples', 'all')}")
+
+    # Initialize LAQ task
+    print("\n" + "=" * 80)
+    print("Initializing LAQ Task")
+    print("=" * 80)
+
+    model_config = cfg.model
+    training_config = cfg.training
+
+    task = LAQTask(
+        model_config=model_config,
+        training_config=training_config,
+        use_ema=training_config.get("use_ema", False),
+    )
+
+    num_params = count_parameters(task.model)
+    print(f"✓ LAQ model initialized")
+    print(f"  - Total parameters: {num_params:,}")
+    print(f"  - Codebook size: {model_config.codebook_size}")
+    print(f"  - Code sequence length: {model_config.code_seq_len}")
+
+    # Setup callbacks
+    print("\n" + "=" * 80)
+    print("Setting up Callbacks")
+    print("=" * 80)
+
+    callbacks = []
+
+    # Checkpointing
+    checkpoint_config = training_config.checkpoint
+    checkpoint_callback = ModelCheckpoint(
+        monitor=checkpoint_config.monitor,
+        mode=checkpoint_config.mode,
+        save_top_k=checkpoint_config.save_top_k,
+        save_last=checkpoint_config.save_last,
+        every_n_epochs=checkpoint_config.every_n_epochs,
+        filename="laq-{epoch:02d}-{val/loss:.4f}",
+        verbose=True,
+    )
+    callbacks.append(checkpoint_callback)
+    print(f"✓ Checkpoint callback added (monitor={checkpoint_config.monitor})")
+
+    # Learning rate monitoring
+    lr_monitor = LearningRateMonitor(logging_interval="epoch")
+    callbacks.append(lr_monitor)
+    print("✓ Learning rate monitor added")
+
+    # Reconstruction visualization
+    viz_callback = ReconstructionVisualizationCallback(
+        num_samples=training_config.validation.num_samples_to_log,
+        log_every_n_epochs=training_config.validation.interval_epochs,
+        visualize_train=training_config.validation.get("visualize_train", False),
+        visualize_val=training_config.validation.get("visualize_val", True),
+    )
+    callbacks.append(viz_callback)
+    print(f"✓ Reconstruction visualization callback added (train={training_config.validation.get('visualize_train', False)}, val={training_config.validation.get('visualize_val', True)})")
+
+    # Optional EMA
+    if training_config.get("use_ema", False):
+        ema_callback = EMACallback(
+            decay=training_config.get("ema_decay", 0.999),
+            update_every=training_config.get("ema_update_every", 1),
+            update_after_step=training_config.get("ema_update_after_step", 0),
+        )
+        callbacks.append(ema_callback)
+        print("✓ EMA callback added")
+
+    # Setup logger
+    print("\n" + "=" * 80)
+    print("Setting up Logger")
+    print("=" * 80)
+
+    if hasattr(cfg, "logging") and cfg.logging.get("use_wandb", True):
+        logger = WandbLogger(
+            project=cfg.logging.get("project", "laq-training"),
+            name=cfg.experiment.name,
+            save_dir=cfg.logging.get("save_dir", "logs"),
+            tags=cfg.logging.get("tags", ["laq"]),
+        )
+        print(f"✓ WandB logger initialized (project={cfg.logging.get('project', 'laq-training')})")
+    else:
+        logger = None
+        print("✓ No logger (WandB disabled)")
+
+    # Setup trainer
+    print("\n" + "=" * 80)
+    print("Setting up Trainer")
+    print("=" * 80)
+
+    trainer = pl.Trainer(
+        max_epochs=training_config.epochs,
+        max_steps=training_config.get("max_steps") or -1,  # Convert None to -1
+        accelerator="auto",
+        devices="auto",
+        strategy="auto",
+        precision=cfg.get("precision", "32-true"),
+        gradient_clip_val=training_config.gradient.clip_val,
+        gradient_clip_algorithm=training_config.gradient.clip_algorithm,
+        callbacks=callbacks,
+        logger=logger,
+        log_every_n_steps=10,
+        val_check_interval=1.0,  # Validate every epoch
+        enable_progress_bar=True,
+        enable_model_summary=True,
+    )
+
+    print(f"✓ Trainer initialized")
+    print(f"  - Max epochs: {training_config.epochs}")
+    print(f"  - Precision: {cfg.get('precision', '32-true')}")
+    print(f"  - Accelerator: auto")
+    print(f"  - Devices: auto")
+
+    # Train
+    print("\n" + "=" * 80)
+    print("Starting Training")
+    print("=" * 80)
+
+    trainer.fit(task, datamodule=datamodule)
+
+    print("\n" + "=" * 80)
+    print("Training Complete!")
+    print("=" * 80)
+
+    # Print best checkpoint
+    if checkpoint_callback.best_model_path:
+        print(f"✓ Best checkpoint: {checkpoint_callback.best_model_path}")
+        print(f"  - Best val/loss: {checkpoint_callback.best_model_score:.4f}")
 
 
 if __name__ == "__main__":
     main()
-

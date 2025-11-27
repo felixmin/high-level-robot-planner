@@ -8,10 +8,12 @@ defaults:
 # Global settings
 experiment_name: ${experiment.name}
 seed: 42
+precision: "32-true"  # "32-true", "16-mixed", "bf16-mixed"
 
 # Logging configuration
 logging:
-  project: lapa
+  use_wandb: true  # Set to true to enable WandB logging
+  project: hlrp
   save_dir: ./logs
   log_model: false
   tags: []

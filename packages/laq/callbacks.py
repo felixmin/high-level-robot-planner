@@ -22,7 +22,7 @@ except ImportError:
 
 class ReconstructionVisualizationCallback(Callback):
     """
-    Visualize LAQ reconstructions during validation.
+    Visualize LAQ reconstructions during training and/or validation.
 
     Matches LAPA visualization style:
     - Grid with 3 columns: [frame_t, frame_t+offset, reconstruction]
@@ -31,60 +31,74 @@ class ReconstructionVisualizationCallback(Callback):
     Args:
         num_samples: Number of samples to visualize (default: 8)
         log_every_n_epochs: Visualization frequency (default: 1)
+        visualize_train: Whether to visualize training reconstructions (default: False)
+        visualize_val: Whether to visualize validation reconstructions (default: True)
     """
 
     def __init__(
         self,
         num_samples: int = 8,
         log_every_n_epochs: int = 1,
+        visualize_train: bool = False,
+        visualize_val: bool = True,
     ):
         super().__init__()
         self.num_samples = num_samples
         self.log_every_n_epochs = log_every_n_epochs
+        self.visualize_train = visualize_train
+        self.visualize_val = visualize_val
 
-    def on_validation_epoch_end(
+    def _get_wandb_logger(self, trainer: pl.Trainer):
+        """Get WandB logger from trainer if available."""
+        if not WANDB_AVAILABLE:
+            return None
+
+        for logger in trainer.loggers:
+            if isinstance(logger, pl.loggers.WandbLogger):
+                return logger
+        return None
+
+    def _visualize_reconstructions(
         self,
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
+        batch_getter_method: str,
+        log_key: str,
     ) -> None:
         """
-        Called at the end of validation epoch.
+        Common visualization logic for train and val.
 
-        Generates and logs reconstruction visualizations.
+        Args:
+            trainer: Lightning trainer
+            pl_module: Lightning module
+            batch_getter_method: Name of method to get batch ('get_validation_batch' or 'get_training_batch')
+            log_key: WandB key for logging ('val/reconstructions' or 'train/reconstructions')
         """
         # Check if we should visualize this epoch
         if (trainer.current_epoch + 1) % self.log_every_n_epochs != 0:
             return
 
-        # Check if WandB logger is available
-        if not WANDB_AVAILABLE:
-            return
-
-        wandb_logger = None
-        for logger in trainer.loggers:
-            if isinstance(logger, pl.loggers.WandbLogger):
-                wandb_logger = logger
-                break
-
+        # Get WandB logger
+        wandb_logger = self._get_wandb_logger(trainer)
         if wandb_logger is None:
             return
 
-        # Get validation batch from module
-        val_batch = pl_module.get_validation_batch()
-        if val_batch is None:
+        # Get batch from module
+        batch = getattr(pl_module, batch_getter_method)()
+        if batch is None:
             return
 
         # Limit to num_samples
-        val_batch = val_batch[:self.num_samples]
+        batch = batch[:self.num_samples]
 
         # Generate reconstructions
-        recons = pl_module.generate_reconstructions(val_batch)
+        recons = pl_module.generate_reconstructions(batch)
 
         # Create visualization grid
         # Input: [B, C, 2, H, W] where 2 = [frame_t, frame_t+offset]
         # Output: grid with 3 columns per sample [frame_t, frame_t+offset, recons]
-        frame_t = val_batch[:, :, 0]      # [B, C, H, W]
-        frame_t_plus = val_batch[:, :, 1]  # [B, C, H, W]
+        frame_t = batch[:, :, 0]      # [B, C, H, W]
+        frame_t_plus = batch[:, :, 1]  # [B, C, H, W]
         recons = recons.cpu()              # [B, C, H, W]
 
         # Stack: [frame_t, frame_t+offset, recons]
@@ -104,9 +118,49 @@ class ReconstructionVisualizationCallback(Callback):
 
         # Log to WandB
         wandb_logger.log_image(
-            key="val/reconstructions",
+            key=log_key,
             images=[grid],
             caption=[f"Epoch {trainer.current_epoch}"],
+        )
+
+    def on_train_epoch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+    ) -> None:
+        """
+        Called at the end of training epoch.
+
+        Generates and logs training reconstruction visualizations.
+        """
+        if not self.visualize_train:
+            return
+
+        self._visualize_reconstructions(
+            trainer=trainer,
+            pl_module=pl_module,
+            batch_getter_method='get_training_batch',
+            log_key='train/reconstructions',
+        )
+
+    def on_validation_epoch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+    ) -> None:
+        """
+        Called at the end of validation epoch.
+
+        Generates and logs validation reconstruction visualizations.
+        """
+        if not self.visualize_val:
+            return
+
+        self._visualize_reconstructions(
+            trainer=trainer,
+            pl_module=pl_module,
+            batch_getter_method='get_validation_batch',
+            log_key='val/reconstructions',
         )
 
 
