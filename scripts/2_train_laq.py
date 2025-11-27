@@ -63,28 +63,16 @@ def main(cfg: DictConfig):
     print("Initializing Data Module")
     print("=" * 80)
 
-    data_config = cfg.data
+    # Unpack config directly, filtering out metadata keys
     datamodule = LAQDataModule(
-        folder=data_config.folder,
-        image_size=data_config.image_size,
-        offset=data_config.offset,
-        batch_size=data_config.batch_size,
-        num_workers=data_config.num_workers,
-        pin_memory=data_config.pin_memory,
-        prefetch_factor=data_config.prefetch_factor,
-        max_samples=data_config.get("max_samples", None),
-        val_split=data_config.val_split,
-        use_metadata=data_config.use_metadata,
-        return_metadata=data_config.return_metadata,
-        filters=data_config.get("filters", None),
-        min_frames=data_config.min_frames,
+        **{k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
     )
 
     print(f"✓ DataModule initialized")
-    print(f"  - Folder: {data_config.folder}")
-    print(f"  - Image size: {data_config.image_size}")
-    print(f"  - Batch size: {data_config.batch_size}")
-    print(f"  - Max samples: {data_config.get('max_samples', 'all')}")
+    print(f"  - Folder: {cfg.data.folder}")
+    print(f"  - Image size: {cfg.data.image_size}")
+    print(f"  - Batch size: {cfg.data.batch_size}")
+    print(f"  - Max samples: {cfg.data.get('max_samples', 'all')}")
 
     # Initialize LAQ task
     print("\n" + "=" * 80)
