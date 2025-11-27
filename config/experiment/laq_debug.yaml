@@ -19,7 +19,7 @@ data:
   num_workers: 2
 
 training:
-  epochs: 500
+  epochs: 5
   gradient:
     clip_val: 1.0
 
