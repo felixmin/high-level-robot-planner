@@ -165,11 +165,56 @@ Before running full training:
 2. Verify setup: `python scripts/0_setup_environment.py`
 3. Check configuration: `python scripts/2_train_laq.py experiment=laq_debug --help`
 
+### Data Loading Modes (LAQ Training)
+
+The LAQDataModule supports two modes for loading frame pairs:
+
+**Scene-Level Mode (default):**
+- Loads scenes and samples frame pairs on-the-fly during training
+- Each dataset index = one scene
+- Good for standard training with variety
+
+**Pair-Level Mode:**
+- Pre-computes all valid frame pairs upfront
+- Each dataset index = one specific (frame_t, frame_t+offset) pair
+- Perfect for overfitting experiments and debugging
+- Supports multiple offsets: `offsets=[10, 20, 30]`
+
+**Overfitting on a Single Frame Pair:**
+```bash
+# Overfit on exactly 1 frame pair (perfect for debugging reconstructions)
+python scripts/2_train_laq.py experiment=laq_debug \
+    data.pair_level=true \
+    data.max_samples=1 \
+    data.val_split=0.0 \
+    training.epochs=1000 \
+    training.validation.visualize_train=true
+```
+
+**Pair-Level Training Examples:**
+```bash
+# Train on 100 specific pairs
+python scripts/2_train_laq.py experiment=laq_debug \
+    data.pair_level=true \
+    data.max_samples=100
+
+# Multiple offsets for data augmentation
+python scripts/2_train_laq.py experiment=laq_full \
+    data.pair_level=true \
+    data.offsets=[10,20,30]
+```
+
+**Dataset Size Comparison:**
+- Scene-level: ~25 scenes from youtube_new/JNBtHDVoNQc_stabilized
+- Pair-level: ~66,000 frame pairs (with offset=30)
+
 ## Implementation Notes
 
 - **LAQ Training** (Stage 1): Implement in `scripts/2_train_laq.py`. Use PyTorch Lightning for standard supervised learning with DDP.
 - **Foundation Training** (Stage 2): Implement in `scripts/4_train_foundation.py`. Use Lightning Fabric for FSDP multi-node training with fine training loop control.
-- **Data Loading**: Implement WebDataset-based loaders in `packages/common/` for streaming TAR shards.
+- **Data Loading**:
+  - Stage 1 (LAQ): Supports both scene-level and pair-level modes via `LAQDataModule`. Use pair-level for overfitting and debugging.
+  - Stage 2/3: Implement WebDataset-based loaders in `packages/common/` for streaming TAR shards.
 - **Logging**: Use `packages/common/logging.py` for consistent logging across stages.
 - **Checkpointing**: Lightning handles checkpoint saving; configure paths via Hydra config.
 

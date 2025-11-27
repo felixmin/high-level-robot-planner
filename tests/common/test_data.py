@@ -758,5 +758,213 @@ class TestLAQDataModuleWithMetadata:
         print(f"  - Metadata entries: {len(batch['metadata'])}")
 
 
+class TestMetadataAwarePairDataset:
+    """Test MetadataAwarePairDataset (pair-level indexing)."""
+
+    def test_pair_dataset_initialization(self, dataset_path):
+        """Test pair dataset initializes and pre-computes pairs."""
+        from common.data import MetadataAwarePairDataset
+
+        dataset = MetadataAwarePairDataset(
+            folder=dataset_path,
+            image_size=256,
+            offsets=[30],
+            min_frames=2,
+        )
+
+        assert len(dataset) > 0
+        assert hasattr(dataset, 'pairs')
+        assert hasattr(dataset, 'scenes')
+        assert len(dataset.pairs) > 0
+
+        print(f"✓ Pair dataset initialized")
+        print(f"  - Total pairs: {len(dataset)}")
+        print(f"  - Scenes: {len(dataset.scenes)}")
+
+    def test_pair_dataset_multiple_offsets(self, dataset_path):
+        """Test pair dataset with multiple offsets."""
+        from common.data import MetadataAwarePairDataset
+
+        dataset = MetadataAwarePairDataset(
+            folder=dataset_path,
+            image_size=256,
+            offsets=[10, 20, 30],
+            min_frames=2,
+        )
+
+        # Should have 3x as many pairs (roughly) as single offset
+        single_offset = MetadataAwarePairDataset(
+            folder=dataset_path,
+            image_size=256,
+            offsets=[30],
+            min_frames=2,
+        )
+
+        assert len(dataset) > len(single_offset)
+        print(f"✓ Multiple offsets create more pairs")
+        print(f"  - Single offset [30]: {len(single_offset)} pairs")
+        print(f"  - Three offsets [10,20,30]: {len(dataset)} pairs")
+
+    def test_pair_dataset_load_sample(self, dataset_path):
+        """Test loading a specific pair by index."""
+        from common.data import MetadataAwarePairDataset
+
+        dataset = MetadataAwarePairDataset(
+            folder=dataset_path,
+            image_size=256,
+            offsets=[30],
+            return_metadata=False,
+        )
+
+        frames = dataset[0]
+        assert isinstance(frames, torch.Tensor)
+        assert frames.shape == (3, 2, 256, 256)
+
+        print(f"✓ Loaded pair by index")
+        print(f"  - Shape: {frames.shape}")
+
+    def test_pair_dataset_with_metadata(self, dataset_path):
+        """Test pair dataset returns metadata dict."""
+        from common.data import MetadataAwarePairDataset
+
+        dataset = MetadataAwarePairDataset(
+            folder=dataset_path,
+            image_size=256,
+            offsets=[30],
+            return_metadata=True,
+        )
+
+        sample = dataset[0]
+        assert isinstance(sample, dict)
+        assert "frames" in sample
+        assert "scene_idx" in sample
+        assert "first_frame_idx" in sample
+        assert "second_frame_idx" in sample
+        assert "offset" in sample
+        assert "metadata" in sample
+
+        print(f"✓ Pair dataset returns metadata dict")
+        print(f"  - Keys: {list(sample.keys())}")
+
+    def test_pair_index_dataclass(self):
+        """Test FramePairIndex dataclass."""
+        from common.data import FramePairIndex
+
+        pair = FramePairIndex(
+            scene_idx=0,
+            first_frame_idx=10,
+            second_frame_idx=40,
+            offset=30,
+        )
+
+        assert pair.scene_idx == 0
+        assert pair.first_frame_idx == 10
+        assert pair.second_frame_idx == 40
+        assert pair.offset == 30
+
+        print(f"✓ FramePairIndex dataclass works")
+
+
+class TestLAQDataModulePairLevel:
+    """Test LAQDataModule with pair_level mode."""
+
+    def test_pair_level_mode(self, dataset_path):
+        """Test LAQDataModule in pair-level mode."""
+        datamodule = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            offset=30,
+            batch_size=2,
+            num_workers=0,
+            pair_level=True,
+            offsets=[30],
+            max_samples=10,
+            val_split=0.2,
+        )
+
+        datamodule.setup()
+
+        assert datamodule.total_available > 0
+        assert len(datamodule.train_dataset) == 8  # 10 * 0.8
+        assert len(datamodule.val_dataset) == 2    # 10 * 0.2
+
+        print(f"✓ Pair-level mode works")
+        print(f"  - Total pairs available: {datamodule.total_available}")
+        print(f"  - Train pairs: {len(datamodule.train_dataset)}")
+        print(f"  - Val pairs: {len(datamodule.val_dataset)}")
+
+    def test_single_pair_overfitting(self, dataset_path):
+        """Test LAQDataModule configured for single-pair overfitting."""
+        datamodule = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            batch_size=1,
+            num_workers=0,
+            pair_level=True,
+            offsets=[30],
+            max_samples=1,
+            val_split=0.0,  # No validation
+        )
+
+        datamodule.setup()
+
+        assert len(datamodule.train_dataset) == 1
+        assert len(datamodule.val_dataset) == 0
+
+        # Verify we can load the same sample multiple times
+        train_loader = datamodule.train_dataloader()
+        batch1 = next(iter(train_loader))
+        batch2 = next(iter(train_loader))
+
+        assert batch1.shape == (1, 3, 2, 256, 256)
+        # Same pair every time (perfect for overfitting)
+        assert torch.allclose(batch1, batch2)
+
+        print(f"✓ Single-pair overfitting setup works")
+        print(f"  - Train samples: 1")
+        print(f"  - Val samples: 0")
+        print(f"  - Batch shape: {batch1.shape}")
+
+    def test_pair_level_vs_scene_level(self, dataset_path):
+        """Compare pair-level and scene-level dataset sizes."""
+        # Scene-level (on-the-fly sampling)
+        scene_dm = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            offset=30,
+            batch_size=2,
+            num_workers=0,
+            pair_level=False,
+            max_samples=10,
+            val_split=0.0,
+        )
+        scene_dm.setup()
+
+        # Pair-level (pre-computed pairs)
+        pair_dm = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            offset=30,
+            batch_size=2,
+            num_workers=0,
+            pair_level=True,
+            offsets=[30],
+            max_samples=10,
+            val_split=0.0,
+        )
+        pair_dm.setup()
+
+        # Pair-level should have many more samples (all frame pairs vs scenes)
+        assert len(pair_dm.train_dataset) == 10  # 10 pairs
+        assert len(scene_dm.train_dataset) == 10  # 10 scenes
+
+        # But total available should be much larger for pair-level
+        assert pair_dm.total_available > scene_dm.total_available
+
+        print(f"✓ Pair-level vs scene-level comparison")
+        print(f"  - Scene-level total: {scene_dm.total_available} scenes")
+        print(f"  - Pair-level total: {pair_dm.total_available} pairs")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

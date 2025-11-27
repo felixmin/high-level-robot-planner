@@ -68,11 +68,20 @@ def main(cfg: DictConfig):
         **{k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
     )
 
-    print(f"✓ DataModule initialized")
+    # Setup to create datasets and get sizes
+    datamodule.setup()
+
+    # Dataset mode
+    pair_level = cfg.data.get("pair_level", False)
+    mode_str = "pair-level" if pair_level else "scene-level"
+
+    print(f"✓ DataModule initialized ({mode_str})")
     print(f"  - Folder: {cfg.data.folder}")
     print(f"  - Image size: {cfg.data.image_size}")
     print(f"  - Batch size: {cfg.data.batch_size}")
-    print(f"  - Max samples: {cfg.data.get('max_samples', 'all')}")
+    print(f"  - Total samples available: {datamodule.total_available}")
+    print(f"  - Train samples: {len(datamodule.train_dataset)}")
+    print(f"  - Val samples: {len(datamodule.val_dataset)}")
 
     # Initialize LAQ task
     print("\n" + "=" * 80)

@@ -5,8 +5,10 @@ Includes:
 - SceneMetadata: Dataclass for scene metadata from CSV
 - SceneFilter: Flexible filtering for scenes by any column
 - ImageVideoDataset: Loads frame pairs from folders (legacy)
-- MetadataAwareDataset: Enhanced dataset using scenes.csv
-- LAQDataModule: Lightning DataModule with metadata filtering
+- MetadataAwareDataset: Enhanced dataset using scenes.csv (scene-level)
+- FramePairIndex: Dataclass for explicit frame pair indexing
+- MetadataAwarePairDataset: Pair-level dataset with pre-computed pairs
+- LAQDataModule: Lightning DataModule with metadata filtering and pair-level support
 """
 
 import csv
@@ -494,6 +496,173 @@ class MetadataAwareDataset(Dataset):
                 return self.__getitem__(random.randint(0, len(self) - 1))
 
 
+@dataclass
+class FramePairIndex:
+    """
+    Index for a specific frame pair in a scene.
+
+    Used by MetadataAwarePairDataset to identify concrete (frame_t, frame_t+offset) pairs.
+    """
+    scene_idx: int
+    first_frame_idx: int
+    second_frame_idx: int
+    offset: int
+
+
+class MetadataAwarePairDataset(Dataset):
+    """
+    Pair-level dataset: each index corresponds to a concrete (frame_t, frame_t+offset) pair.
+
+    This is the basis for:
+    - Overfitting on a single sample
+    - Future pair-level filtering (e.g., by motion flow)
+    - Explicit control over frame sampling
+
+    Unlike MetadataAwareDataset which samples pairs on-the-fly, this dataset
+    pre-computes all valid pairs and indexes them directly.
+
+    Args:
+        folder: Root folder containing scenes
+        image_size: Size to resize images to
+        offsets: List of frame offsets to use (default [30])
+        filters: Dict of filters to apply to scenes
+        min_frames: Minimum frames required per scene
+        return_metadata: If True, return dict with frames and metadata
+    """
+
+    def __init__(
+        self,
+        folder: str,
+        image_size: int = 256,
+        offsets: Optional[List[int]] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        min_frames: int = 2,
+        return_metadata: bool = False,
+    ):
+        super().__init__()
+
+        self.folder = Path(folder)
+        self.image_size = image_size
+        self.offsets = offsets or [30]
+        self.return_metadata = return_metadata
+        self.min_frames = min_frames
+
+        # 1) Load & filter scenes
+        csv_path = self.folder / "scenes.csv"
+        if csv_path.exists():
+            all_scenes = load_scenes_csv(csv_path)
+            scene_filter = SceneFilter(filters)
+            self.scenes = [
+                s for s in scene_filter.filter_scenes(all_scenes)
+                if s.num_frames >= min_frames
+            ]
+        else:
+            self.scenes = self._create_scenes_from_folders()
+
+        # 2) Build explicit list of all frame pairs
+        self.pairs = self._build_pairs(self.scenes, self.offsets)
+
+        # 3) Transform pipeline
+        self.transform = T.Compose([
+            T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
+            T.Resize(image_size),
+            T.ToTensor(),
+        ])
+
+    def _create_scenes_from_folders(self) -> List[SceneMetadata]:
+        """Create scenes from folder structure (fallback when scenes.csv doesn't exist)."""
+        scenes = []
+        folders = sorted([
+            d for d in os.listdir(self.folder)
+            if os.path.isdir(self.folder / d) and d.startswith("scene_")
+        ])
+
+        for idx, folder_name in enumerate(folders):
+            folder_path = self.folder / folder_name
+            img_files = [
+                f for f in os.listdir(folder_path)
+                if f.lower().endswith((".jpg", ".jpeg", ".png"))
+            ]
+            if len(img_files) >= self.min_frames:
+                scenes.append(SceneMetadata(
+                    scene_idx=idx,
+                    scene_folder=folder_name,
+                    start_frame=0,
+                    end_frame=len(img_files),
+                ))
+        return scenes
+
+    def _get_frame_files(self, scene: SceneMetadata) -> List[str]:
+        """Get sorted list of frame files for a scene."""
+        folder_path = self.folder / scene.scene_folder
+        img_files = [
+            f for f in os.listdir(folder_path)
+            if f.lower().endswith((".jpg", ".jpeg", ".png"))
+        ]
+
+        def frame_index(name: str) -> int:
+            stem = os.path.splitext(name)[0]
+            m = re.search(r"frame_(\d+)$", stem)
+            if m:
+                return int(m.group(1))
+            m2 = re.findall(r"(\d+)", stem)
+            return int(m2[-1]) if m2 else -1
+
+        return sorted(img_files, key=frame_index)
+
+    def _build_pairs(self, scenes: List[SceneMetadata], offsets: List[int]) -> List[FramePairIndex]:
+        """Build explicit list of all valid frame pairs."""
+        pairs: List[FramePairIndex] = []
+        for scene_idx, scene in enumerate(scenes):
+            img_files = self._get_frame_files(scene)
+            n = len(img_files)
+            if n < 2:
+                continue
+
+            for offset in offsets:
+                max_start = max(0, n - 1 - offset)
+                for first_idx in range(max_start + 1):
+                    second_idx = min(first_idx + offset, n - 1)
+                    pairs.append(FramePairIndex(
+                        scene_idx=scene_idx,
+                        first_frame_idx=first_idx,
+                        second_frame_idx=second_idx,
+                        offset=offset,
+                    ))
+        return pairs
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def __getitem__(self, index):
+        pair = self.pairs[index]
+        scene = self.scenes[pair.scene_idx]
+        folder_path = self.folder / scene.scene_folder
+        img_files = self._get_frame_files(scene)
+
+        first_path = folder_path / img_files[pair.first_frame_idx]
+        second_path = folder_path / img_files[pair.second_frame_idx]
+
+        img1 = Image.open(first_path)
+        img2 = Image.open(second_path)
+
+        x1 = self.transform(img1).unsqueeze(1)  # [C,1,H,W]
+        x2 = self.transform(img2).unsqueeze(1)  # [C,1,H,W]
+        frames = torch.cat([x1, x2], dim=1)     # [C,2,H,W]
+
+        if not self.return_metadata:
+            return frames
+
+        return {
+            "frames": frames,
+            "scene_idx": scene.scene_idx,
+            "first_frame_idx": pair.first_frame_idx,
+            "second_frame_idx": pair.second_frame_idx,
+            "offset": pair.offset,
+            "metadata": scene,
+        }
+
+
 class LAQDataModule(pl.LightningDataModule):
     """
     PyTorch Lightning DataModule for LAQ training.
@@ -520,22 +689,26 @@ class LAQDataModule(pl.LightningDataModule):
         filters: Optional[Dict[str, Any]] = None,
         return_metadata: bool = False,
         min_frames: int = 2,
+        pair_level: bool = False,
+        offsets: Optional[List[int]] = None,
     ):
         """
         Args:
             folder: Root folder containing scenes
             image_size: Size to resize images to
-            offset: Frame offset for second frame
+            offset: Frame offset for second frame (legacy, used when not pair_level)
             batch_size: Batch size for dataloaders
             num_workers: Number of dataloader workers
             pin_memory: Pin memory for faster GPU transfer
             prefetch_factor: Prefetch factor for dataloaders
-            max_samples: Maximum samples (for subset testing)
+            max_samples: Maximum samples (for subset testing). When pair_level=True, this is pair count.
             val_split: Fraction of data for validation
             use_metadata: If True, use MetadataAwareDataset with scenes.csv
             filters: Dict of filter conditions (see SceneFilter)
             return_metadata: If True, return dict with metadata
             min_frames: Minimum frames required per scene
+            pair_level: If True, use MetadataAwarePairDataset (pre-computed pairs)
+            offsets: List of frame offsets for pair-level mode (default [offset])
         """
         super().__init__()
 
@@ -552,6 +725,8 @@ class LAQDataModule(pl.LightningDataModule):
         self.filters = filters
         self.return_metadata = return_metadata
         self.min_frames = min_frames
+        self.pair_level = pair_level
+        self.offsets = offsets or [offset]
 
         self.train_dataset = None
         self.val_dataset = None
@@ -560,20 +735,35 @@ class LAQDataModule(pl.LightningDataModule):
         """Setup train/val datasets."""
         # Create full dataset
         if self.use_metadata:
-            full_dataset = MetadataAwareDataset(
-                folder=self.folder,
-                image_size=self.image_size,
-                offset=self.offset,
-                filters=self.filters,
-                return_metadata=self.return_metadata,
-                min_frames=self.min_frames,
-            )
+            if self.pair_level:
+                # Pair-level mode: explicit frame pair indexing
+                full_dataset = MetadataAwarePairDataset(
+                    folder=self.folder,
+                    image_size=self.image_size,
+                    offsets=self.offsets,
+                    filters=self.filters,
+                    min_frames=self.min_frames,
+                    return_metadata=self.return_metadata,
+                )
+            else:
+                # Scene-level mode: sample pairs on-the-fly
+                full_dataset = MetadataAwareDataset(
+                    folder=self.folder,
+                    image_size=self.image_size,
+                    offset=self.offset,
+                    filters=self.filters,
+                    return_metadata=self.return_metadata,
+                    min_frames=self.min_frames,
+                )
         else:
             full_dataset = ImageVideoDataset(
                 folder=self.folder,
                 image_size=self.image_size,
                 offset=self.offset,
             )
+
+        # Store total before subsetting
+        self.total_available = len(full_dataset)
 
         # Apply subset if specified
         if self.max_samples is not None:

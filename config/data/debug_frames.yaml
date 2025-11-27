@@ -18,8 +18,12 @@ image_size: 256
 offset: 30  # Frame offset between t and t+offset
 
 # Subset settings for debugging
-max_samples: 10  # Only use 10 scenes for fast debugging
+max_samples: 10  # Only use 10 scenes/pairs for fast debugging
 val_split: 0.1   # 10% validation split
+
+# Dataset mode
+pair_level: false  # If true, use pair-level indexing (for overfitting)
+offsets: null      # List of offsets for pair-level mode (default: [offset])
 
 # Metadata filtering (optional)
 use_metadata: true

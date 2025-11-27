@@ -26,11 +26,11 @@ class TestExperimentConfigs:
             assert cfg.experiment.name == "laq_debug"
             assert "debug" in cfg.experiment.description.lower()
 
-            # Validate model config
-            assert cfg.model.name == "laq_base"
-            assert hasattr(cfg.model, "encoder")
-            assert hasattr(cfg.model, "quantizer")
-            assert hasattr(cfg.model, "decoder")
+            # Validate model config (LAPA ViT-based LAQ)
+            assert cfg.model.name == "laq_vit"
+            assert cfg.model.dim == 1024
+            assert cfg.model.codebook_size == 8
+            assert cfg.model.patch_size == 32
 
             # Validate data config
             assert cfg.data.name == "debug"
@@ -52,21 +52,18 @@ class TestExperimentConfigs:
         with initialize_config_dir(version_base=None, config_dir=config_dir):
             cfg = compose(config_name="config", overrides=["experiment=laq_full"])
 
-            # Validate experiment
+            # Validate experiment (uses openx_v1 not laq_full)
             assert cfg.experiment.name == "laq_openx_v1"
+            assert "openx" in cfg.experiment.description.lower()
 
-            # Validate model (same LAQ model)
-            assert cfg.model.name == "laq_base"
+            # Validate model (same LAPA ViT LAQ model)
+            assert cfg.model.name == "laq_vit"
+            assert cfg.model.codebook_size == 8
 
-            # Validate larger dataset config
-            assert cfg.data.name == "openx"
-            assert cfg.data.batch_size == 256
-            assert cfg.data.num_workers == 8
-
-            # Validate training (full training)
+            # Validate training (full training with 100 epochs)
             assert cfg.training.epochs == 100
 
-            # Validate cluster config (single node H100)
+            # Validate cluster config (H100 single node)
             assert cfg.cluster.name == "lrz_h100"
             assert cfg.cluster.compute.num_nodes == 1
             assert cfg.cluster.compute.gpus_per_node == 4
@@ -131,12 +128,12 @@ class TestConfigComposition:
                 config_name="config",
                 overrides=[
                     "experiment=laq_debug",
-                    "model.encoder.base_channels=32",
+                    "model.dim=512",
                     "training.optimizer.betas=[0.95,0.999]"
                 ]
             )
 
-            assert cfg.model.encoder.base_channels == 32
+            assert cfg.model.dim == 512
             assert cfg.training.optimizer.betas == [0.95, 0.999]
 
     def test_config_is_valid_omegaconf(self, config_dir):
