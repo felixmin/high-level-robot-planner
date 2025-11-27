@@ -691,6 +691,8 @@ class LAQDataModule(pl.LightningDataModule):
         min_frames: int = 2,
         pair_level: bool = False,
         offsets: Optional[List[int]] = None,
+        sampling_strategy: str = "random",
+        sampling_seed: int = 42,
     ):
         """
         Args:
@@ -709,6 +711,8 @@ class LAQDataModule(pl.LightningDataModule):
             min_frames: Minimum frames required per scene
             pair_level: If True, use MetadataAwarePairDataset (pre-computed pairs)
             offsets: List of frame offsets for pair-level mode (default [offset])
+            sampling_strategy: How to select subset ('random' for diverse samples, 'sequential' for neighboring)
+            sampling_seed: Random seed for reproducible random sampling
         """
         super().__init__()
 
@@ -727,6 +731,8 @@ class LAQDataModule(pl.LightningDataModule):
         self.min_frames = min_frames
         self.pair_level = pair_level
         self.offsets = offsets or [offset]
+        self.sampling_strategy = sampling_strategy
+        self.sampling_seed = sampling_seed
 
         self.train_dataset = None
         self.val_dataset = None
@@ -767,7 +773,21 @@ class LAQDataModule(pl.LightningDataModule):
 
         # Apply subset if specified
         if self.max_samples is not None:
-            indices = list(range(min(self.max_samples, len(full_dataset))))
+            num_samples = min(self.max_samples, len(full_dataset))
+
+            if self.sampling_strategy == "random":
+                # Random sampling for diverse subset
+                rng = random.Random(self.sampling_seed)
+                indices = rng.sample(range(len(full_dataset)), num_samples)
+            elif self.sampling_strategy == "sequential":
+                # Sequential sampling (legacy behavior)
+                indices = list(range(num_samples))
+            else:
+                raise ValueError(
+                    f"Invalid sampling_strategy: {self.sampling_strategy}. "
+                    "Must be 'random' or 'sequential'."
+                )
+
             full_dataset = Subset(full_dataset, indices)
 
         # Split into train/val

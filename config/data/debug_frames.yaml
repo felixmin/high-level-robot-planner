@@ -20,6 +20,8 @@ offset: 30  # Frame offset between t and t+offset
 # Subset settings for debugging
 max_samples: 10  # Only use 10 scenes/pairs for fast debugging
 val_split: 0.1   # 10% validation split
+sampling_strategy: random  # 'random' for diverse samples, 'sequential' for neighboring
+sampling_seed: 42  # Random seed for reproducible sampling
 
 # Dataset mode
 pair_level: false  # If true, use pair-level indexing (for overfitting)

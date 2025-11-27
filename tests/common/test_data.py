@@ -966,5 +966,177 @@ class TestLAQDataModulePairLevel:
         print(f"  - Pair-level total: {pair_dm.total_available} pairs")
 
 
+class TestSamplingStrategies:
+    """Test random vs sequential sampling for subset selection."""
+
+    def test_random_sampling_produces_diverse_indices(self, dataset_path):
+        """Test that random sampling produces non-sequential indices."""
+        dm = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            batch_size=4,
+            max_samples=10,
+            val_split=0.0,
+            sampling_strategy="random",
+            sampling_seed=42,
+        )
+        dm.setup()
+
+        # Access the underlying dataset to get actual indices into full dataset
+        # train_dataset is Subset(Subset(full_dataset, random_indices), train_indices)
+        from torch.utils.data import Subset
+        assert isinstance(dm.train_dataset, Subset)
+
+        # Get the actual indices by traversing nested Subsets
+        outer_subset = dm.train_dataset
+        inner_subset = outer_subset.dataset
+
+        if isinstance(inner_subset, Subset):
+            # Nested subset: map outer indices through inner indices
+            actual_indices = [inner_subset.indices[i] for i in outer_subset.indices]
+        else:
+            # Single subset
+            actual_indices = outer_subset.indices
+
+        # Random sampling should NOT be sequential [0, 1, 2, ..., 9]
+        assert actual_indices != list(range(10)), "Random sampling should not produce sequential indices"
+
+        print(f"✓ Random sampling indices: {actual_indices}")
+
+    def test_sequential_sampling_produces_sequential_indices(self, dataset_path):
+        """Test that sequential sampling produces [0, 1, 2, ...] indices."""
+        dm = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            batch_size=4,
+            max_samples=10,
+            val_split=0.0,
+            sampling_strategy="sequential",
+            sampling_seed=42,
+        )
+        dm.setup()
+
+        from torch.utils.data import Subset
+        assert isinstance(dm.train_dataset, Subset)
+
+        # Get the actual indices by traversing nested Subsets
+        outer_subset = dm.train_dataset
+        inner_subset = outer_subset.dataset
+
+        if isinstance(inner_subset, Subset):
+            # Nested subset: map outer indices through inner indices
+            actual_indices = [inner_subset.indices[i] for i in outer_subset.indices]
+        else:
+            # Single subset
+            actual_indices = outer_subset.indices
+
+        # Sequential sampling should be [0, 1, 2, ..., 9]
+        assert actual_indices == list(range(10)), f"Sequential sampling should produce [0..9], got {actual_indices}"
+
+        print(f"✓ Sequential sampling indices: {actual_indices}")
+
+    def test_random_sampling_is_reproducible(self, dataset_path):
+        """Test that same seed produces same random indices."""
+        dm1 = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            batch_size=4,
+            max_samples=10,
+            val_split=0.0,
+            sampling_strategy="random",
+            sampling_seed=42,
+        )
+        dm1.setup()
+
+        dm2 = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            batch_size=4,
+            max_samples=10,
+            val_split=0.0,
+            sampling_strategy="random",
+            sampling_seed=42,
+        )
+        dm2.setup()
+
+        from torch.utils.data import Subset
+
+        # Get actual indices for both datasets
+        def get_actual_indices(subset):
+            outer_subset = subset
+            inner_subset = outer_subset.dataset
+            if isinstance(inner_subset, Subset):
+                return [inner_subset.indices[i] for i in outer_subset.indices]
+            else:
+                return outer_subset.indices
+
+        indices1 = get_actual_indices(dm1.train_dataset)
+        indices2 = get_actual_indices(dm2.train_dataset)
+
+        assert indices1 == indices2, "Same seed should produce same random indices"
+
+        print(f"✓ Random sampling is reproducible with seed=42: {indices1}")
+
+    def test_different_seeds_produce_different_samples(self, dataset_path):
+        """Test that different seeds produce different random indices."""
+        dm1 = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            batch_size=4,
+            max_samples=10,
+            val_split=0.0,
+            sampling_strategy="random",
+            sampling_seed=42,
+        )
+        dm1.setup()
+
+        dm2 = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            batch_size=4,
+            max_samples=10,
+            val_split=0.0,
+            sampling_strategy="random",
+            sampling_seed=123,
+        )
+        dm2.setup()
+
+        from torch.utils.data import Subset
+
+        # Get actual indices for both datasets
+        def get_actual_indices(subset):
+            outer_subset = subset
+            inner_subset = outer_subset.dataset
+            if isinstance(inner_subset, Subset):
+                return [inner_subset.indices[i] for i in outer_subset.indices]
+            else:
+                return outer_subset.indices
+
+        indices1 = get_actual_indices(dm1.train_dataset)
+        indices2 = get_actual_indices(dm2.train_dataset)
+
+        assert indices1 != indices2, "Different seeds should produce different random indices"
+
+        print(f"✓ Different seeds produce different samples")
+        print(f"  - Seed 42: {indices1}")
+        print(f"  - Seed 123: {indices2}")
+
+    def test_invalid_sampling_strategy_raises_error(self, dataset_path):
+        """Test that invalid sampling strategy raises ValueError."""
+        dm = LAQDataModule(
+            folder=dataset_path,
+            image_size=256,
+            batch_size=4,
+            max_samples=10,
+            val_split=0.0,
+            sampling_strategy="invalid",
+        )
+
+        with pytest.raises(ValueError, match="Invalid sampling_strategy"):
+            dm.setup()
+
+        print(f"✓ Invalid sampling strategy raises ValueError")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
