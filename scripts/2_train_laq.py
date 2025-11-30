@@ -75,8 +75,15 @@ def main(cfg: DictConfig):
     pair_level = cfg.data.get("pair_level", False)
     mode_str = "pair-level" if pair_level else "scene-level"
 
-    print(f"✓ DataModule initialized ({mode_str})")
-    print(f"  - Folder: {cfg.data.folder}")
+    # Handle both folder and sources mode in logging
+    if cfg.data.get("sources"):
+        source_info = [f"{s['type']}: {s['root']}" for s in cfg.data.sources]
+        print(f"✓ DataModule initialized ({mode_str}, multi-source)")
+        for s in source_info:
+            print(f"  - Source: {s}")
+    else:
+        print(f"✓ DataModule initialized ({mode_str})")
+        print(f"  - Folder: {cfg.data.folder}")
     print(f"  - Image size: {cfg.data.image_size}")
     print(f"  - Batch size: {cfg.data.batch_size}")
     print(f"  - Total samples available: {datamodule.total_available}")

@@ -1,0 +1,30 @@
+# @package _global_
+
+# Multi-dataset debug configuration for LAQ training
+# Uses both YouTube and Bridge datasets with small subset
+
+defaults:
+  - /model@model: laq
+  - /data@data: laq_multi_dataset
+  - /training@training: laq_optimizer
+  - /cluster@cluster: local_dev
+
+experiment:
+  name: laq_multi_debug
+  description: "LAQ debug training on YouTube + Bridge"
+
+# Override for debugging - use small subset
+data:
+  batch_size: 4
+  num_workers: 2
+  max_samples: 20  # Small subset for debugging
+  val_split: 0.2
+
+training:
+  epochs: 3
+  gradient:
+    clip_val: 1.0
+
+logging:
+  use_wandb: false  # Disable wandb for debug
+  tags: ["debug", "laq", "multi-dataset"]

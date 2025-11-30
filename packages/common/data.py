@@ -726,7 +726,10 @@ class MultiSourceSceneDataset(Dataset):
 
         self.transform = T.Compose([
             T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
-            T.Resize(image_size),
+            # Resize to fit within image_size while maintaining aspect ratio
+            T.Resize(image_size, interpolation=T.InterpolationMode.LANCZOS),
+            # Center crop to get square image
+            T.CenterCrop(image_size),
             T.ToTensor(),
         ])
 
@@ -839,7 +842,10 @@ class MultiSourcePairDataset(Dataset):
 
         self.transform = T.Compose([
             T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
-            T.Resize(image_size),
+            # Resize to fit within image_size while maintaining aspect ratio
+            T.Resize(image_size, interpolation=T.InterpolationMode.LANCZOS),
+            # Center crop to get square image
+            T.CenterCrop(image_size),
             T.ToTensor(),
         ])
 

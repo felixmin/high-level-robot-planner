@@ -12,12 +12,10 @@ sources:
     # filters:
     #   contains_hand_sam3: true
 
-  # Uncomment to add Bridge dataset
-  # - type: bridge
-  #   root: /mnt/data/datasets/bridgev2/raw/bridge_data_v2
-  #   filters:
-  #     environment: toykitchen1  # Only toykitchen1
-  #     policy_desc: "human demo"  # Only human demos
+  - type: bridge
+    root: /mnt/data/datasets/bridgev2/raw
+    # filters:
+    #   environment: toykitchen1  # Only toykitchen1
 
 # Batch size for training
 batch_size: 32
