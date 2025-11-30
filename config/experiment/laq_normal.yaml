@@ -1,0 +1,34 @@
+# @package _global_
+
+# Normal LAQ training on full dataset with pair-level indexing
+# For standard production training
+
+defaults:
+  - /model@model: laq
+  - /data@data: laq_pairs
+  - /training@training: laq_optimizer
+  - /cluster@cluster: local_dev
+
+experiment:
+  name: laq_normal
+  description: "LAQ training on full dataset with pair-level indexing"
+
+# Normal training settings (override debug defaults)
+data:
+  batch_size: 32
+  num_workers: 4
+  max_samples: null  # Use all pairs
+  # Don't include offsets here - data config has it
+
+training:
+  epochs: 5000
+  # scheduler type can be: 'cosine', 'step', 'plateau', or 'none'
+  scheduler:
+    type: none
+    warmup_steps: 500
+    min_lr: 1.0e-6
+
+logging:
+  use_wandb: true
+  tags: ["normal", "laq", "pair-level"]
+  log_model: true

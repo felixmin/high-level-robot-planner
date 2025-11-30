@@ -141,10 +141,14 @@ class SceneFilter:
 
     Supports:
     - Equality: {"stabilized_label": "uncertain"}
-    - Comparison: {"max_trans": (">", 10.0)}
+    - Comparison (YAML-compatible): {"max_trans": [">", 10.0]}
     - Boolean: {"contains_hand_sam3": True}
     - Callable: {"num_frames": lambda x: x > 100}
-    - Exclusion: {"label": ("!=", "static")}
+    - Exclusion: {"label": ["!=", "static"]}
+    - Multiple values: {"task_category": ["pnp_push_sweep", "stack_blocks"]}
+
+    Note: YAML lists are automatically handled (converted from tuples).
+    Operators: ">", ">=", "<", "<=", "!=", "=="
     """
 
     def __init__(self, filters: Optional[Dict[str, Any]] = None):
@@ -165,19 +169,32 @@ class SceneFilter:
             if callable(condition):
                 if not condition(value):
                     return False
-            elif isinstance(condition, tuple) and len(condition) == 2:
-                op, threshold = condition
-                if op == ">" and not (value > threshold):
-                    return False
-                elif op == ">=" and not (value >= threshold):
-                    return False
-                elif op == "<" and not (value < threshold):
-                    return False
-                elif op == "<=" and not (value <= threshold):
-                    return False
-                elif op == "!=" and not (value != threshold):
-                    return False
-                elif op == "==" and not (value == threshold):
+            elif isinstance(condition, (tuple, list)) and len(condition) == 2:
+                # YAML gives lists, not tuples: [">", 0.05]
+                # Check if first element is an operator string
+                first_elem = condition[0]
+                if isinstance(first_elem, str) and first_elem in (">", ">=", "<", "<=", "!=", "=="):
+                    # Treat as (operator, threshold)
+                    op, threshold = condition
+                    if op == ">" and not (value > threshold):
+                        return False
+                    elif op == ">=" and not (value >= threshold):
+                        return False
+                    elif op == "<" and not (value < threshold):
+                        return False
+                    elif op == "<=" and not (value <= threshold):
+                        return False
+                    elif op == "!=" and not (value != threshold):
+                        return False
+                    elif op == "==" and not (value == threshold):
+                        return False
+                else:
+                    # Treat as "value in list" (multiple allowed values)
+                    if value not in condition:
+                        return False
+            elif isinstance(condition, list):
+                # List of allowed values: ["pnp_push_sweep", "stack_blocks"]
+                if value not in condition:
                     return False
             else:
                 # Direct equality

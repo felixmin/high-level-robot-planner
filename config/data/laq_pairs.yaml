@@ -1,0 +1,35 @@
+# Normal LAQ Training with Pair-Level Indexing
+# Pre-computes all frame pairs for deterministic training
+
+name: laq_pairs
+task: laq
+
+# Dataset path - CHANGE THIS to your full dataset
+folder: /mnt/data/datasets/youtube_new/JNBtHDVoNQc_stabilized
+
+# Batch size for training
+batch_size: 16
+num_workers: 4
+prefetch_factor: 2
+pin_memory: true
+
+# Frame pair settings
+image_size: 256
+offset: 30  # Default frame offset (only used if offsets not specified)
+
+# Subset settings
+# max_samples: null  # Use all pairs (omit line to use all)
+val_split: 0.1   # 10% validation split
+sampling_strategy: random  # 'random' for diverse samples, 'sequential' for neighbors
+sampling_seed: 42  # Random seed for reproducible sampling
+
+# Dataset mode
+pair_level: true   # Use pair-level indexing (pre-computes all pairs)
+offsets: [30]      # List of offsets (can be [15, 30, 60] for multi-scale)
+
+# Metadata filtering (optional)
+use_metadata: true
+return_metadata: false  # Return just tensors, not metadata dicts
+filters: null  # No filtering (use all scenes)
+min_frames: 2  # Minimum frames per scene
+

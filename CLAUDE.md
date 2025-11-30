@@ -167,46 +167,63 @@ Before running full training:
 
 ### Data Loading Modes (LAQ Training)
 
-The LAQDataModule supports two modes for loading frame pairs:
+**Scene-Level** (`data=laq_scenes`) - Recommended for full dataset:
+- Samples frame pairs on-the-fly each epoch
+- Memory efficient, diverse sampling
+```bash
+python scripts/2_train_laq.py experiment=laq_normal data=laq_scenes
+```
 
-**Scene-Level Mode (default):**
-- Loads scenes and samples frame pairs on-the-fly during training
-- Each dataset index = one scene
-- Good for standard training with variety
-
-**Pair-Level Mode:**
+**Pair-Level** (`data=laq_pairs`) - Deterministic training:
 - Pre-computes all valid frame pairs upfront
-- Each dataset index = one specific (frame_t, frame_t+offset) pair
-- Perfect for overfitting experiments and debugging
-- Supports multiple offsets: `offsets=[10, 20, 30]`
-
-**Overfitting on a Single Frame Pair:**
+- Supports multiple offsets: `offsets=[15, 30, 60]`
 ```bash
-# Overfit on exactly 1 frame pair (perfect for debugging reconstructions)
-python scripts/2_train_laq.py experiment=laq_debug \
-    data.pair_level=true \
-    data.max_samples=1 \
-    data.val_split=0.0 \
-    training.epochs=1000 \
-    training.validation.visualize_train=true
+python scripts/2_train_laq.py experiment=laq_normal data=laq_pairs
 ```
 
-**Pair-Level Training Examples:**
+**Debug Mode** (`data=debug_frames`) - Quick iteration:
+- Small random subset (`max_samples=10`)
+- Fast for testing code changes
 ```bash
-# Train on 100 specific pairs
-python scripts/2_train_laq.py experiment=laq_debug \
-    data.pair_level=true \
-    data.max_samples=100
-
-# Multiple offsets for data augmentation
-python scripts/2_train_laq.py experiment=laq_full \
-    data.pair_level=true \
-    data.offsets=[10,20,30]
+python scripts/2_train_laq.py experiment=laq_debug
 ```
 
-**Dataset Size Comparison:**
-- Scene-level: ~25 scenes from youtube_new/JNBtHDVoNQc_stabilized
-- Pair-level: ~66,000 frame pairs (with offset=30)
+**See:** `docs/normal_training_guide.md` for detailed examples
+
+### Data Filtering
+
+Filter scenes by metadata (YAML-compatible):
+```yaml
+filters:
+  # Comparison operators (use lists for YAML)
+  max_trans: [">", 10.0]
+  label: ["!=", "static"]
+
+  # Multiple allowed values
+  task_category: ["pnp_push_sweep", "stack_blocks"]
+
+  # Boolean and equality
+  has_hands: true
+  environment: toykitchen1
+```
+
+### Performance Profiling
+
+Enable profiling to debug slow training:
+```bash
+# Low overhead (~5%), always safe to use
+python scripts/2_train_laq.py experiment=laq_debug \
+    training.profiler.enabled=true \
+    training.profiler.type=simple
+
+# High overhead (~20-50%), detailed GPU analysis
+python scripts/2_train_laq.py experiment=laq_debug \
+    training.profiler.enabled=true \
+    training.profiler.type=pytorch \
+    training.epochs=2
+```
+
+**See:** `docs/profiling.md` for detailed profiling guide
 
 ## Implementation Notes
 

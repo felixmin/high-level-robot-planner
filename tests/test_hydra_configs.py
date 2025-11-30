@@ -149,7 +149,7 @@ class TestConfigComposition:
 class TestExperimentConsistency:
     """Test that all experiments load without errors."""
 
-    @pytest.mark.parametrize("experiment", ["laq_debug", "laq_full", "vla_7b"])
+    @pytest.mark.parametrize("experiment", ["laq_debug", "laq_full", "laq_normal", "vla_7b"])
     def test_all_experiments_load(self, config_dir, experiment):
         """Test that all available experiments load successfully."""
         with initialize_config_dir(version_base=None, config_dir=config_dir):
@@ -165,6 +165,47 @@ class TestExperimentConsistency:
             # Experiment should have name and description
             assert cfg.experiment.name is not None
             assert cfg.experiment.description is not None
+
+    def test_laq_normal_config(self, config_dir):
+        """Test LAQ normal training configuration loads correctly."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(config_name="config", overrides=["experiment=laq_normal"])
+
+            # Validate experiment
+            assert cfg.experiment.name == "laq_normal"
+            assert "pair-level" in cfg.experiment.description.lower()
+
+            # Validate model (same as debug)
+            assert cfg.model.name == "laq_vit"
+            assert cfg.model.dim == 1024
+
+            # Validate data config (uses laq_pairs)
+            assert cfg.data.name == "laq_pairs"
+            assert cfg.data.pair_level == True
+            assert cfg.data.offsets == [30]
+
+            # Validate training (user modified to 5000 epochs, no scheduler)
+            assert cfg.training.epochs == 5000
+            assert cfg.training.scheduler.type == "none"
+
+    def test_data_config_variants(self, config_dir):
+        """Test both data config variants (scenes vs pairs)."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            # Test scenes variant
+            cfg_scenes = compose(
+                config_name="config",
+                overrides=["experiment=laq_normal", "data=laq_scenes"]
+            )
+            assert cfg_scenes.data.name == "laq_scenes"
+            assert cfg_scenes.data.pair_level == False
+
+            # Test pairs variant
+            cfg_pairs = compose(
+                config_name="config",
+                overrides=["experiment=laq_normal", "data=laq_pairs"]
+            )
+            assert cfg_pairs.data.name == "laq_pairs"
+            assert cfg_pairs.data.pair_level == True
 
 
 if __name__ == "__main__":

@@ -549,6 +549,45 @@ class TestSceneFilter:
 
         print(f"✓ Empty filter: returns all {len(filtered)} scenes")
 
+    def test_filter_yaml_list_operator(self, sample_scenes):
+        """Test YAML-style list for operators (not tuples)."""
+        # YAML gives lists, not tuples: [">", 10.0]
+        f = SceneFilter({"max_trans": [">", 10.0]})
+        filtered = f.filter_scenes(sample_scenes)
+
+        assert len(filtered) == 2
+        assert all(s.max_trans > 10.0 for s in filtered)
+
+        print(f"✓ YAML list operator: {len(filtered)} scenes with max_trans > 10.0")
+
+    def test_filter_yaml_list_not_equal(self, sample_scenes):
+        """Test YAML-style list for != operator."""
+        # YAML: ["!=", "static"]
+        f = SceneFilter({"label": ["!=", "static"]})
+        filtered = f.filter_scenes(sample_scenes)
+
+        assert len(filtered) == 2
+        assert all(s.label != "static" for s in filtered)
+
+        print(f"✓ YAML list !=: {len(filtered)} non-static scenes")
+
+    def test_filter_multiple_values(self, sample_scenes):
+        """Test filtering by multiple allowed values."""
+        # Add extras to test scenes
+        sample_scenes[0].extras["task"] = "pick"
+        sample_scenes[1].extras["task"] = "place"
+        sample_scenes[2].extras["task"] = "other"
+
+        # Filter for "pick" OR "place"
+        f = SceneFilter({"task": ["pick", "place"]})
+        filtered = f.filter_scenes(sample_scenes)
+
+        assert len(filtered) == 2
+        assert filtered[0].extras["task"] == "pick"
+        assert filtered[1].extras["task"] == "place"
+
+        print(f"✓ Multiple values filter: {len(filtered)} scenes with task in ['pick', 'place']")
+
 
 class TestLoadScenesCSV:
     """Test loading scenes from real CSV file."""
