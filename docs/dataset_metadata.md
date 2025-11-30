@@ -240,22 +240,22 @@ dm = LAQDataModule(
         {"type": "youtube", "root": "/path/to/youtube"},
         {"type": "bridge", "root": "/path/to/bridge"},
     ],
+    # CAUTION: This pattern is problematic!
+    # Global filters apply to ALL scenes - if a field is missing, the scene is excluded.
+    # "has_hands" doesn't exist in Bridge, so ALL Bridge scenes would be filtered out.
     filters={
-        # Apply to all datasets
-        "dataset_type": ["youtube", "bridge"],
-        # YouTube-specific (only applies to YouTube scenes)
-        "has_hands": True,
-        # Bridge-specific (only applies to Bridge scenes)
-        "environment": lambda env: "toykitchen" in env,
+        "dataset_type": ["youtube", "bridge"],  # OK - shared field
     },
 )
 ```
+
+**⚠️ Warning:** Global filters with dataset-specific keys will exclude scenes from datasets that don't have those keys. For example, filtering by `has_hands` will exclude ALL Bridge scenes because Bridge doesn't have that field.
 
 ---
 
 ## Per-Source Filtering (Recommended)
 
-Instead of global filters, specify filters per source:
+Use per-source filters for dataset-specific keys:
 
 ```yaml
 # config/data/multi_dataset.yaml
@@ -263,17 +263,34 @@ sources:
   - type: youtube
     root: /mnt/data/datasets/youtube_new
     filters:
-      has_hands: true          # Only YouTube scenes with hands
+      contains_hand_sam3: true   # YouTube-specific field
 
   - type: bridge
     root: /mnt/data/datasets/bridgev2/raw/bridge_data_v2
     filters:
-      environment: toykitchen1  # Only toykitchen1 environment
-      task_category: many_skills # Only multi-task data
-      policy_desc: human demo    # Only human demos
+      environment: toykitchen1  # Bridge-specific field
+      task_category: many_skills
+      policy_desc: human demo
 ```
 
-This gives fine-grained control per dataset.
+This ensures each dataset is filtered by its own metadata fields.
+
+**YAML filter syntax:**
+```yaml
+# Equality
+stabilized_label: "uncertain"
+
+# Comparison operators (use lists)
+max_trans: [">", 10.0]
+num_frames: [">=", 100]
+
+# Exclusion
+label: ["!=", "static"]
+
+# Multiple allowed values (membership)
+task_category: ["pnp_push_sweep", "stack_blocks"]
+environment: ["toykitchen1", "toykitchen2"]
+```
 
 ---
 

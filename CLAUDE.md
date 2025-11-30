@@ -190,6 +190,44 @@ python scripts/2_train_laq.py experiment=laq_debug
 
 **See:** `docs/normal_training_guide.md` for detailed examples
 
+### Multi-Dataset Training
+
+Train on multiple datasets using adapters:
+```yaml
+sources:
+  - type: youtube
+    root: /mnt/data/datasets/youtube_new
+    filters:
+      contains_hand_sam3: true
+
+  - type: bridge
+    root: /mnt/data/datasets/bridgev2/raw/bridge_data_v2
+    filters:
+      environment: toykitchen1
+```
+
+### Metadata-Based Train/Val Splits
+
+Hold out specific data for validation (distribution shift analysis):
+```yaml
+split_mode: metadata
+val_scene_filters:
+  video_id: "holdout_video"  # Hold out specific video
+  # OR: dataset_type: "bridge"  # Hold out entire dataset
+  # OR: environment: "toykitchen7"  # Leave-one-out
+```
+
+### Validation Buckets
+
+Create named validation subsets for analysis:
+```yaml
+val_buckets:
+  youtube_only:
+    dataset_type: "youtube"
+  unseen_robot:
+    robot: "minsky"
+```
+
 ### Data Filtering
 
 Filter scenes by metadata (YAML-compatible):
@@ -203,7 +241,7 @@ filters:
   task_category: ["pnp_push_sweep", "stack_blocks"]
 
   # Boolean and equality
-  has_hands: true
+  contains_hand_sam3: true
   environment: toykitchen1
 ```
 

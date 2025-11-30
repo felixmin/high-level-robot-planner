@@ -1,0 +1,51 @@
+# Scene-Level LAQ Training Configuration
+# Samples frame pairs on-the-fly each epoch (memory efficient)
+
+name: laq_scenes
+task: laq
+
+# Dataset path - CHANGE THIS to your full dataset
+folder: /mnt/data/datasets/youtube_new/JNBtHDVoNQc_stabilized
+
+# --- OR use multi-source for multiple datasets ---
+# sources:
+#   - type: youtube
+#     root: /mnt/data/datasets/youtube_new
+
+# Batch size for training
+batch_size: 32
+num_workers: 4
+prefetch_factor: 2
+pin_memory: true
+
+# Frame pair settings
+image_size: 256
+offset: 30  # Frame offset between t and t+offset
+
+# Subset settings
+# max_samples: null  # Use all scenes (omit line to use all)
+val_split: 0.1   # 10% validation split
+sampling_strategy: random
+sampling_seed: 42
+
+# Dataset mode
+pair_level: false  # Scene-level: sample pairs on-the-fly each epoch
+offsets: null      # Not used in scene-level mode
+
+# Metadata filtering (optional)
+use_metadata: true
+return_metadata: false
+min_frames: 2
+
+# Global filters applied to all sources (optional)
+# filters:
+#   stabilized_label: ["!=", "static"]
+#   max_trans: [">", 5.0]
+
+# Train/Val Split Settings
+split_mode: ratio
+
+# For metadata-based split:
+# split_mode: metadata
+# val_scene_filters:
+#   video_id: "holdout_video_id"

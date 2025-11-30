@@ -12,6 +12,9 @@ python scripts/2_train_laq.py experiment=laq_normal data=laq_scenes
 
 # OR pair-level (pre-computed pairs, deterministic)
 python scripts/2_train_laq.py experiment=laq_normal data=laq_pairs
+
+# Multi-dataset training (YouTube + Bridge)
+python scripts/2_train_laq.py experiment=laq_normal data=laq_multi_dataset
 ```
 
 ## Understanding the Three Data Modes
@@ -51,6 +54,88 @@ python scripts/2_train_laq.py experiment=laq_normal data=laq_pairs data.offsets=
 
 ```bash
 python scripts/2_train_laq.py experiment=laq_debug
+```
+
+---
+
+## Multi-Dataset Training
+
+Train on multiple datasets simultaneously using the adapter system:
+
+```yaml
+# config/data/laq_multi_dataset.yaml
+sources:
+  - type: youtube
+    root: /mnt/data/datasets/youtube_new
+    filters:
+      contains_hand_sam3: true  # Only YouTube scenes with hands
+
+  - type: bridge
+    root: /mnt/data/datasets/bridgev2/raw/bridge_data_v2
+    filters:
+      environment: toykitchen1  # Only toykitchen1 environment
+```
+
+**Supported dataset types:**
+- `youtube`: YouTube videos with scenes.csv metadata
+- `bridge`: BridgeV2 robot trajectories
+
+---
+
+## Holding Out Data for Validation (Distribution Shift)
+
+### Ratio-Based Split (Default)
+```yaml
+split_mode: ratio
+val_split: 0.1  # 10% for validation
+```
+
+### Metadata-Based Split
+Hold out specific videos, datasets, or environments:
+
+```yaml
+split_mode: metadata
+val_scene_filters:
+  video_id: "JNBtHDVoNQc_stabilized"  # Hold out one video
+```
+
+**Examples:**
+```yaml
+# Hold out entire dataset type
+val_scene_filters:
+  dataset_type: "bridge"
+
+# Leave-one-environment-out
+val_scene_filters:
+  environment: "toykitchen7"
+
+# Hold out specific robot
+val_scene_filters:
+  robot: "minsky"
+```
+
+---
+
+## Validation Buckets (Distribution Shift Analysis)
+
+Create named subsets of validation data for separate evaluation:
+
+```yaml
+val_buckets:
+  youtube_only:
+    dataset_type: "youtube"
+  bridge_only:
+    dataset_type: "bridge"
+  unseen_environment:
+    environment: "folding_table"
+```
+
+Access bucket dataloaders in your training code:
+```python
+# In your training script
+for bucket_name in dm.val_bucket_datasets:
+    bucket_loader = dm.val_bucket_dataloader(bucket_name)
+    # Evaluate on this bucket
 ```
 
 ---

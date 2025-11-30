@@ -7,6 +7,19 @@ task: laq
 # Dataset path - CHANGE THIS to your full dataset
 folder: /mnt/data/datasets/youtube_new/JNBtHDVoNQc_stabilized
 
+# --- OR use multi-source for multiple datasets ---
+# sources:
+#   - type: youtube
+#     root: /mnt/data/datasets/youtube_new
+#     # Per-source filters (optional)
+#     filters:
+#       contains_hand_sam3: true
+#
+#   - type: bridge
+#     root: /mnt/data/datasets/bridgev2/raw/bridge_data_v2
+#     filters:
+#       environment: toykitchen1
+
 # Batch size for training
 batch_size: 16
 num_workers: 4
@@ -30,6 +43,28 @@ offsets: [30]      # List of offsets (can be [15, 30, 60] for multi-scale)
 # Metadata filtering (optional)
 use_metadata: true
 return_metadata: false  # Return just tensors, not metadata dicts
-filters: null  # No filtering (use all scenes)
 min_frames: 2  # Minimum frames per scene
+
+# Global filters applied to all sources (optional)
+# filters:
+#   stabilized_label: ["!=", "static"]
+#   max_trans: [">", 5.0]
+
+# --- Train/Val Split Settings ---
+split_mode: ratio  # 'ratio' (percentage) or 'metadata' (filter-based)
+
+# For metadata-based split, specify which scenes go to validation:
+# val_scene_filters:
+#   video_id: "holdout_video_id"        # Hold out one video
+#   dataset_type: "bridge"              # Hold out entire dataset type
+#   environment: "toykitchen7"          # Leave-one-environment-out
+
+# --- Validation Buckets (for distribution shift analysis) ---
+# val_buckets:
+#   different_robot:
+#     robot: "minsky"
+#   different_environment:
+#     environment: "folding_table"
+#   youtube_only:
+#     dataset_type: "youtube"
 
