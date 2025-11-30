@@ -28,7 +28,13 @@ from lightning.pytorch.loggers import WandbLogger
 
 from common.data import LAQDataModule
 from common.logging import set_seed, count_parameters
-from laq import LAQTask, ReconstructionVisualizationCallback, EMACallback
+from laq import (
+    LAQTask,
+    ReconstructionVisualizationCallback,
+    EMACallback,
+    ValidationStrategyCallback,
+    create_validation_strategies,
+)
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
@@ -136,15 +142,34 @@ def main(cfg: DictConfig):
     callbacks.append(lr_monitor)
     print("✓ Learning rate monitor added")
 
-    # Reconstruction visualization
-    viz_callback = ReconstructionVisualizationCallback(
-        num_samples=training_config.validation.num_samples_to_log,
-        log_every_n_epochs=training_config.validation.interval_epochs,
-        visualize_train=training_config.validation.get("visualize_train", False),
-        visualize_val=training_config.validation.get("visualize_val", True),
-    )
-    callbacks.append(viz_callback)
-    print(f"✓ Reconstruction visualization callback added (train={training_config.validation.get('visualize_train', False)}, val={training_config.validation.get('visualize_val', True)})")
+    # Setup validation strategies
+    val_config = training_config.validation
+    strategies_config = val_config.get("strategies", {})
+    
+    # Check if using new validation strategy system
+    if strategies_config:
+        # New validation system with configurable strategies
+        strategies = create_validation_strategies(strategies_config)
+        
+        val_strategy_callback = ValidationStrategyCallback(
+            strategies=strategies,
+            num_fixed_samples=val_config.get("num_fixed_samples", 4),
+            num_random_samples=val_config.get("num_random_samples", 4),
+        )
+        callbacks.append(val_strategy_callback)
+        print(f"✓ Validation strategy callback added ({len(strategies)} strategies)")
+        for strategy in strategies:
+            print(f"  - {strategy.name}: every {strategy.every_n_validations} validations")
+    else:
+        # Legacy visualization callback
+        viz_callback = ReconstructionVisualizationCallback(
+            num_samples=val_config.get("num_vis_samples", 8),
+            log_every_n_epochs=1,
+            visualize_train=strategies_config.get("basic", {}).get("visualize_train", True),
+            visualize_val=strategies_config.get("basic", {}).get("visualize_val", True),
+        )
+        callbacks.append(viz_callback)
+        print(f"✓ Reconstruction visualization callback added (legacy mode)")
 
     # Optional EMA
     if training_config.get("use_ema", False):
@@ -212,6 +237,9 @@ def main(cfg: DictConfig):
     print("Setting up Trainer")
     print("=" * 80)
 
+    # Get validation check interval from config
+    val_check_interval = training_config.validation.get("check_interval", 1.0)
+
     trainer = pl.Trainer(
         max_epochs=training_config.epochs,
         max_steps=training_config.get("max_steps") or -1,  # Convert None to -1
@@ -225,13 +253,14 @@ def main(cfg: DictConfig):
         logger=logger,
         profiler=profiler,
         log_every_n_steps=10,
-        val_check_interval=1.0,  # Validate every epoch
+        val_check_interval=val_check_interval,  # Configurable validation frequency
         enable_progress_bar=True,
         enable_model_summary=True,
     )
 
     print(f"✓ Trainer initialized")
     print(f"  - Max epochs: {training_config.epochs}")
+    print(f"  - Val check interval: {val_check_interval}")
     print(f"  - Precision: {cfg.get('precision', '32-true')}")
     print(f"  - Accelerator: auto")
     print(f"  - Devices: auto")

@@ -126,7 +126,7 @@ class LatentActionQuantization(nn.Module):
         self.load_state_dict(pt)
 
     def decode_from_codebook_indices(self, indices):
-        codes = self.vq.codebook[indices]
+        codes = self.vq.codebooks[indices]
 
         return self.decode(codes)
 

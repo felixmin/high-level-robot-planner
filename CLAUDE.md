@@ -263,6 +263,45 @@ python scripts/2_train_laq.py experiment=laq_debug \
 
 **See:** `docs/profiling.md` for detailed profiling guide
 
+### Validation Configuration
+
+Configure validation frequency and strategies:
+```yaml
+validation:
+  # Validate 100 times per epoch (important for large datasets)
+  check_interval: 0.01
+  
+  # Fixed samples: diverse across datasets, tracked every validation
+  num_fixed_samples: 8
+  # Random samples: different each time for diversity
+  num_random_samples: 8
+  
+  strategies:
+    basic:
+      enabled: true
+      visualize_train: true
+      visualize_val: true
+      visualize_per_bucket: true  # Separate grids for YouTube/Bridge
+      samples_per_bucket: 4
+    
+    # Latent transfer: test action transfer between scenes
+    latent_transfer:
+      enabled: true
+      every_n_validations: 10
+      num_pairs: 256
+    
+    # Clustering: analyze latent action distribution
+    clustering:
+      enabled: true
+      every_n_validations: 20
+      num_clusters: 16
+```
+
+Key features:
+- **Fixed samples**: Diverse across datasets (equally samples from YouTube, Bridge, etc.)
+- **Per-bucket visualization**: Separate reconstruction grids for each dataset type
+- **Configurable frequency**: `check_interval: 0.01` = validate every 1% of epoch
+
 ## Implementation Notes
 
 - **LAQ Training** (Stage 1): Implement in `scripts/2_train_laq.py`. Use PyTorch Lightning for standard supervised learning with DDP.

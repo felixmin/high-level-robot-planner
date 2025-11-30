@@ -285,3 +285,82 @@ class LAQTask(pl.LightningModule):
             recons = self.model(batch.to(self.device), return_recons_only=True)
         self.train()
         return recons
+
+    def encode_latents(
+        self,
+        batch: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode frame pairs to get latent actions and codebook indices.
+
+        Args:
+            batch: Frame pairs [B, C, 2, H, W]
+
+        Returns:
+            (latent_actions, codebook_indices)
+        """
+        self.eval()
+        with torch.no_grad():
+            batch = batch.to(self.device)
+            # Get codebook indices
+            indices = self.model(batch, return_only_codebook_ids=True)
+            # Get quantized latents from indices
+            latents = self.model.vq.codebooks[indices]
+        self.train()
+        return latents, indices
+
+    def decode_with_latents(
+        self,
+        first_frames: torch.Tensor,
+        latent_actions: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Decode first frames with given latent actions.
+
+        This enables latent transfer: apply action from one pair to another scene.
+
+        Args:
+            first_frames: First frames [B, C, 1, H, W] or [B, C, H, W]
+            latent_actions: Latent actions from encoder
+
+        Returns:
+            Reconstructed next frames [B, C, 1, H, W]
+        """
+        import math
+        from einops import rearrange
+
+        self.eval()
+        with torch.no_grad():
+            first_frames = first_frames.to(self.device)
+            latent_actions = latent_actions.to(self.device)
+
+            # Ensure correct shape
+            if first_frames.ndim == 4:
+                first_frames = first_frames.unsqueeze(2)  # [B, C, H, W] -> [B, C, 1, H, W]
+
+            # Get first frame tokens
+            first_frame_tokens = self.model.to_patch_emb_first_frame(first_frames)
+
+            # Reshape latents for decode
+            code_seq_len = self.model.code_seq_len
+            if math.sqrt(code_seq_len) % 1 == 0:
+                action_h = int(math.sqrt(code_seq_len))
+                action_w = int(math.sqrt(code_seq_len))
+            elif code_seq_len == 2:
+                action_h, action_w = 2, 1
+            else:
+                action_h, action_w = code_seq_len, 1
+
+            # Reshape latents: [B, seq, dim] -> [B, t, h, w, d]
+            if latent_actions.ndim == 2:
+                latent_actions = latent_actions.unsqueeze(1)  # [B, dim] -> [B, 1, dim]
+            latent_actions = rearrange(
+                latent_actions, 'b (t h w) d -> b t h w d',
+                t=1, h=action_h, w=action_w
+            )
+
+            # Decode
+            recon = self.model.decode(first_frame_tokens, latent_actions)
+
+        self.train()
+        return recon

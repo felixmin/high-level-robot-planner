@@ -2,10 +2,11 @@
 PyTorch Lightning callbacks for LAQ training.
 
 Includes:
-- ReconstructionVisualizationCallback: Logs reconstruction grids to WandB
+- ReconstructionVisualizationCallback: Logs reconstruction grids to WandB (legacy)
+- ValidationStrategyCallback: Flexible validation with multiple strategies
 """
 
-from typing import Optional
+from typing import Optional, List, Dict, Any, Tuple
 
 import torch
 from torchvision.utils import make_grid
@@ -18,6 +19,199 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
+
+
+class ValidationStrategyCallback(Callback):
+    """
+    Flexible validation callback that runs multiple validation strategies.
+    
+    Features:
+    - Fixed samples: diverse samples across datasets, same every validation
+    - Random samples: different samples each time for diversity
+    - Per-bucket visualization: separate grids for YouTube/Bridge etc.
+    - Periodic heavy validation: latent transfer, clustering (configurable frequency)
+    
+    Args:
+        strategies: List of ValidationStrategy instances
+        num_fixed_samples: Number of fixed samples to track (diverse across datasets)
+        num_random_samples: Number of random samples to show
+        cache_for_heavy: Whether to cache data for heavy strategies
+    """
+    
+    def __init__(
+        self,
+        strategies: Optional[List] = None,
+        num_fixed_samples: int = 8,
+        num_random_samples: int = 8,
+        cache_for_heavy: bool = True,
+    ):
+        super().__init__()
+        self.strategies = strategies or []
+        self.num_fixed_samples = num_fixed_samples
+        self.num_random_samples = num_random_samples
+        self.cache_for_heavy = cache_for_heavy
+        
+        # Import here to avoid circular imports
+        from laq.validation import ValidationCache
+        self.cache = ValidationCache()
+        
+        # Track fixed sample indices (set on first validation with full data)
+        self.fixed_indices: Optional[List[int]] = None
+        self.validation_count = 0
+        self._first_full_validation_done = False
+    
+    def _any_heavy_strategy_running(self) -> bool:
+        """Check if any heavy strategy wants to run this validation."""
+        for strategy in self.strategies:
+            if strategy.needs_caching() and strategy.should_run():
+                return True
+        return False
+    
+    def _select_diverse_fixed_samples(
+        self,
+        all_frames: torch.Tensor,
+        all_metadata: List[Dict[str, Any]],
+        num_samples: int,
+    ) -> Tuple[List[int], torch.Tensor, List[Dict[str, Any]]]:
+        """
+        Select diverse fixed samples across different datasets/scenes.
+        
+        Tries to get equal representation from each dataset type.
+        """
+        if not all_metadata:
+            # No metadata - just use random sampling
+            indices = torch.randperm(len(all_frames))[:num_samples].tolist()
+            return indices, all_frames[indices], [{} for _ in indices]
+        
+        # Group indices by dataset_type
+        by_dataset: Dict[str, List[int]] = {}
+        for i, meta in enumerate(all_metadata):
+            dtype = meta.get("dataset_type", "unknown")
+            if dtype not in by_dataset:
+                by_dataset[dtype] = []
+            by_dataset[dtype].append(i)
+        
+        # Sample equally from each dataset type
+        selected_indices = []
+        dataset_types = list(by_dataset.keys())
+        samples_per_dataset = max(1, num_samples // len(dataset_types))
+        
+        for dtype in dataset_types:
+            indices = by_dataset[dtype]
+            # Shuffle and take samples
+            shuffled = torch.randperm(len(indices)).tolist()
+            for j in shuffled[:samples_per_dataset]:
+                if len(selected_indices) < num_samples:
+                    selected_indices.append(indices[j])
+        
+        # If we need more samples, add randomly
+        remaining_indices = [i for i in range(len(all_frames)) if i not in selected_indices]
+        while len(selected_indices) < num_samples and remaining_indices:
+            idx = remaining_indices.pop(torch.randint(len(remaining_indices), (1,)).item())
+            selected_indices.append(idx)
+        
+        # Get frames and metadata for selected indices
+        selected_frames = all_frames[selected_indices]
+        selected_metadata = [all_metadata[i] for i in selected_indices]
+        
+        return selected_indices, selected_frames, selected_metadata
+    
+    def on_validation_epoch_start(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+    ) -> None:
+        """Initialize cache at start of validation."""
+        self.cache.clear()
+    
+    def on_validation_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs,
+        batch,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Cache validation data if any strategy needs it."""
+        # Extract frames and metadata from batch
+        if isinstance(batch, dict):
+            frames = batch["frames"]
+            # Extract per-sample metadata
+            batch_metadata = []
+            batch_size = frames.shape[0]
+            for i in range(batch_size):
+                meta = {}
+                for key in ["dataset_type", "scene_id", "video_id", "environment"]:
+                    if key in batch:
+                        val = batch[key]
+                        if isinstance(val, (list, tuple)):
+                            meta[key] = val[i] if i < len(val) else None
+                        elif isinstance(val, torch.Tensor):
+                            meta[key] = val[i].item() if val.ndim > 0 else val.item()
+                        else:
+                            meta[key] = val
+                batch_metadata.append(meta)
+        else:
+            frames = batch
+            batch_metadata = [{} for _ in range(frames.shape[0])]
+        
+        frames = frames.detach().cpu()
+        
+        # Always cache frames and metadata for visualization
+        self.cache.frames.append(frames)
+        self.cache.metadata.append(batch_metadata)
+        
+        # Cache latents and codes if heavy strategies are running
+        if self._any_heavy_strategy_running():
+            with torch.no_grad():
+                device = pl_module.device
+                frames_gpu = frames.to(device)
+                
+                # Get codebook indices
+                indices = pl_module.model(frames_gpu, return_only_codebook_ids=True)
+                self.cache.codes.append(indices.cpu())
+                
+                # Get quantized latents
+                latents = pl_module.model.vq.codebooks[indices]
+                self.cache.latents.append(latents.cpu())
+    
+    def on_validation_epoch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+    ) -> None:
+        """Run all validation strategies."""
+        self.validation_count += 1
+        
+        # Update strategy counters
+        for strategy in self.strategies:
+            strategy.increment_count()
+        
+        # Get all cached data
+        all_frames = self.cache.get_all_frames()
+        all_metadata = self.cache.get_all_metadata()
+        
+        # Select diverse fixed samples on first validation with enough data
+        if all_frames is not None and not self._first_full_validation_done:
+            if len(all_frames) >= self.num_fixed_samples:
+                indices, fixed_frames, fixed_meta = self._select_diverse_fixed_samples(
+                    all_frames, all_metadata, self.num_fixed_samples
+                )
+                self.fixed_indices = indices
+                self.cache.fixed_indices = indices
+                self.cache.fixed_frames = fixed_frames
+                self.cache.fixed_metadata = fixed_meta
+                self._first_full_validation_done = True
+                print(f"✓ Selected {len(indices)} diverse fixed samples for visualization")
+        
+        # Run strategies
+        for strategy in self.strategies:
+            if strategy.should_run():
+                try:
+                    metrics = strategy.run(self.cache, pl_module, trainer)
+                except Exception as e:
+                    print(f"Warning: Strategy {strategy.name} failed: {e}")
 
 
 class ReconstructionVisualizationCallback(Callback):

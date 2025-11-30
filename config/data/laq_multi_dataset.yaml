@@ -33,7 +33,7 @@ offsets: [30]
 
 # Metadata filtering (optional)
 use_metadata: true
-return_metadata: false
+return_metadata: true  # Required for per-bucket validation visualization
 min_frames: 2
 
 # Global filters applied after per-source filters

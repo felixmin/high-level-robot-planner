@@ -256,14 +256,25 @@ def metadata_collate_fn(batch: List[Dict]) -> Dict:
         - 'motion_track_path': List of paths or Nones
         - 'first_frame_idx': Tensor of ints
         - 'second_frame_idx': Tensor of ints
+        - 'dataset_type': List of strings (for per-bucket visualization)
     """
+    # Extract dataset_type from metadata for easy access
+    dataset_types = []
+    for item in batch:
+        meta = item.get("metadata")
+        if meta is not None and hasattr(meta, "extras"):
+            dataset_types.append(meta.extras.get("dataset_type", "unknown"))
+        else:
+            dataset_types.append("unknown")
+    
     return {
         "frames": torch.stack([item["frames"] for item in batch]),
         "scene_idx": [item["scene_idx"] for item in batch],
-        "metadata": [item["metadata"] for item in batch],
-        "motion_track_path": [item["motion_track_path"] for item in batch],
+        "metadata": [item.get("metadata") for item in batch],
+        "motion_track_path": [item.get("motion_track_path") for item in batch],
         "first_frame_idx": torch.tensor([item["first_frame_idx"] for item in batch]),
         "second_frame_idx": torch.tensor([item["second_frame_idx"] for item in batch]),
+        "dataset_type": dataset_types,
     }
 
 
