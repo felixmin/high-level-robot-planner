@@ -30,12 +30,13 @@ class ValidationStrategyCallback(Callback):
     - Random samples: different samples each time for diversity
     - Per-bucket visualization: separate grids for YouTube/Bridge etc.
     - Periodic heavy validation: latent transfer, clustering (configurable frequency)
+    - Memory efficient: only caches limited samples, not entire val set
     
     Args:
         strategies: List of ValidationStrategy instances
         num_fixed_samples: Number of fixed samples to track (diverse across datasets)
         num_random_samples: Number of random samples to show
-        cache_for_heavy: Whether to cache data for heavy strategies
+        max_cached_samples: Maximum samples to cache (prevents OOM)
     """
     
     def __init__(
@@ -43,13 +44,13 @@ class ValidationStrategyCallback(Callback):
         strategies: Optional[List] = None,
         num_fixed_samples: int = 8,
         num_random_samples: int = 8,
-        cache_for_heavy: bool = True,
+        max_cached_samples: int = 256,  # Limit to prevent OOM
     ):
         super().__init__()
         self.strategies = strategies or []
         self.num_fixed_samples = num_fixed_samples
         self.num_random_samples = num_random_samples
-        self.cache_for_heavy = cache_for_heavy
+        self.max_cached_samples = max_cached_samples
         
         # Import here to avoid circular imports
         from laq.validation import ValidationCache
@@ -59,6 +60,7 @@ class ValidationStrategyCallback(Callback):
         self.fixed_indices: Optional[List[int]] = None
         self.validation_count = 0
         self._first_full_validation_done = False
+        self._cached_sample_count = 0
     
     def _any_heavy_strategy_running(self) -> bool:
         """Check if any heavy strategy wants to run this validation."""
@@ -123,6 +125,7 @@ class ValidationStrategyCallback(Callback):
     ) -> None:
         """Initialize cache at start of validation."""
         self.cache.clear()
+        self._cached_sample_count = 0
     
     def on_validation_batch_end(
         self,
@@ -133,7 +136,11 @@ class ValidationStrategyCallback(Callback):
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
-        """Cache validation data if any strategy needs it."""
+        """Cache validation data if any strategy needs it (limited samples)."""
+        # Stop caching if we have enough samples
+        if self._cached_sample_count >= self.max_cached_samples:
+            return
+        
         # Extract frames and metadata from batch
         if isinstance(batch, dict):
             frames = batch["frames"]
@@ -156,11 +163,19 @@ class ValidationStrategyCallback(Callback):
             frames = batch
             batch_metadata = [{} for _ in range(frames.shape[0])]
         
-        frames = frames.detach().cpu()
+        # Limit how many samples we cache from this batch
+        remaining_capacity = self.max_cached_samples - self._cached_sample_count
+        if remaining_capacity <= 0:
+            return
         
-        # Always cache frames and metadata for visualization
+        samples_to_cache = min(frames.shape[0], remaining_capacity)
+        frames = frames[:samples_to_cache].detach().cpu()
+        batch_metadata = batch_metadata[:samples_to_cache]
+        
+        # Cache frames and metadata
         self.cache.frames.append(frames)
         self.cache.metadata.append(batch_metadata)
+        self._cached_sample_count += samples_to_cache
         
         # Cache latents and codes if heavy strategies are running
         if self._any_heavy_strategy_running():

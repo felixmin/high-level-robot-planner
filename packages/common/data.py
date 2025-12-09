@@ -257,15 +257,29 @@ def metadata_collate_fn(batch: List[Dict]) -> Dict:
         - 'first_frame_idx': Tensor of ints
         - 'second_frame_idx': Tensor of ints
         - 'dataset_type': List of strings (for per-bucket visualization)
+        - 'environment': List of strings (for debugging/analysis)
+        - 'task': List of strings (for language correlation analysis)
+        - 'language': List of strings (for language-action correlation)
     """
-    # Extract dataset_type from metadata for easy access
+    # Extract useful fields from metadata for easy access
     dataset_types = []
+    environments = []
+    tasks = []
+    languages = []
+    
     for item in batch:
         meta = item.get("metadata")
         if meta is not None and hasattr(meta, "extras"):
-            dataset_types.append(meta.extras.get("dataset_type", "unknown"))
+            extras = meta.extras
+            dataset_types.append(extras.get("dataset_type", "unknown"))
+            environments.append(extras.get("environment", "unknown"))
+            tasks.append(extras.get("task", "unknown"))
+            languages.append(extras.get("language", ""))
         else:
             dataset_types.append("unknown")
+            environments.append("unknown")
+            tasks.append("unknown")
+            languages.append("")
     
     return {
         "frames": torch.stack([item["frames"] for item in batch]),
@@ -275,6 +289,9 @@ def metadata_collate_fn(batch: List[Dict]) -> Dict:
         "first_frame_idx": torch.tensor([item["first_frame_idx"] for item in batch]),
         "second_frame_idx": torch.tensor([item["second_frame_idx"] for item in batch]),
         "dataset_type": dataset_types,
+        "environment": environments,
+        "task": tasks,
+        "language": languages,
     }
 
 
@@ -1119,14 +1136,55 @@ class LAQDataModule(pl.LightningDataModule):
     def _split_scenes_by_ratio(
         self, scenes: List[SceneMetadata]
     ) -> tuple[List[SceneMetadata], List[SceneMetadata]]:
-        """Split scenes into train/val based on ratio."""
-        total = len(scenes)
-        val_size = int(total * self.val_split)
-        train_size = total - val_size
-
-        train_scenes = scenes[:train_size]
-        val_scenes = scenes[train_size:]
-
+        """
+        Split scenes into train/val with stratification by dataset_type.
+        
+        This ensures both train and val have proportional representation
+        from each dataset type (youtube, bridge, etc.).
+        """
+        import random
+        
+        # Group scenes by dataset_type
+        by_dataset: Dict[str, List[SceneMetadata]] = {}
+        for scene in scenes:
+            dtype = scene.extras.get("dataset_type", "unknown")
+            if dtype not in by_dataset:
+                by_dataset[dtype] = []
+            by_dataset[dtype].append(scene)
+        
+        train_scenes = []
+        val_scenes = []
+        
+        # Stratified split: take val_split proportion from each dataset type
+        for dtype, dtype_scenes in by_dataset.items():
+            # Shuffle within each dataset type for randomness
+            shuffled = dtype_scenes.copy()
+            random.Random(42).shuffle(shuffled)  # Deterministic shuffle
+            
+            val_size = int(len(shuffled) * self.val_split)
+            val_size = max(1, val_size)  # At least 1 val sample per dataset
+            
+            train_scenes.extend(shuffled[:-val_size] if val_size > 0 else shuffled)
+            val_scenes.extend(shuffled[-val_size:] if val_size > 0 else [])
+        
+        # Shuffle final lists to interleave dataset types
+        random.Random(42).shuffle(train_scenes)
+        random.Random(42).shuffle(val_scenes)
+        
+        # Log distribution
+        train_by_type = {}
+        val_by_type = {}
+        for s in train_scenes:
+            dt = s.extras.get("dataset_type", "unknown")
+            train_by_type[dt] = train_by_type.get(dt, 0) + 1
+        for s in val_scenes:
+            dt = s.extras.get("dataset_type", "unknown")
+            val_by_type[dt] = val_by_type.get(dt, 0) + 1
+        
+        print(f"✓ Stratified split: {len(train_scenes)} train, {len(val_scenes)} val scenes")
+        print(f"  Train by dataset: {train_by_type}")
+        print(f"  Val by dataset: {val_by_type}")
+        
         return train_scenes, val_scenes
 
     def _build_validation_buckets(self, scenes: List[SceneMetadata]) -> Dict[str, List[SceneMetadata]]:

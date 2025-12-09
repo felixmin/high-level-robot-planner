@@ -153,11 +153,13 @@ def main(cfg: DictConfig):
         
         val_strategy_callback = ValidationStrategyCallback(
             strategies=strategies,
-            num_fixed_samples=val_config.get("num_fixed_samples", 4),
-            num_random_samples=val_config.get("num_random_samples", 4),
+            num_fixed_samples=val_config.get("num_fixed_samples", 8),
+            num_random_samples=val_config.get("num_random_samples", 8),
+            max_cached_samples=val_config.get("max_cached_samples", 256),
         )
         callbacks.append(val_strategy_callback)
         print(f"✓ Validation strategy callback added ({len(strategies)} strategies)")
+        print(f"  - Max cached samples: {val_config.get('max_cached_samples', 256)}")
         for strategy in strategies:
             print(f"  - {strategy.name}: every {strategy.every_n_validations} validations")
     else:
@@ -239,6 +241,8 @@ def main(cfg: DictConfig):
 
     # Get validation check interval from config
     val_check_interval = training_config.validation.get("check_interval", 1.0)
+    # Limit validation batches to save time (default: run all, set to fraction or int)
+    limit_val_batches = training_config.validation.get("limit_batches", 1.0)
 
     trainer = pl.Trainer(
         max_epochs=training_config.epochs,
@@ -254,6 +258,7 @@ def main(cfg: DictConfig):
         profiler=profiler,
         log_every_n_steps=10,
         val_check_interval=val_check_interval,  # Configurable validation frequency
+        limit_val_batches=limit_val_batches,  # Limit validation batches
         enable_progress_bar=True,
         enable_model_summary=True,
     )
@@ -261,6 +266,7 @@ def main(cfg: DictConfig):
     print(f"✓ Trainer initialized")
     print(f"  - Max epochs: {training_config.epochs}")
     print(f"  - Val check interval: {val_check_interval}")
+    print(f"  - Limit val batches: {limit_val_batches}")
     print(f"  - Precision: {cfg.get('precision', '32-true')}")
     print(f"  - Accelerator: auto")
     print(f"  - Devices: auto")
