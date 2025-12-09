@@ -84,7 +84,7 @@ Uses **Hydra** (1.3+) for composable, modular configuration. Experiments compose
 # config/experiment/laq_debug.yaml
 defaults:
   - /model@model: laq
-  - /data@data: debug_frames
+  - /data@data: laq_multi_dataset
   - /training@training: laq_optimizer
   - /cluster@cluster: local_dev
 ```
@@ -165,30 +165,22 @@ Before running full training:
 2. Verify setup: `python scripts/0_setup_environment.py`
 3. Check configuration: `python scripts/2_train_laq.py experiment=laq_debug --help`
 
-### Data Loading Modes (LAQ Training)
+### Data Loading (LAQ Training)
 
-**Scene-Level** (`data=laq_scenes`) - Recommended for full dataset:
-- Samples frame pairs on-the-fly each epoch
-- Memory efficient, diverse sampling
-```bash
-python scripts/2_train_laq.py experiment=laq_normal data=laq_scenes
-```
+LAQ training uses multi-dataset loading with adapters. Configure datasets via the `sources` list:
 
-**Pair-Level** (`data=laq_pairs`) - Deterministic training:
-- Pre-computes all valid frame pairs upfront
-- Supports multiple offsets: `offsets=[15, 30, 60]`
 ```bash
-python scripts/2_train_laq.py experiment=laq_normal data=laq_pairs
-```
-
-**Debug Mode** (`data=debug_frames`) - Quick iteration:
-- Small random subset (`max_samples=10`)
-- Fast for testing code changes
-```bash
+# Debug mode - small subset for quick iteration
 python scripts/2_train_laq.py experiment=laq_debug
+
+# Normal training - full dataset
+python scripts/2_train_laq.py experiment=laq_normal
 ```
 
-**See:** `docs/normal_training_guide.md` for detailed examples
+Key parameters:
+- `max_samples`: Limit dataset size for debugging (e.g., `max_samples=20`)
+- `offsets`: Frame offsets for pair generation (e.g., `offsets=[15, 30, 60]`)
+- `val_split`: Train/val split ratio (default 0.1)
 
 ### Multi-Dataset Training
 
@@ -307,7 +299,7 @@ Key features:
 - **LAQ Training** (Stage 1): Implement in `scripts/2_train_laq.py`. Use PyTorch Lightning for standard supervised learning with DDP.
 - **Foundation Training** (Stage 2): Implement in `scripts/4_train_foundation.py`. Use Lightning Fabric for FSDP multi-node training with fine training loop control.
 - **Data Loading**:
-  - Stage 1 (LAQ): Supports both scene-level and pair-level modes via `LAQDataModule`. Use pair-level for overfitting and debugging.
+  - Stage 1 (LAQ): Uses `LAQDataModule` with multi-source adapters. Pre-computes frame pairs for deterministic training.
   - Stage 2/3: Implement WebDataset-based loaders in `packages/common/` for streaming TAR shards.
 - **Logging**: Use `packages/common/logging.py` for consistent logging across stages.
 - **Checkpointing**: Lightning handles checkpoint saving; configure paths via Hydra config.
