@@ -240,7 +240,7 @@ def main(cfg: DictConfig):
     print("=" * 80)
 
     # Get validation check interval from config
-    val_check_interval = training_config.validation.get("check_interval", 1.0)
+    val_check_interval = training_config.validation.get("check_interval", 10000)
     # Limit validation batches to save time (default: run all, set to fraction or int)
     limit_val_batches = training_config.validation.get("limit_batches", 1.0)
 

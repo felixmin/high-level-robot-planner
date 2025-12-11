@@ -40,8 +40,8 @@ loss_weights:
 
 # Validation settings
 validation:
-  # How often to run validation within an epoch (0.02 = 2% of epoch = ~50 validations)
-  check_interval: 0.02
+  # How often to run validation (can be float for percentage of epoch, or int for steps)
+  check_interval: 500
   
   # Limit validation batches to save time (0.1 = 10% of val set, or int for exact batches)
   # With 6300 val samples, 0.1 = ~630 samples = ~160 batches at batch_size 4
