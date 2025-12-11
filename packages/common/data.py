@@ -467,6 +467,7 @@ class LAQDataModule(pl.LightningDataModule):
         split_mode: str = "ratio",
         val_scene_filters: Optional[Dict[str, Any]] = None,
         val_buckets: Optional[Dict[str, Dict[str, Any]]] = None,
+        val_counts_per_dataset: Optional[Dict[str, int]] = None,
         # Legacy parameters (ignored but kept for config compatibility)
         folder: Optional[str] = None,
         offset: int = 30,
@@ -515,10 +516,12 @@ class LAQDataModule(pl.LightningDataModule):
         self.split_mode = split_mode
         self.val_scene_filters = val_scene_filters
         self.val_buckets = val_buckets
+        self.val_counts_per_dataset = val_counts_per_dataset
 
         self.train_dataset = None
         self.val_dataset = None
         self.val_bucket_datasets: Dict[str, Dataset] = {}
+        self.train_bucket_datasets: Dict[str, Dataset] = {}
         self.scenes: List[SceneMetadata] = []
 
     def _get_adapter(self, source_type: str):
@@ -564,6 +567,90 @@ class LAQDataModule(pl.LightningDataModule):
 
         print(f"✓ Total scenes: {len(all_scenes)}")
         return all_scenes
+
+    def _split_scenes_by_fixed_count(
+        self, scenes: List[SceneMetadata]
+    ) -> tuple[List[SceneMetadata], List[SceneMetadata]]:
+        """
+        Split scenes into train/val by targeting a fixed SAMPLE count from each dataset.
+
+        Accumulates scenes until reaching the target sample count per dataset.
+        This ensures balanced validation regardless of scene length variations
+        (important for long YouTube videos vs short Bridge trajectories).
+
+        Requires val_counts_per_dataset configuration.
+        Example: {'youtube': 1000, 'bridge': 1000} means ~1000 frame pairs from each
+        """
+        import random
+
+        if not self.val_counts_per_dataset:
+            raise ValueError("val_counts_per_dataset required when split_mode='fixed_count'")
+
+        # Get max offset for sample calculation
+        max_offset = max(self.offsets) if self.offsets else 30
+
+        def samples_per_scene(scene: SceneMetadata) -> int:
+            """Calculate number of frame pairs from a scene."""
+            return max(0, scene.num_frames - max_offset)
+
+        # Group scenes by dataset_type
+        by_dataset: Dict[str, List[SceneMetadata]] = {}
+        for scene in scenes:
+            dtype = scene.extras.get("dataset_type", "unknown")
+            if dtype not in by_dataset:
+                by_dataset[dtype] = []
+            by_dataset[dtype].append(scene)
+
+        train_scenes = []
+        val_scenes = []
+
+        # Accumulate scenes until reaching target sample count
+        for dtype, dtype_scenes in by_dataset.items():
+            target_samples = self.val_counts_per_dataset.get(dtype, 0)
+
+            if target_samples == 0:
+                # No val samples requested for this dataset
+                train_scenes.extend(dtype_scenes)
+                print(f"  - {dtype}: {len(dtype_scenes)} train, 0 val scenes (no val requested)")
+                continue
+
+            # Shuffle deterministically
+            shuffled = dtype_scenes.copy()
+            random.Random(42).shuffle(shuffled)
+
+            # Accumulate scenes until we reach target sample count
+            val_subset = []
+            val_sample_count = 0
+
+            for scene in shuffled:
+                scene_samples = samples_per_scene(scene)
+                if val_sample_count < target_samples:
+                    val_subset.append(scene)
+                    val_sample_count += scene_samples
+
+            # Rest go to train
+            val_set = set(id(s) for s in val_subset)
+            train_subset = [s for s in shuffled if id(s) not in val_set]
+
+            val_scenes.extend(val_subset)
+            train_scenes.extend(train_subset)
+
+            # Calculate train sample count for logging
+            train_sample_count = sum(samples_per_scene(s) for s in train_subset)
+
+            print(f"  - {dtype}: {len(train_subset)} train ({train_sample_count} samples), "
+                  f"{len(val_subset)} val ({val_sample_count} samples, target: {target_samples})")
+
+        # Shuffle final lists
+        random.Random(42).shuffle(train_scenes)
+        random.Random(42).shuffle(val_scenes)
+
+        total_train_samples = sum(samples_per_scene(s) for s in train_scenes)
+        total_val_samples = sum(samples_per_scene(s) for s in val_scenes)
+
+        print(f"✓ Fixed count split: {len(train_scenes)} train scenes ({total_train_samples} samples), "
+              f"{len(val_scenes)} val scenes ({total_val_samples} samples)")
+        return train_scenes, val_scenes
 
     def _split_scenes_by_metadata(
         self, scenes: List[SceneMetadata]
@@ -653,6 +740,20 @@ class LAQDataModule(pl.LightningDataModule):
 
         return buckets
 
+    def _build_training_buckets(self, scenes: List[SceneMetadata]) -> Dict[str, List[SceneMetadata]]:
+        """Build training buckets for visualization/analysis."""
+        if not self.val_buckets:
+            return {}
+
+        buckets = {}
+        for bucket_name, bucket_filters in self.val_buckets.items():
+            bucket_filter = SceneFilter(bucket_filters)
+            bucket_scenes = bucket_filter.filter_scenes(scenes)
+            buckets[bucket_name] = bucket_scenes
+            print(f"  - Train bucket '{bucket_name}': {len(bucket_scenes)} scenes")
+
+        return buckets
+
     def setup(self, stage: Optional[str] = None):
         """Setup train/val datasets."""
         all_scenes = self._collect_all_scenes()
@@ -661,14 +762,18 @@ class LAQDataModule(pl.LightningDataModule):
         # Split scenes into train/val
         if self.split_mode == "metadata":
             train_scenes, val_scenes = self._split_scenes_by_metadata(all_scenes)
+        elif self.split_mode == "fixed_count":
+            train_scenes, val_scenes = self._split_scenes_by_fixed_count(all_scenes)
         else:  # ratio
             train_scenes, val_scenes = self._split_scenes_by_ratio(all_scenes)
 
         # Build validation buckets for distribution shift analysis
         val_bucket_scenes = {}
+        train_bucket_scenes = {}
         if self.val_buckets:
-            print("Building validation buckets:")
+            print("Building buckets:")
             val_bucket_scenes = self._build_validation_buckets(val_scenes)
+            train_bucket_scenes = self._build_training_buckets(train_scenes)
 
         # Create datasets from scene lists
         full_train = MultiSourcePairDataset(
@@ -689,6 +794,15 @@ class LAQDataModule(pl.LightningDataModule):
         # Create bucket datasets
         for bucket_name, bucket_scenes in val_bucket_scenes.items():
             self.val_bucket_datasets[bucket_name] = MultiSourcePairDataset(
+                scenes=bucket_scenes,
+                sources=self.sources,
+                image_size=self.image_size,
+                offsets=self.offsets,
+                return_metadata=self.return_metadata,
+            )
+            
+        for bucket_name, bucket_scenes in train_bucket_scenes.items():
+            self.train_bucket_datasets[bucket_name] = MultiSourcePairDataset(
                 scenes=bucket_scenes,
                 sources=self.sources,
                 image_size=self.image_size,
@@ -745,6 +859,22 @@ class LAQDataModule(pl.LightningDataModule):
             collate_fn=collate_fn,
         )
 
+    def train_bucket_dataloader(self, bucket_name: str):
+        """Create dataloader for a specific training bucket."""
+        if bucket_name not in self.train_bucket_datasets:
+            raise ValueError(f"Unknown training bucket: {bucket_name}")
+
+        collate_fn = metadata_collate_fn if self.return_metadata else None
+        return DataLoader(
+            self.train_bucket_datasets[bucket_name],
+            batch_size=self.batch_size,
+            shuffle=True,  # Shuffle training buckets
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+            prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
+            collate_fn=collate_fn,
+        )
+
     def val_bucket_dataloader(self, bucket_name: str):
         """Create dataloader for a specific validation bucket."""
         if bucket_name not in self.val_bucket_datasets:
@@ -760,3 +890,36 @@ class LAQDataModule(pl.LightningDataModule):
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
             collate_fn=collate_fn,
         )
+
+    def get_samples_per_dataset(self) -> Dict[str, Dict[str, int]]:
+        """Get sample counts per dataset type for both train and val."""
+        result = {"train": {}, "val": {}}
+
+        def count_samples(dataset) -> Dict[str, int]:
+            """Count samples per dataset type, handling Subsets."""
+            counts = {}
+            if dataset is None:
+                return counts
+
+            # Handle Subset wrapper
+            if hasattr(dataset, 'dataset') and hasattr(dataset, 'indices'):
+                # It's a Subset - count only the subset indices
+                base_ds = dataset.dataset
+                if hasattr(base_ds, 'pairs') and hasattr(base_ds, 'scenes'):
+                    for idx in dataset.indices:
+                        pair = base_ds.pairs[idx]
+                        scene = base_ds.scenes[pair.scene_idx]
+                        dtype = scene.extras.get("dataset_type", "unknown")
+                        counts[dtype] = counts.get(dtype, 0) + 1
+            elif hasattr(dataset, 'pairs') and hasattr(dataset, 'scenes'):
+                # Full dataset (MultiSourcePairDataset)
+                for pair in dataset.pairs:
+                    scene = dataset.scenes[pair.scene_idx]
+                    dtype = scene.extras.get("dataset_type", "unknown")
+                    counts[dtype] = counts.get(dtype, 0) + 1
+
+            return counts
+
+        result["train"] = count_samples(self.train_dataset)
+        result["val"] = count_samples(self.val_dataset)
+        return result

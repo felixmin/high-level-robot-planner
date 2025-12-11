@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler
 import lightning.pytorch as pl
@@ -298,14 +299,17 @@ class LAQTask(pl.LightningModule):
 
         Returns:
             (latent_actions, codebook_indices)
+            latent_actions: [B, code_seq_len, dim] projected to transformer dim
         """
         self.eval()
         with torch.no_grad():
             batch = batch.to(self.device)
-            # Get codebook indices
+            # Get codebook indices [B, code_seq_len]
             indices = self.model(batch, return_only_codebook_ids=True)
-            # Get quantized latents from indices
-            latents = self.model.vq.codebooks[indices]
+            # Get raw codebook vectors [B, code_seq_len, quant_dim]
+            raw_latents = self.model.vq.codebooks[indices]
+            # Project from quant_dim to transformer dim [B, code_seq_len, dim]
+            latents = self.model.vq.project_out(raw_latents)
         self.train()
         return latents, indices
 

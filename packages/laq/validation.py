@@ -379,7 +379,8 @@ class BasicVisualizationStrategy(ValidationStrategy):
         # Log cache distribution for debugging
         distribution = cache.get_dataset_distribution()
         if distribution:
-            print(f"  Validation cache distribution: {distribution}")
+            print(f"  Cached validation samples per datasource: {distribution}")
+            print(f"  Total cached validation samples: {sum(distribution.values())}")
 
         # === Fixed samples (diverse across datasets) ===
         if cache.fixed_frames is not None and len(cache.fixed_frames) > 0:
@@ -421,21 +422,57 @@ class BasicVisualizationStrategy(ValidationStrategy):
         wandb_logger,
         prefix: str = "val",
     ) -> None:
-        """Visualize samples grouped by buckets."""
+        """Visualize samples grouped by buckets using side dataloaders or cache."""
         if wandb_logger is None:
             return
+
+        # Check if DataModule supports side dataloaders
+        datamodule = getattr(trainer, "datamodule", None)
+        use_dataloaders = datamodule is not None
 
         # Use configured buckets or fall back to dataset_type-based buckets
         if self.val_buckets:
             # Use config-defined buckets
             for bucket_name, filters in self.val_buckets.items():
-                bucket_frames, _ = cache.get_frames_by_filter(
-                    filters, frames=all_frames, metadata=all_metadata
-                )
+                bucket_frames = None
+                
+                # Try to get data from side dataloader first (Targeted Evaluation)
+                if use_dataloaders:
+                    try:
+                        # Determine if we need train or val loader
+                        if prefix == "train" and hasattr(datamodule, "train_bucket_dataloader"):
+                            loader = datamodule.train_bucket_dataloader(bucket_name)
+                        elif prefix == "val" and hasattr(datamodule, "val_bucket_dataloader"):
+                            loader = datamodule.val_bucket_dataloader(bucket_name)
+                        else:
+                            loader = None
+                            
+                        if loader:
+                            # Fetch one batch
+                            batch = next(iter(loader))
+                            if isinstance(batch, dict):
+                                bucket_frames = batch["frames"]
+                            else:
+                                bucket_frames = batch
+                            # Move to device/cpu as needed (viz expects CPU usually)
+                            bucket_frames = bucket_frames[:self.samples_per_bucket].detach().cpu()
+                    except (ValueError, StopIteration):
+                        # Dataloader might not exist for this bucket or be empty
+                        pass
+
+                # Fallback to cache filtering if dataloader failed
+                if bucket_frames is None:
+                    bucket_frames, _ = cache.get_frames_by_filter(
+                        filters, frames=all_frames, metadata=all_metadata
+                    )
+
                 if bucket_frames is not None and len(bucket_frames) > 0:
-                    n_samples = min(self.samples_per_bucket, len(bucket_frames))
-                    indices = torch.randperm(len(bucket_frames))[:n_samples]
-                    samples = bucket_frames[indices]
+                    # Randomly sample if we have more than needed (and came from cache)
+                    if len(bucket_frames) > self.samples_per_bucket:
+                        indices = torch.randperm(len(bucket_frames))[:self.samples_per_bucket]
+                        samples = bucket_frames[indices]
+                    else:
+                        samples = bucket_frames
 
                     bucket_grid = self._create_recon_grid(samples, pl_module)
                     if bucket_grid is not None:
@@ -445,7 +482,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
                             caption=[f"Step {trainer.global_step} ({bucket_name})"],
                         )
         else:
-            # Fall back to auto-bucketing by dataset_type
+            # Fall back to auto-bucketing by dataset_type (Legacy/Default)
             dataset_types = set()
             for meta in all_metadata:
                 if isinstance(meta, dict) and "dataset_type" in meta:
@@ -623,17 +660,22 @@ class LatentTransferStrategy(ValidationStrategy):
             target_frames = target_frames.to(device)
             
             # Encode source pairs to get latent actions
-            source_latents = pl_module.model.encode(source_frames)  # z_a
+            # Use task helper which handles raw pixels -> quantized latents
+            source_latents, _ = pl_module.encode_latents(source_frames)  # z_a
             
             # Get target initial frames
             target_s0 = target_frames[:, :, 0:1]  # s_b (keep dim for concat)
             
             # Decode: apply source latent to target initial frame
-            # This requires model to support cross-decoding
-            transferred_recons = pl_module.model.decode(
+            # Use task helper which handles embedding and reshaping
+            transferred_recons = pl_module.decode_with_latents(
                 target_s0,
                 source_latents,
             )  # s_b'_pred
+            
+            # Remove time dim if present [B, C, 1, H, W] -> [B, C, H, W]
+            if transferred_recons.ndim == 5:
+                transferred_recons = transferred_recons.squeeze(2)
             
             # Get ground truth
             target_s1_true = target_frames[:, :, 1]  # s_b' (true)
