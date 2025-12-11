@@ -11,7 +11,7 @@ Quick reference to all documentation in this project.
 ## Training Guides
 
 - **[normal_training_guide.md](normal_training_guide.md)** - Quick reference for normal LAQ training
-  - Data loading modes (scene-level vs pair-level vs debug)
+  - Multi-dataset configuration and filtering
   - Common commands and configuration examples
   - Troubleshooting guide
 
@@ -24,11 +24,11 @@ Quick reference to all documentation in this project.
 - **[lrz_workflow.md](lrz_workflow.md)** - LRZ cluster workflow
   - Setup, job submission, monitoring on H100 cluster
 
-## Implementation Plans (Future Work)
+## Data Architecture
 
 - **[dataset_adapter_plan.md](dataset_adapter_plan.md)** - Multi-dataset adapter architecture
-  - Plan for unifying YouTube, BridgeV2, OpenX datasets
-  - Adapter pattern implementation details
+  - Unified adapter system for YouTube, BridgeV2 datasets
+  - Configuration examples and metadata fields
 
 - **[dataset_metadata.md](dataset_metadata.md)** - Dataset metadata reference
   - Metadata structure per dataset type

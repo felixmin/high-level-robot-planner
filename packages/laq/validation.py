@@ -44,41 +44,45 @@ class ValidationCache:
     latents: List[torch.Tensor] = field(default_factory=list)
     codes: List[torch.Tensor] = field(default_factory=list)
     losses: List[float] = field(default_factory=list)
-    
+
     # Metadata for each sample (dataset_type, scene_id, etc.)
     metadata: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     # Fixed samples for consistent visualization (set once, reused)
     fixed_frames: Optional[torch.Tensor] = None
     fixed_indices: Optional[List[int]] = None
     fixed_metadata: Optional[List[Dict[str, Any]]] = None
-    
+
+    # Training samples (cached separately)
+    train_frames: Optional[torch.Tensor] = None
+    train_metadata: Optional[List[Dict[str, Any]]] = None
+
     def clear(self):
-        """Clear all cached data (but keep fixed samples)."""
+        """Clear all cached data (but keep fixed samples and train samples)."""
         self.frames.clear()
         self.latents.clear()
         self.codes.clear()
         self.losses.clear()
         self.metadata.clear()
-    
+
     def get_all_frames(self) -> Optional[torch.Tensor]:
         """Concatenate all cached frames."""
         if not self.frames:
             return None
         return torch.cat(self.frames, dim=0)
-    
+
     def get_all_latents(self) -> Optional[torch.Tensor]:
         """Concatenate all cached latents."""
         if not self.latents:
             return None
         return torch.cat(self.latents, dim=0)
-    
+
     def get_all_codes(self) -> Optional[torch.Tensor]:
         """Concatenate all cached codes."""
         if not self.codes:
             return None
         return torch.cat(self.codes, dim=0)
-    
+
     def get_all_metadata(self) -> List[Dict[str, Any]]:
         """Flatten all metadata lists."""
         result = []
@@ -88,24 +92,99 @@ class ValidationCache:
             else:
                 result.append(meta_batch)
         return result
-    
-    def get_frames_by_dataset_type(self, dataset_type: str) -> Optional[torch.Tensor]:
-        """Get frames filtered by dataset type."""
-        all_frames = self.get_all_frames()
-        all_metadata = self.get_all_metadata()
-        
-        if all_frames is None or not all_metadata:
-            return None
-        
-        indices = [
-            i for i, meta in enumerate(all_metadata)
-            if meta.get("dataset_type") == dataset_type
-        ]
-        
+
+    def get_frames_by_filter(
+        self,
+        filters: Dict[str, Any],
+        frames: Optional[torch.Tensor] = None,
+        metadata: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[Optional[torch.Tensor], List[Dict[str, Any]]]:
+        """
+        Get frames and metadata matching filter criteria.
+
+        Args:
+            filters: Dict of {key: value} or {key: [values]} to match.
+                     Supports operators like ["!=", value] or [">", value].
+            frames: Optional frames to filter (uses cached if None)
+            metadata: Optional metadata to filter (uses cached if None)
+
+        Returns:
+            Tuple of (filtered_frames, filtered_metadata)
+        """
+        if frames is None:
+            frames = self.get_all_frames()
+        if metadata is None:
+            metadata = self.get_all_metadata()
+
+        if frames is None or not metadata:
+            return None, []
+
+        # Find matching indices
+        indices = []
+        for i, meta in enumerate(metadata):
+            if self._matches_filters(meta, filters):
+                indices.append(i)
+
         if not indices:
-            return None
-        
-        return all_frames[indices]
+            return None, []
+
+        filtered_frames = frames[indices]
+        filtered_metadata = [metadata[i] for i in indices]
+        return filtered_frames, filtered_metadata
+
+    def _matches_filters(self, meta: Dict[str, Any], filters: Dict[str, Any]) -> bool:
+        """Check if metadata matches all filter criteria."""
+        if not filters:
+            return True
+
+        for key, condition in filters.items():
+            value = meta.get(key)
+
+            # Handle operator-based conditions like ["!=", "static"] or [">", 10]
+            if isinstance(condition, (list, tuple)) and len(condition) == 2:
+                op, target = condition
+                if op == "!=":
+                    if value == target:
+                        return False
+                elif op == "==":
+                    if value != target:
+                        return False
+                elif op == ">":
+                    if value is None or value <= target:
+                        return False
+                elif op == "<":
+                    if value is None or value >= target:
+                        return False
+                elif op == "in":
+                    if value not in target:
+                        return False
+                elif op == "not_null":
+                    if value is None:
+                        return False
+            # Handle list of allowed values
+            elif isinstance(condition, (list, tuple)):
+                if value not in condition:
+                    return False
+            # Handle exact match
+            else:
+                if value != condition:
+                    return False
+
+        return True
+
+    def get_frames_by_dataset_type(self, dataset_type: str) -> Optional[torch.Tensor]:
+        """Get frames filtered by dataset type (convenience method)."""
+        frames, _ = self.get_frames_by_filter({"dataset_type": dataset_type})
+        return frames
+
+    def get_dataset_distribution(self) -> Dict[str, int]:
+        """Get count of samples per dataset type."""
+        all_metadata = self.get_all_metadata()
+        distribution: Dict[str, int] = {}
+        for meta in all_metadata:
+            dtype = meta.get("dataset_type", "unknown")
+            distribution[dtype] = distribution.get(dtype, 0) + 1
+        return distribution
 
 
 class ValidationStrategy(ABC):
@@ -168,22 +247,37 @@ class ValidationStrategy(ABC):
 class BasicVisualizationStrategy(ValidationStrategy):
     """
     Basic reconstruction visualization.
-    
+
     Shows:
     - Fixed samples: diverse samples across datasets, same every validation
     - Random samples: different samples each time (diversity check)
-    - Per-bucket samples: separate grids for each dataset type
+    - Per-bucket samples: separate grids for each bucket (configurable filters)
+    - Training samples: reconstructions from training data
+
+    Buckets can be configured via val_buckets parameter:
+    ```yaml
+    val_buckets:
+      youtube:
+        dataset_type: "youtube"
+      bridge_toykitchen:
+        dataset_type: "bridge"
+        environment: "toykitchen1"
+      with_language:
+        language: ["not_null", true]
+    ```
     """
-    
+
     def __init__(
         self,
         enabled: bool = True,
         num_fixed_samples: int = 8,
         num_random_samples: int = 8,
+        num_train_samples: int = 8,
         visualize_train: bool = True,
         visualize_val: bool = True,
         visualize_per_bucket: bool = True,
         samples_per_bucket: int = 4,
+        val_buckets: Optional[Dict[str, Dict[str, Any]]] = None,
         **kwargs,
     ):
         super().__init__(
@@ -193,34 +287,100 @@ class BasicVisualizationStrategy(ValidationStrategy):
         )
         self.num_fixed_samples = num_fixed_samples
         self.num_random_samples = num_random_samples
+        self.num_train_samples = num_train_samples
         self.visualize_train = visualize_train
         self.visualize_val = visualize_val
         self.visualize_per_bucket = visualize_per_bucket
         self.samples_per_bucket = samples_per_bucket
-    
+        # Default buckets: one per dataset_type if not specified
+        self.val_buckets = val_buckets
+
     def needs_caching(self) -> bool:
         return True  # Need frames for visualization
-    
+
     def run(
         self,
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
     ) -> Dict[str, Any]:
-        """Generate reconstruction visualizations."""
+        """Generate reconstruction visualizations for both train and val."""
         metrics = {}
-        
-        if not self.visualize_val:
-            return metrics
-        
+        wandb_logger = self._get_wandb_logger(trainer)
+
+        # === Training samples visualization ===
+        if self.visualize_train:
+            self._visualize_training_samples(cache, pl_module, trainer, wandb_logger)
+
+        # === Validation samples visualization ===
+        if self.visualize_val:
+            self._visualize_validation_samples(cache, pl_module, trainer, wandb_logger)
+
+        return metrics
+
+    def _visualize_training_samples(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+        wandb_logger,
+    ) -> None:
+        """Visualize training samples by sampling from train dataloader."""
+        if wandb_logger is None:
+            return
+
+        # Get train samples - either from cache or by sampling from dataloader
+        train_frames = cache.train_frames
+        train_metadata = cache.train_metadata
+
+        if train_frames is None or len(train_frames) == 0:
+            # Sample fresh from train dataloader
+            train_frames, train_metadata = self._sample_from_train_dataloader(
+                trainer, self.num_train_samples
+            )
+            if train_frames is not None:
+                # Cache for bucket visualization
+                cache.train_frames = train_frames
+                cache.train_metadata = train_metadata
+
+        if train_frames is None or len(train_frames) == 0:
+            return
+
+        # Create and log training reconstruction grid
+        train_grid = self._create_recon_grid(train_frames, pl_module)
+        if train_grid is not None:
+            wandb_logger.log_image(
+                key="train/reconstructions",
+                images=[train_grid],
+                caption=[f"Step {trainer.global_step} (training samples)"],
+            )
+
+        # === Per-bucket training visualization ===
+        if self.visualize_per_bucket and train_metadata:
+            self._visualize_buckets(
+                train_frames, train_metadata, cache, pl_module, trainer,
+                wandb_logger, prefix="train"
+            )
+
+    def _visualize_validation_samples(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+        wandb_logger,
+    ) -> None:
+        """Visualize validation samples from cache."""
         all_frames = cache.get_all_frames()
         all_metadata = cache.get_all_metadata()
-        
+
         if all_frames is None or len(all_frames) == 0:
-            return metrics
-        
-        wandb_logger = self._get_wandb_logger(trainer)
-        
+            return
+
+        # Log cache distribution for debugging
+        distribution = cache.get_dataset_distribution()
+        if distribution:
+            print(f"  Validation cache distribution: {distribution}")
+
         # === Fixed samples (diverse across datasets) ===
         if cache.fixed_frames is not None and len(cache.fixed_frames) > 0:
             fixed_grid = self._create_recon_grid(cache.fixed_frames, pl_module)
@@ -230,46 +390,141 @@ class BasicVisualizationStrategy(ValidationStrategy):
                     images=[fixed_grid],
                     caption=[f"Step {trainer.global_step} (fixed diverse samples)"],
                 )
-        
+
         # === Random samples (different each time) ===
         n_random = min(self.num_random_samples, len(all_frames))
-        if n_random > 0:
+        if n_random > 0 and wandb_logger:
             random_indices = torch.randperm(len(all_frames))[:n_random]
             random_frames = all_frames[random_indices]
             random_grid = self._create_recon_grid(random_frames, pl_module)
-            if wandb_logger and random_grid is not None:
+            if random_grid is not None:
                 wandb_logger.log_image(
                     key="val/random_reconstructions",
                     images=[random_grid],
                     caption=[f"Step {trainer.global_step} (random samples)"],
                 )
-        
+
         # === Per-bucket visualization ===
         if self.visualize_per_bucket and all_metadata:
-            # Get unique dataset types
-            dataset_types = set()
-            for meta in all_metadata:
-                if isinstance(meta, dict) and "dataset_type" in meta:
-                    dataset_types.add(meta["dataset_type"])
-            
-            for dtype in dataset_types:
-                bucket_frames = cache.get_frames_by_dataset_type(dtype)
+            self._visualize_buckets(
+                all_frames, all_metadata, cache, pl_module, trainer,
+                wandb_logger, prefix="val"
+            )
+
+    def _visualize_buckets(
+        self,
+        all_frames: torch.Tensor,
+        all_metadata: List[Dict[str, Any]],
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+        wandb_logger,
+        prefix: str = "val",
+    ) -> None:
+        """Visualize samples grouped by buckets."""
+        if wandb_logger is None:
+            return
+
+        # Use configured buckets or fall back to dataset_type-based buckets
+        if self.val_buckets:
+            # Use config-defined buckets
+            for bucket_name, filters in self.val_buckets.items():
+                bucket_frames, _ = cache.get_frames_by_filter(
+                    filters, frames=all_frames, metadata=all_metadata
+                )
                 if bucket_frames is not None and len(bucket_frames) > 0:
-                    # Sample from this bucket
                     n_samples = min(self.samples_per_bucket, len(bucket_frames))
                     indices = torch.randperm(len(bucket_frames))[:n_samples]
                     samples = bucket_frames[indices]
-                    
+
                     bucket_grid = self._create_recon_grid(samples, pl_module)
-                    if wandb_logger and bucket_grid is not None:
+                    if bucket_grid is not None:
                         wandb_logger.log_image(
-                            key=f"val/reconstructions_{dtype}",
+                            key=f"{prefix}/reconstructions_{bucket_name}",
                             images=[bucket_grid],
-                            caption=[f"Step {trainer.global_step} ({dtype} samples)"],
+                            caption=[f"Step {trainer.global_step} ({bucket_name})"],
                         )
-        
-        return metrics
-    
+        else:
+            # Fall back to auto-bucketing by dataset_type
+            dataset_types = set()
+            for meta in all_metadata:
+                if isinstance(meta, dict) and "dataset_type" in meta:
+                    dtype = meta.get("dataset_type")
+                    if dtype:
+                        dataset_types.add(dtype)
+
+            for dtype in dataset_types:
+                bucket_frames, _ = cache.get_frames_by_filter(
+                    {"dataset_type": dtype}, frames=all_frames, metadata=all_metadata
+                )
+                if bucket_frames is not None and len(bucket_frames) > 0:
+                    n_samples = min(self.samples_per_bucket, len(bucket_frames))
+                    indices = torch.randperm(len(bucket_frames))[:n_samples]
+                    samples = bucket_frames[indices]
+
+                    bucket_grid = self._create_recon_grid(samples, pl_module)
+                    if bucket_grid is not None:
+                        wandb_logger.log_image(
+                            key=f"{prefix}/reconstructions_{dtype}",
+                            images=[bucket_grid],
+                            caption=[f"Step {trainer.global_step} ({dtype})"],
+                        )
+
+    def _sample_from_train_dataloader(
+        self,
+        trainer: pl.Trainer,
+        num_samples: int,
+    ) -> Tuple[Optional[torch.Tensor], Optional[List[Dict[str, Any]]]]:
+        """Sample frames from training dataloader."""
+        try:
+            train_dataloader = trainer.train_dataloader
+            if train_dataloader is None:
+                return None, None
+
+            # Get a batch from train dataloader
+            frames_list = []
+            metadata_list = []
+            samples_collected = 0
+
+            for batch in train_dataloader:
+                if isinstance(batch, dict):
+                    frames = batch["frames"]
+                    # Extract metadata for each sample
+                    batch_size = frames.shape[0]
+                    for i in range(batch_size):
+                        meta = {}
+                        for key in batch.keys():
+                            if key == "frames":
+                                continue
+                            val = batch[key]
+                            if isinstance(val, (list, tuple)) and i < len(val):
+                                meta[key] = val[i]
+                            elif isinstance(val, torch.Tensor) and val.ndim > 0 and i < len(val):
+                                meta[key] = val[i].item() if val[i].ndim == 0 else val[i]
+                        metadata_list.append(meta)
+                else:
+                    frames = batch
+                    batch_size = frames.shape[0]
+                    metadata_list.extend([{} for _ in range(batch_size)])
+
+                frames_list.append(frames.detach().cpu())
+                samples_collected += frames.shape[0]
+
+                if samples_collected >= num_samples:
+                    break
+
+            if not frames_list:
+                return None, None
+
+            all_frames = torch.cat(frames_list, dim=0)[:num_samples]
+            all_metadata = metadata_list[:num_samples]
+
+            return all_frames, all_metadata
+
+        except Exception as e:
+            print(f"Warning: Could not sample from train dataloader: {e}")
+            return None, None
+
     def _get_wandb_logger(self, trainer: pl.Trainer):
         """Get WandB logger from trainer."""
         if not WANDB_AVAILABLE:
@@ -278,7 +533,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
             if isinstance(logger, pl.loggers.WandbLogger):
                 return logger
         return None
-    
+
     def _create_recon_grid(
         self,
         frames: torch.Tensor,
@@ -287,7 +542,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
         """Create reconstruction grid."""
         if len(frames) == 0:
             return None
-        
+
         # Generate reconstructions
         pl_module.eval()
         with torch.no_grad():
@@ -296,17 +551,17 @@ class BasicVisualizationStrategy(ValidationStrategy):
                 return_recons_only=True,
             )
         pl_module.train()
-        
+
         # Create grid: [frame_t, frame_t+offset, reconstruction]
         frame_t = frames[:, :, 0].cpu()
         frame_t_plus = frames[:, :, 1].cpu()
         recons = recons.cpu()
-        
+
         # Stack and rearrange
         imgs = torch.stack([frame_t, frame_t_plus, recons], dim=0)
         imgs = rearrange(imgs, 'r b c h w -> (b r) c h w')
         imgs = imgs.clamp(0.0, 1.0)
-        
+
         return make_grid(imgs, nrow=3, normalize=False)
 
 
@@ -593,39 +848,54 @@ class ClusteringStrategy(ValidationStrategy):
             )
 
 
-def create_validation_strategies(config: Dict[str, Any]) -> List[ValidationStrategy]:
+def create_validation_strategies(
+    config: Dict[str, Any],
+    val_buckets: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[ValidationStrategy]:
     """
     Create validation strategies from config.
-    
+
     Args:
         config: validation.strategies config dict
-        
+        val_buckets: Optional dict of bucket definitions for visualization
+            Example:
+            {
+                "youtube": {"dataset_type": "youtube"},
+                "bridge_toykitchen": {"dataset_type": "bridge", "environment": "toykitchen1"},
+                "with_language": {"language": ["not_null", true]},
+            }
+
     Returns:
         List of ValidationStrategy instances
     """
     strategies = []
-    
+
     if not config:
         return strategies
-    
+
     # Basic visualization (always-on by default)
     if config.get("basic", {}).get("enabled", True):
+        # Convert OmegaConf to plain dict to allow adding keys
+        basic_config = dict(config.get("basic", {}))
+        # Add val_buckets if specified
+        if val_buckets:
+            basic_config["val_buckets"] = val_buckets
         strategies.append(BasicVisualizationStrategy(
-            **config.get("basic", {}),
+            **basic_config,
             num_fixed_samples=config.get("num_fixed_samples", 4),
             num_random_samples=config.get("num_random_samples", 4),
         ))
-    
+
     # Latent transfer analysis
     if config.get("latent_transfer", {}).get("enabled", False):
         strategies.append(LatentTransferStrategy(
             **config.get("latent_transfer", {}),
         ))
-    
+
     # Clustering analysis
     if config.get("clustering", {}).get("enabled", False):
         strategies.append(ClusteringStrategy(
             **config.get("clustering", {}),
         ))
-    
+
     return strategies

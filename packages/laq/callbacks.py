@@ -2,8 +2,8 @@
 PyTorch Lightning callbacks for LAQ training.
 
 Includes:
-- ReconstructionVisualizationCallback: Logs reconstruction grids to WandB (legacy)
 - ValidationStrategyCallback: Flexible validation with multiple strategies
+- EMACallback: Exponential moving average of model weights
 """
 
 from typing import Optional, List, Dict, Any, Tuple
@@ -136,60 +136,142 @@ class ValidationStrategyCallback(Callback):
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
-        """Cache validation data if any strategy needs it (limited samples)."""
+        """Cache validation data with stratified sampling across datasets."""
         # Stop caching if we have enough samples
         if self._cached_sample_count >= self.max_cached_samples:
             return
-        
+
         # Extract frames and metadata from batch
         if isinstance(batch, dict):
             frames = batch["frames"]
-            # Extract per-sample metadata
+            # Extract ALL per-sample metadata dynamically (not just 4 hardcoded keys)
             batch_metadata = []
             batch_size = frames.shape[0]
             for i in range(batch_size):
                 meta = {}
-                for key in ["dataset_type", "scene_id", "video_id", "environment"]:
-                    if key in batch:
-                        val = batch[key]
-                        if isinstance(val, (list, tuple)):
-                            meta[key] = val[i] if i < len(val) else None
-                        elif isinstance(val, torch.Tensor):
-                            meta[key] = val[i].item() if val.ndim > 0 else val.item()
-                        else:
-                            meta[key] = val
+                for key in batch.keys():
+                    if key == "frames":
+                        continue
+                    val = batch[key]
+                    if isinstance(val, (list, tuple)):
+                        meta[key] = val[i] if i < len(val) else None
+                    elif isinstance(val, torch.Tensor):
+                        if val.ndim > 0 and i < len(val):
+                            # Scalar tensor element
+                            meta[key] = val[i].item() if val[i].ndim == 0 else val[i].tolist()
+                        elif val.ndim == 0:
+                            meta[key] = val.item()
+                    else:
+                        meta[key] = val
                 batch_metadata.append(meta)
         else:
             frames = batch
             batch_metadata = [{} for _ in range(frames.shape[0])]
-        
-        # Limit how many samples we cache from this batch
+
+        # Implement stratified caching: ensure proportional representation
+        # Group samples by dataset_type to cache proportionally
         remaining_capacity = self.max_cached_samples - self._cached_sample_count
         if remaining_capacity <= 0:
             return
-        
+
         samples_to_cache = min(frames.shape[0], remaining_capacity)
-        frames = frames[:samples_to_cache].detach().cpu()
-        batch_metadata = batch_metadata[:samples_to_cache]
-        
+
+        # Check current cache distribution
+        current_distribution = {}
+        all_meta = self.cache.get_all_metadata()
+        for m in all_meta:
+            dtype = m.get("dataset_type", "unknown")
+            current_distribution[dtype] = current_distribution.get(dtype, 0) + 1
+
+        # Check batch distribution
+        batch_distribution = {}
+        for m in batch_metadata:
+            dtype = m.get("dataset_type", "unknown")
+            batch_distribution[dtype] = batch_distribution.get(dtype, 0) + 1
+
+        # If we have multiple dataset types, try to balance
+        if len(batch_distribution) > 1 or len(current_distribution) > 1:
+            # Use stratified sampling: prioritize underrepresented datasets
+            selected_indices = self._stratified_sample_indices(
+                batch_metadata, current_distribution, samples_to_cache
+            )
+        else:
+            # Simple case: just take first N samples
+            selected_indices = list(range(samples_to_cache))
+
+        # Extract selected samples
+        frames = frames[selected_indices].detach().cpu()
+        batch_metadata = [batch_metadata[i] for i in selected_indices]
+
         # Cache frames and metadata
         self.cache.frames.append(frames)
         self.cache.metadata.append(batch_metadata)
-        self._cached_sample_count += samples_to_cache
-        
+        self._cached_sample_count += len(selected_indices)
+
         # Cache latents and codes if heavy strategies are running
         if self._any_heavy_strategy_running():
             with torch.no_grad():
                 device = pl_module.device
                 frames_gpu = frames.to(device)
-                
+
                 # Get codebook indices
                 indices = pl_module.model(frames_gpu, return_only_codebook_ids=True)
                 self.cache.codes.append(indices.cpu())
-                
+
                 # Get quantized latents
                 latents = pl_module.model.vq.codebooks[indices]
                 self.cache.latents.append(latents.cpu())
+
+    def _stratified_sample_indices(
+        self,
+        batch_metadata: List[Dict[str, Any]],
+        current_distribution: Dict[str, int],
+        num_samples: int,
+    ) -> List[int]:
+        """Select indices to balance dataset representation in cache."""
+        # Group batch indices by dataset_type
+        by_dataset: Dict[str, List[int]] = {}
+        for i, meta in enumerate(batch_metadata):
+            dtype = meta.get("dataset_type", "unknown")
+            if dtype not in by_dataset:
+                by_dataset[dtype] = []
+            by_dataset[dtype].append(i)
+
+        # Calculate how many samples we want from each dataset
+        # Prioritize datasets that are underrepresented in current cache
+        total_current = sum(current_distribution.values()) if current_distribution else 0
+
+        selected_indices = []
+        datasets = list(by_dataset.keys())
+
+        if total_current == 0:
+            # No samples yet - sample equally from each dataset type
+            samples_per_dataset = max(1, num_samples // len(datasets))
+            for dtype in datasets:
+                indices = by_dataset[dtype]
+                n = min(samples_per_dataset, len(indices))
+                selected_indices.extend(indices[:n])
+        else:
+            # Prioritize underrepresented datasets
+            # Target equal representation
+            target_per_dataset = (total_current + num_samples) // max(len(datasets), len(current_distribution))
+
+            for dtype in datasets:
+                current_count = current_distribution.get(dtype, 0)
+                needed = max(0, target_per_dataset - current_count)
+                available = by_dataset[dtype]
+                n = min(needed, len(available), num_samples - len(selected_indices))
+                if n > 0:
+                    selected_indices.extend(available[:n])
+
+        # If we still need more samples, add randomly
+        remaining = num_samples - len(selected_indices)
+        if remaining > 0:
+            all_indices = set(range(len(batch_metadata)))
+            unused = list(all_indices - set(selected_indices))
+            selected_indices.extend(unused[:remaining])
+
+        return selected_indices[:num_samples]
     
     def on_validation_epoch_end(
         self,
@@ -227,150 +309,6 @@ class ValidationStrategyCallback(Callback):
                     metrics = strategy.run(self.cache, pl_module, trainer)
                 except Exception as e:
                     print(f"Warning: Strategy {strategy.name} failed: {e}")
-
-
-class ReconstructionVisualizationCallback(Callback):
-    """
-    Visualize LAQ reconstructions during training and/or validation.
-
-    Matches LAPA visualization style:
-    - Grid with 3 columns: [frame_t, frame_t+offset, reconstruction]
-    - Logs to WandB as image
-
-    Args:
-        num_samples: Number of samples to visualize (default: 8)
-        log_every_n_epochs: Visualization frequency (default: 1)
-        visualize_train: Whether to visualize training reconstructions (default: False)
-        visualize_val: Whether to visualize validation reconstructions (default: True)
-    """
-
-    def __init__(
-        self,
-        num_samples: int = 8,
-        log_every_n_epochs: int = 1,
-        visualize_train: bool = False,
-        visualize_val: bool = True,
-    ):
-        super().__init__()
-        self.num_samples = num_samples
-        self.log_every_n_epochs = log_every_n_epochs
-        self.visualize_train = visualize_train
-        self.visualize_val = visualize_val
-
-    def _get_wandb_logger(self, trainer: pl.Trainer):
-        """Get WandB logger from trainer if available."""
-        if not WANDB_AVAILABLE:
-            return None
-
-        for logger in trainer.loggers:
-            if isinstance(logger, pl.loggers.WandbLogger):
-                return logger
-        return None
-
-    def _visualize_reconstructions(
-        self,
-        trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-        batch_getter_method: str,
-        log_key: str,
-    ) -> None:
-        """
-        Common visualization logic for train and val.
-
-        Args:
-            trainer: Lightning trainer
-            pl_module: Lightning module
-            batch_getter_method: Name of method to get batch ('get_validation_batch' or 'get_training_batch')
-            log_key: WandB key for logging ('val/reconstructions' or 'train/reconstructions')
-        """
-        # Check if we should visualize this epoch
-        if (trainer.current_epoch + 1) % self.log_every_n_epochs != 0:
-            return
-
-        # Get WandB logger
-        wandb_logger = self._get_wandb_logger(trainer)
-        if wandb_logger is None:
-            return
-
-        # Get batch from module
-        batch = getattr(pl_module, batch_getter_method)()
-        if batch is None:
-            return
-
-        # Limit to num_samples
-        batch = batch[:self.num_samples]
-
-        # Generate reconstructions
-        recons = pl_module.generate_reconstructions(batch)
-
-        # Create visualization grid
-        # Input: [B, C, 2, H, W] where 2 = [frame_t, frame_t+offset]
-        # Output: grid with 3 columns per sample [frame_t, frame_t+offset, recons]
-        frame_t = batch[:, :, 0]      # [B, C, H, W]
-        frame_t_plus = batch[:, :, 1]  # [B, C, H, W]
-        recons = recons.cpu()              # [B, C, H, W]
-
-        # Stack: [frame_t, frame_t+offset, recons]
-        imgs_and_recons = torch.stack([frame_t, frame_t_plus, recons], dim=0)  # [3, B, C, H, W]
-        imgs_and_recons = rearrange(imgs_and_recons, 'r b c h w -> (b r) c h w')  # [B*3, C, H, W]
-
-        # Clamp to valid range
-        imgs_and_recons = imgs_and_recons.clamp(0.0, 1.0)
-
-        # Create grid (3 columns per sample)
-        grid = make_grid(
-            imgs_and_recons,
-            nrow=3,
-            normalize=False,  # Already normalized
-            value_range=(0, 1),
-        )
-
-        # Log to WandB
-        wandb_logger.log_image(
-            key=log_key,
-            images=[grid],
-            caption=[f"Epoch {trainer.current_epoch}"],
-        )
-
-    def on_train_epoch_end(
-        self,
-        trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-    ) -> None:
-        """
-        Called at the end of training epoch.
-
-        Generates and logs training reconstruction visualizations.
-        """
-        if not self.visualize_train:
-            return
-
-        self._visualize_reconstructions(
-            trainer=trainer,
-            pl_module=pl_module,
-            batch_getter_method='get_training_batch',
-            log_key='train/reconstructions',
-        )
-
-    def on_validation_epoch_end(
-        self,
-        trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-    ) -> None:
-        """
-        Called at the end of validation epoch.
-
-        Generates and logs validation reconstruction visualizations.
-        """
-        if not self.visualize_val:
-            return
-
-        self._visualize_reconstructions(
-            trainer=trainer,
-            pl_module=pl_module,
-            batch_getter_method='get_validation_batch',
-            log_key='val/reconstructions',
-        )
 
 
 class EMACallback(Callback):

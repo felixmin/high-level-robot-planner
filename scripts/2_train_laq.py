@@ -30,7 +30,6 @@ from common.data import LAQDataModule
 from common.logging import set_seed, count_parameters
 from laq import (
     LAQTask,
-    ReconstructionVisualizationCallback,
     EMACallback,
     ValidationStrategyCallback,
     create_validation_strategies,
@@ -77,19 +76,11 @@ def main(cfg: DictConfig):
     # Setup to create datasets and get sizes
     datamodule.setup()
 
-    # Dataset mode
-    pair_level = cfg.data.get("pair_level", False)
-    mode_str = "pair-level" if pair_level else "scene-level"
-
-    # Handle both folder and sources mode in logging
-    if cfg.data.get("sources"):
-        source_info = [f"{s['type']}: {s['root']}" for s in cfg.data.sources]
-        print(f"✓ DataModule initialized ({mode_str}, multi-source)")
-        for s in source_info:
-            print(f"  - Source: {s}")
-    else:
-        print(f"✓ DataModule initialized ({mode_str})")
-        print(f"  - Folder: {cfg.data.folder}")
+    # Log dataset sources
+    source_info = [f"{s['type']}: {s['root']}" for s in cfg.data.sources]
+    print(f"✓ DataModule initialized (multi-source)")
+    for s in source_info:
+        print(f"  - Source: {s}")
     print(f"  - Image size: {cfg.data.image_size}")
     print(f"  - Batch size: {cfg.data.batch_size}")
     print(f"  - Total samples available: {datamodule.total_available}")
@@ -145,33 +136,24 @@ def main(cfg: DictConfig):
     # Setup validation strategies
     val_config = training_config.validation
     strategies_config = val_config.get("strategies", {})
-    
-    # Check if using new validation strategy system
-    if strategies_config:
-        # New validation system with configurable strategies
-        strategies = create_validation_strategies(strategies_config)
-        
-        val_strategy_callback = ValidationStrategyCallback(
-            strategies=strategies,
-            num_fixed_samples=val_config.get("num_fixed_samples", 8),
-            num_random_samples=val_config.get("num_random_samples", 8),
-            max_cached_samples=val_config.get("max_cached_samples", 256),
-        )
-        callbacks.append(val_strategy_callback)
-        print(f"✓ Validation strategy callback added ({len(strategies)} strategies)")
-        print(f"  - Max cached samples: {val_config.get('max_cached_samples', 256)}")
-        for strategy in strategies:
-            print(f"  - {strategy.name}: every {strategy.every_n_validations} validations")
-    else:
-        # Legacy visualization callback
-        viz_callback = ReconstructionVisualizationCallback(
-            num_samples=val_config.get("num_vis_samples", 8),
-            log_every_n_epochs=1,
-            visualize_train=strategies_config.get("basic", {}).get("visualize_train", True),
-            visualize_val=strategies_config.get("basic", {}).get("visualize_val", True),
-        )
-        callbacks.append(viz_callback)
-        print(f"✓ Reconstruction visualization callback added (legacy mode)")
+
+    val_buckets = val_config.get("val_buckets", None)
+    if val_buckets:
+        # Convert OmegaConf to dict if needed
+        val_buckets = OmegaConf.to_container(val_buckets, resolve=True)
+    strategies = create_validation_strategies(strategies_config, val_buckets=val_buckets)
+
+    val_strategy_callback = ValidationStrategyCallback(
+        strategies=strategies,
+        num_fixed_samples=val_config.get("num_fixed_samples", 8),
+        num_random_samples=val_config.get("num_random_samples", 8),
+        max_cached_samples=val_config.get("max_cached_samples", 256),
+    )
+    callbacks.append(val_strategy_callback)
+    print(f"✓ Validation strategy callback added ({len(strategies)} strategies)")
+    print(f"  - Max cached samples: {val_config.get('max_cached_samples', 256)}")
+    for strategy in strategies:
+        print(f"  - {strategy.name}: every {strategy.every_n_validations} validations")
 
     # Optional EMA
     if training_config.get("use_ema", False):

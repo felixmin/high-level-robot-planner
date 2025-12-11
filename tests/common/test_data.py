@@ -445,7 +445,7 @@ class TestLAQDataModuleWithMetadata:
 
 
 class TestLAQDataModulePairLevel:
-    """Test LAQDataModule pair-level mode."""
+    """Test LAQDataModule with multi-source datasets."""
 
     def test_pair_level_mode(self, sources):
         """Test LAQDataModule works correctly."""

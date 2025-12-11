@@ -486,7 +486,7 @@ class LAQDataModule(pl.LightningDataModule):
             filters: Global filter conditions applied after per-source filters
             return_metadata: If True, return dict with metadata
             min_frames: Minimum frames required per scene
-            offsets: List of frame offsets for pair-level mode (default [30])
+            offsets: List of frame offsets for pair generation (default [30])
             sampling_strategy: 'random' for diverse samples, 'sequential' for neighboring
             sampling_seed: Random seed for reproducible random sampling
             split_mode: "ratio" for percentage-based, "metadata" for filter-based split

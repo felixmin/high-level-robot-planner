@@ -9,7 +9,6 @@ __version__ = "0.1.0"
 
 from laq.task import LAQTask, separate_weight_decayable_params
 from laq.callbacks import (
-    ReconstructionVisualizationCallback,
     EMACallback,
     ValidationStrategyCallback,
 )
@@ -28,7 +27,6 @@ from laq.validation import (
 __all__ = [
     "LAQTask",
     "separate_weight_decayable_params",
-    "ReconstructionVisualizationCallback",
     "EMACallback",
     "ValidationStrategyCallback",
     "LatentActionQuantization",

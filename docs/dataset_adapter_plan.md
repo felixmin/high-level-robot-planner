@@ -65,7 +65,7 @@ This document describes the dataset adapter system that unifies multiple dataset
 
 ### Multi-Dataset Config (YAML)
 ```yaml
-# config/data/laq_multi.yaml
+# config/data/laq_multi_dataset.yaml
 sources:
   - type: youtube
     root: /mnt/data/datasets/youtube_new
@@ -74,7 +74,6 @@ sources:
 
 batch_size: 32
 val_split: 0.2
-pair_level: true
 offsets: [30]
 ```
 
@@ -89,7 +88,6 @@ dm = LAQDataModule(
     ],
     batch_size=32,
     val_split=0.2,
-    pair_level=True,
     offsets=[30],
 )
 dm.setup()

@@ -182,6 +182,8 @@ Key parameters:
 - `offsets`: Frame offsets for pair generation (e.g., `offsets=[15, 30, 60]`)
 - `val_split`: Train/val split ratio (default 0.1)
 
+Data loading pre-computes all valid frame pairs across datasets for deterministic training.
+
 ### Multi-Dataset Training
 
 Train on multiple datasets using adapters:
@@ -296,11 +298,12 @@ Key features:
 
 ## Implementation Notes
 
-- **LAQ Training** (Stage 1): Implement in `scripts/2_train_laq.py`. Use PyTorch Lightning for standard supervised learning with DDP.
+- **LAQ Training** (Stage 1): Implemented in `scripts/2_train_laq.py`. Uses PyTorch Lightning for standard supervised learning with DDP.
 - **Foundation Training** (Stage 2): Implement in `scripts/4_train_foundation.py`. Use Lightning Fabric for FSDP multi-node training with fine training loop control.
 - **Data Loading**:
-  - Stage 1 (LAQ): Uses `LAQDataModule` with multi-source adapters. Pre-computes frame pairs for deterministic training.
+  - Stage 1 (LAQ): Uses `LAQDataModule` with multi-source adapters (`MultiSourcePairDataset`). Pre-computes all valid frame pairs for deterministic training.
   - Stage 2/3: Implement WebDataset-based loaders in `packages/common/` for streaming TAR shards.
+- **Validation**: Uses `ValidationStrategyCallback` with configurable strategies (basic visualization, latent transfer, clustering). Supports per-bucket visualization for different dataset types.
 - **Logging**: Use `packages/common/logging.py` for consistent logging across stages.
 - **Checkpointing**: Lightning handles checkpoint saving; configure paths via Hydra config.
 

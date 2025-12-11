@@ -42,20 +42,38 @@ loss_weights:
 validation:
   # How often to run validation (can be float for percentage of epoch, or int for steps)
   check_interval: 500
-  
+
   # Limit validation batches to save time (0.1 = 10% of val set, or int for exact batches)
   # With 6300 val samples, 0.1 = ~630 samples = ~160 batches at batch_size 4
   limit_batches: 0.1
-  
+
   # Fixed samples: diverse across datasets, tracked every validation
   num_fixed_samples: 8
-  
+
   # Random samples: different each time for diversity
   num_random_samples: 8
-  
+
   # Maximum samples to cache in RAM (prevents OOM on large val sets)
-  max_cached_samples: 256
-  
+  max_cached_samples: 1024
+
+  # --- Validation Buckets (for per-bucket visualization and analysis) ---
+  # Define custom data subsets for separate visualization
+  # Each bucket is a named filter - samples matching all conditions are grouped
+  # If not specified, auto-bucketing by dataset_type is used
+  # Supports operators: ["!=", value], [">", value], ["not_null", true]
+  val_buckets:
+    youtube:
+      dataset_type: "youtube"
+    bridge:
+      dataset_type: "bridge"
+    # Example: filter by environment
+    # bridge_toykitchen1:
+    #   dataset_type: "bridge"
+    #   environment: "toykitchen1"
+    # Example: filter for samples with language annotations
+    # with_language:
+    #   language: ["not_null", true]
+
   # --- Validation Strategies ---
   strategies:
     # Basic validation (always runs): loss + visualizations
@@ -63,15 +81,16 @@ validation:
       enabled: true
       visualize_train: true
       visualize_val: true
-      visualize_per_bucket: true  # Separate grids for YouTube/Bridge
+      visualize_per_bucket: true  # Separate grids for each bucket
       samples_per_bucket: 4
-    
+      num_train_samples: 8  # Training samples to visualize
+
     # Latent transfer analysis: test if latent actions transfer between scenes
     latent_transfer:
       enabled: true
       every_n_validations: 10  # Run every 10th validation
       num_pairs: 256  # Number of pairs to test transfer on
-    
+
     # Clustering analysis: analyze latent action distribution
     clustering:
       enabled: true
