@@ -704,10 +704,11 @@ class LatentTransferStrategy(ValidationStrategy):
                 source_frames[:4].cpu(),
                 target_frames[:4].cpu(),
                 transferred_recons[:4].cpu(),
+                self_recons[:4].cpu(),  # True reconstruction for comparison
                 wandb_logger,
-                trainer.current_epoch,
+                trainer.global_step,
             )
-        
+
         return metrics
     
     def _get_wandb_logger(self, trainer: pl.Trainer):
@@ -723,27 +724,43 @@ class LatentTransferStrategy(ValidationStrategy):
         source_frames: torch.Tensor,
         target_frames: torch.Tensor,
         transferred: torch.Tensor,
+        true_recon: torch.Tensor,
         wandb_logger,
-        epoch: int,
+        global_step: int,
     ):
-        """Visualize latent transfer results."""
-        # Grid: [s_a, s_a', s_b, s_b'_pred, s_b'_true]
-        s_a = source_frames[:, :, 0]
-        s_a_prime = source_frames[:, :, 1]
-        s_b = target_frames[:, :, 0]
-        s_b_prime_pred = transferred
-        s_b_prime_true = target_frames[:, :, 1]
-        
-        imgs = torch.stack([s_a, s_a_prime, s_b, s_b_prime_pred, s_b_prime_true], dim=0)
+        """
+        Visualize latent transfer results with true reconstruction comparison.
+
+        Grid columns:
+        1. s_a: Source first frame
+        2. s_a': Source second frame (ground truth action result)
+        3. s_b: Target first frame
+        4. D(s_b, z_b): True reconstruction (using target's own latent)
+        5. D(s_b, z_a): Transfer reconstruction (using source's latent)
+        6. s_b': Target second frame (ground truth)
+
+        Comparing columns 4 vs 5 shows the effect of the transferred action.
+        Comparing column 5 vs 6 shows transfer error.
+        """
+        s_a = source_frames[:, :, 0]          # Source first frame
+        s_a_prime = source_frames[:, :, 1]    # Source action result (GT)
+        s_b = target_frames[:, :, 0]          # Target first frame
+        s_b_recon_true = true_recon           # D(s_b, z_b) - true recon
+        s_b_recon_transfer = transferred      # D(s_b, z_a) - transfer recon
+        s_b_prime_true = target_frames[:, :, 1]  # Target GT
+
+        imgs = torch.stack([
+            s_a, s_a_prime, s_b, s_b_recon_true, s_b_recon_transfer, s_b_prime_true
+        ], dim=0)
         imgs = rearrange(imgs, 'r b c h w -> (b r) c h w')
         imgs = imgs.clamp(0.0, 1.0)
-        
-        grid = make_grid(imgs, nrow=5, normalize=False)
-        
+
+        grid = make_grid(imgs, nrow=6, normalize=False)
+
         wandb_logger.log_image(
             key="val/latent_transfer",
             images=[grid],
-            caption=[f"Epoch {epoch}: s_a | s_a' | s_b | D(s_b,z_a) | s_b'"],
+            caption=[f"Step {global_step}: s_a | s_a' | s_b | D(s_b,z_b) | D(s_b,z_a) | s_b'"],
         )
 
 

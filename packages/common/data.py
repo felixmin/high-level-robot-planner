@@ -456,7 +456,7 @@ class LAQDataModule(pl.LightningDataModule):
         num_workers: int = 4,
         pin_memory: bool = True,
         prefetch_factor: int = 2,
-        max_samples: Optional[int] = None,
+        max_pairs: Optional[int] = None,
         val_split: float = 0.1,
         filters: Optional[Dict[str, Any]] = None,
         return_metadata: bool = False,
@@ -482,7 +482,7 @@ class LAQDataModule(pl.LightningDataModule):
             num_workers: Number of dataloader workers
             pin_memory: Pin memory for faster GPU transfer
             prefetch_factor: Prefetch factor for dataloaders
-            max_samples: Maximum samples (for subset testing)
+            max_pairs: Maximum frame pairs (for subset testing/debugging)
             val_split: Fraction of data for validation (used when split_mode="ratio")
             filters: Global filter conditions applied after per-source filters
             return_metadata: If True, return dict with metadata
@@ -505,7 +505,7 @@ class LAQDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.pin_memory = pin_memory
         self.prefetch_factor = prefetch_factor
-        self.max_samples = max_samples
+        self.max_pairs = max_pairs
         self.val_split = val_split
         self.filters = filters
         self.return_metadata = return_metadata
@@ -572,9 +572,9 @@ class LAQDataModule(pl.LightningDataModule):
         self, scenes: List[SceneMetadata]
     ) -> tuple[List[SceneMetadata], List[SceneMetadata]]:
         """
-        Split scenes into train/val by targeting a fixed SAMPLE count from each dataset.
+        Split scenes into train/val by targeting a fixed FRAME PAIR count from each dataset.
 
-        Accumulates scenes until reaching the target sample count per dataset.
+        Accumulates scenes until reaching the target frame pair count per dataset.
         This ensures balanced validation regardless of scene length variations
         (important for long YouTube videos vs short Bridge trajectories).
 
@@ -586,10 +586,10 @@ class LAQDataModule(pl.LightningDataModule):
         if not self.val_counts_per_dataset:
             raise ValueError("val_counts_per_dataset required when split_mode='fixed_count'")
 
-        # Get max offset for sample calculation
+        # Get max offset for frame pair calculation
         max_offset = max(self.offsets) if self.offsets else 30
 
-        def samples_per_scene(scene: SceneMetadata) -> int:
+        def pairs_per_scene(scene: SceneMetadata) -> int:
             """Calculate number of frame pairs from a scene."""
             return max(0, scene.num_frames - max_offset)
 
@@ -604,29 +604,29 @@ class LAQDataModule(pl.LightningDataModule):
         train_scenes = []
         val_scenes = []
 
-        # Accumulate scenes until reaching target sample count
+        # Accumulate scenes until reaching target frame pair count
         for dtype, dtype_scenes in by_dataset.items():
-            target_samples = self.val_counts_per_dataset.get(dtype, 0)
+            target_pairs = self.val_counts_per_dataset.get(dtype, 0)
 
-            if target_samples == 0:
-                # No val samples requested for this dataset
+            if target_pairs == 0:
+                # No val pairs requested for this dataset
                 train_scenes.extend(dtype_scenes)
-                print(f"  - {dtype}: {len(dtype_scenes)} train, 0 val scenes (no val requested)")
+                print(f"  - {dtype}: {len(dtype_scenes)} train scenes, 0 val scenes (no val requested)")
                 continue
 
             # Shuffle deterministically
             shuffled = dtype_scenes.copy()
             random.Random(42).shuffle(shuffled)
 
-            # Accumulate scenes until we reach target sample count
+            # Accumulate scenes until we reach target frame pair count
             val_subset = []
-            val_sample_count = 0
+            val_pair_count = 0
 
             for scene in shuffled:
-                scene_samples = samples_per_scene(scene)
-                if val_sample_count < target_samples:
+                scene_pairs = pairs_per_scene(scene)
+                if val_pair_count < target_pairs:
                     val_subset.append(scene)
-                    val_sample_count += scene_samples
+                    val_pair_count += scene_pairs
 
             # Rest go to train
             val_set = set(id(s) for s in val_subset)
@@ -635,21 +635,21 @@ class LAQDataModule(pl.LightningDataModule):
             val_scenes.extend(val_subset)
             train_scenes.extend(train_subset)
 
-            # Calculate train sample count for logging
-            train_sample_count = sum(samples_per_scene(s) for s in train_subset)
+            # Calculate train frame pair count for logging
+            train_pair_count = sum(pairs_per_scene(s) for s in train_subset)
 
-            print(f"  - {dtype}: {len(train_subset)} train ({train_sample_count} samples), "
-                  f"{len(val_subset)} val ({val_sample_count} samples, target: {target_samples})")
+            print(f"  - {dtype}: {len(train_subset)} train scenes ({train_pair_count} pairs), "
+                  f"{len(val_subset)} val scenes ({val_pair_count} pairs, target: {target_pairs})")
 
         # Shuffle final lists
         random.Random(42).shuffle(train_scenes)
         random.Random(42).shuffle(val_scenes)
 
-        total_train_samples = sum(samples_per_scene(s) for s in train_scenes)
-        total_val_samples = sum(samples_per_scene(s) for s in val_scenes)
+        total_train_pairs = sum(pairs_per_scene(s) for s in train_scenes)
+        total_val_pairs = sum(pairs_per_scene(s) for s in val_scenes)
 
-        print(f"✓ Fixed count split: {len(train_scenes)} train scenes ({total_train_samples} samples), "
-              f"{len(val_scenes)} val scenes ({total_val_samples} samples)")
+        print(f"✓ Fixed count split: {len(train_scenes)} train scenes ({total_train_pairs} pairs), "
+              f"{len(val_scenes)} val scenes ({total_val_pairs} pairs)")
         return train_scenes, val_scenes
 
     def _split_scenes_by_metadata(
@@ -793,14 +793,20 @@ class LAQDataModule(pl.LightningDataModule):
 
         # Create bucket datasets
         for bucket_name, bucket_scenes in val_bucket_scenes.items():
-            self.val_bucket_datasets[bucket_name] = MultiSourcePairDataset(
+            base_dataset = MultiSourcePairDataset(
                 scenes=bucket_scenes,
                 sources=self.sources,
                 image_size=self.image_size,
                 offsets=self.offsets,
                 return_metadata=self.return_metadata,
             )
-            
+            # Shuffle val bucket once during init for diverse visualization samples
+            if len(base_dataset) > 0:
+                shuffled_indices = torch.randperm(len(base_dataset)).tolist()
+                self.val_bucket_datasets[bucket_name] = Subset(base_dataset, shuffled_indices)
+            else:
+                self.val_bucket_datasets[bucket_name] = base_dataset
+
         for bucket_name, bucket_scenes in train_bucket_scenes.items():
             self.train_bucket_datasets[bucket_name] = MultiSourcePairDataset(
                 scenes=bucket_scenes,
@@ -812,9 +818,9 @@ class LAQDataModule(pl.LightningDataModule):
 
         self.total_available = len(all_scenes)
 
-        # Apply max_samples subset
-        if self.max_samples is not None:
-            num_train = min(self.max_samples, len(full_train))
+        # Apply max_pairs subset (for debugging/testing)
+        if self.max_pairs is not None:
+            num_train = min(self.max_pairs, len(full_train))
             num_val = min(max(1, int(num_train * self.val_split)), len(full_val))
 
             if self.sampling_strategy == "random":
@@ -891,12 +897,12 @@ class LAQDataModule(pl.LightningDataModule):
             collate_fn=collate_fn,
         )
 
-    def get_samples_per_dataset(self) -> Dict[str, Dict[str, int]]:
-        """Get sample counts per dataset type for both train and val."""
+    def get_pairs_per_dataset(self) -> Dict[str, Dict[str, int]]:
+        """Get frame pair counts per dataset type for both train and val."""
         result = {"train": {}, "val": {}}
 
-        def count_samples(dataset) -> Dict[str, int]:
-            """Count samples per dataset type, handling Subsets."""
+        def count_pairs(dataset) -> Dict[str, int]:
+            """Count frame pairs per dataset type, handling Subsets."""
             counts = {}
             if dataset is None:
                 return counts
@@ -920,6 +926,135 @@ class LAQDataModule(pl.LightningDataModule):
 
             return counts
 
-        result["train"] = count_samples(self.train_dataset)
-        result["val"] = count_samples(self.val_dataset)
+        result["train"] = count_pairs(self.train_dataset)
+        result["val"] = count_pairs(self.val_dataset)
         return result
+
+
+class OXEDataModule(pl.LightningDataModule):
+    """
+    PyTorch Lightning DataModule for Open X-Embodiment datasets.
+
+    Streams data directly from Google Cloud Storage using tf.data pipelines,
+    without caching to local disk. Designed for large-scale OXE datasets
+    like language_table (442k episodes, multi-TB).
+
+    Key differences from LAQDataModule:
+    - Uses IterableDataset (streaming) instead of map-style Dataset
+    - No local file caching - streams from GCS
+    - tf.data handles prefetching and shuffling efficiently
+    - Train/val split is episode-based, not scene-based
+
+    Example config:
+    ```yaml
+    dataset_name: language_table
+    gcs_path: gs://gresearch/robotics/language_table/0.0.1
+    train_split: "train[:90%]"
+    val_split: "train[90%:]"
+    offset: 5  # Steps between frame pairs
+    ```
+    """
+
+    def __init__(
+        self,
+        dataset_name: str = "language_table",
+        gcs_path: Optional[str] = None,
+        train_split: str = "train[:90%]",
+        val_split: str = "train[90%:]",
+        offset: int = 5,
+        image_size: int = 256,
+        batch_size: int = 32,
+        num_workers: int = 0,  # IterableDataset + tf.data handles parallelism
+        shuffle_buffer: int = 1000,
+        prefetch_buffer: int = 2,
+        return_metadata: bool = False,
+        # Legacy parameters (ignored but kept for config compatibility)
+        name: Optional[str] = None,
+        task: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Args:
+            dataset_name: Name of OXE dataset (e.g., "language_table")
+            gcs_path: Override GCS path (optional, uses registry default)
+            train_split: TFDS split for training (e.g., "train[:90%]")
+            val_split: TFDS split for validation (e.g., "train[90%:]")
+            offset: Frame offset for pairs (in steps)
+            image_size: Target image size (will resize)
+            batch_size: Batch size for dataloaders
+            num_workers: DataLoader workers (0 recommended for IterableDataset)
+            shuffle_buffer: tf.data shuffle buffer size
+            prefetch_buffer: tf.data prefetch buffer size
+            return_metadata: If True, return dict with metadata
+        """
+        super().__init__()
+
+        self.dataset_name = dataset_name
+        self.gcs_path = gcs_path
+        self.train_split = train_split
+        self.val_split = val_split
+        self.offset = offset
+        self.image_size = image_size
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.shuffle_buffer = shuffle_buffer
+        self.prefetch_buffer = prefetch_buffer
+        self.return_metadata = return_metadata
+
+        # Will be set in setup()
+        self.train_dataset = None
+        self.val_dataset = None
+
+    def setup(self, stage: Optional[str] = None):
+        """Create train and val datasets."""
+        from common.adapters.oxe import OXEFramePairDataset
+
+        # Training dataset with shuffling
+        self.train_dataset = OXEFramePairDataset(
+            dataset_name=self.dataset_name,
+            gcs_path=self.gcs_path,
+            split=self.train_split,
+            offset=self.offset,
+            image_size=self.image_size,
+            shuffle_buffer=self.shuffle_buffer,
+            prefetch_buffer=self.prefetch_buffer,
+            return_metadata=self.return_metadata,
+        )
+
+        # Validation dataset without shuffling
+        self.val_dataset = OXEFramePairDataset(
+            dataset_name=self.dataset_name,
+            gcs_path=self.gcs_path,
+            split=self.val_split,
+            offset=self.offset,
+            image_size=self.image_size,
+            shuffle_buffer=0,  # No shuffle for val
+            prefetch_buffer=self.prefetch_buffer,
+            return_metadata=self.return_metadata,
+        )
+
+        print(f"✓ OXE DataModule initialized")
+        print(f"  - Dataset: {self.dataset_name}")
+        print(f"  - Train split: {self.train_split}")
+        print(f"  - Val split: {self.val_split}")
+        print(f"  - Offset: {self.offset} steps")
+        print(f"  - Image size: {self.image_size}")
+
+    def train_dataloader(self):
+        """Create training dataloader."""
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            # Note: shuffle=False because IterableDataset handles shuffling internally
+        )
+
+    def val_dataloader(self):
+        """Create validation dataloader."""
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )

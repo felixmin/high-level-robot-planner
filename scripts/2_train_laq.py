@@ -84,15 +84,15 @@ def main(cfg: DictConfig):
     print(f"  - Image size: {cfg.data.image_size}")
     print(f"  - Batch size: {cfg.data.batch_size}")
     print(f"  - Total scenes available: {datamodule.total_available}")
-    print(f"  - Train samples (pairs): {len(datamodule.train_dataset)}")
-    print(f"  - Val samples (pairs): {len(datamodule.val_dataset)}")
+    print(f"  - Train frame pairs: {len(datamodule.train_dataset)}")
+    print(f"  - Val frame pairs: {len(datamodule.val_dataset)}")
 
-    # Print per-dataset sample breakdown
-    samples_per_dataset = datamodule.get_samples_per_dataset()
-    if samples_per_dataset["train"]:
-        print(f"  - Train by dataset: {samples_per_dataset['train']}")
-    if samples_per_dataset["val"]:
-        print(f"  - Val by dataset: {samples_per_dataset['val']}")
+    # Print per-dataset frame pair breakdown
+    pairs_per_dataset = datamodule.get_pairs_per_dataset()
+    if pairs_per_dataset["train"]:
+        print(f"  - Train pairs by dataset: {pairs_per_dataset['train']}")
+    if pairs_per_dataset["val"]:
+        print(f"  - Val pairs by dataset: {pairs_per_dataset['val']}")
 
     # Initialize LAQ task
     print("\n" + "=" * 80)
