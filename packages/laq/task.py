@@ -168,8 +168,9 @@ class LAQTask(pl.LightningModule):
         else:
             frames = batch
 
-        # Forward pass
-        loss, num_unique = self.model(frames, step=self.global_step)
+        # Forward pass - use step=0 to avoid codebook replacement during validation
+        # (LAPA behavior: codebook replacement only during training via step != 0 check)
+        loss, num_unique = self.model(frames, step=0)
 
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
