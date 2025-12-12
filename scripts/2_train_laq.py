@@ -26,7 +26,7 @@ import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.loggers import WandbLogger
 
-from common.data import LAQDataModule
+from common.data import LAQDataModule, OXEDataModule
 from common.logging import set_seed, count_parameters
 from laq import (
     LAQTask,
@@ -68,31 +68,42 @@ def main(cfg: DictConfig):
     print("Initializing Data Module")
     print("=" * 80)
 
-    # Unpack config directly, filtering out metadata keys
-    datamodule = LAQDataModule(
-        **{k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
-    )
+    # Detect data module type based on config
+    data_config = {k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
 
-    # Setup to create datasets and get sizes
-    datamodule.setup()
+    if "dataset_name" in cfg.data:
+        # OXE streaming dataset (e.g., language_table)
+        datamodule = OXEDataModule(**data_config)
+        datamodule.setup()
+        print(f"✓ OXE DataModule initialized (streaming from GCS)")
+        print(f"  - Dataset: {cfg.data.dataset_name}")
+        print(f"  - Train split: {cfg.data.train_split}")
+        print(f"  - Val split: {cfg.data.val_split}")
+        print(f"  - Offset: {cfg.data.offset} steps")
+        print(f"  - Image size: {cfg.data.image_size}")
+        print(f"  - Batch size: {cfg.data.batch_size}")
+        print(f"  - Estimated train pairs: ~{len(datamodule.train_dataset):,}")
+    else:
+        # Multi-source file-based dataset (YouTube, Bridge, etc.)
+        datamodule = LAQDataModule(**data_config)
+        datamodule.setup()
 
-    # Log dataset sources
-    source_info = [f"{s['type']}: {s['root']}" for s in cfg.data.sources]
-    print(f"✓ DataModule initialized (multi-source)")
-    for s in source_info:
-        print(f"  - Source: {s}")
-    print(f"  - Image size: {cfg.data.image_size}")
-    print(f"  - Batch size: {cfg.data.batch_size}")
-    print(f"  - Total scenes available: {datamodule.total_available}")
-    print(f"  - Train frame pairs: {len(datamodule.train_dataset)}")
-    print(f"  - Val frame pairs: {len(datamodule.val_dataset)}")
+        source_info = [f"{s['type']}: {s['root']}" for s in cfg.data.sources]
+        print(f"✓ DataModule initialized (multi-source)")
+        for s in source_info:
+            print(f"  - Source: {s}")
+        print(f"  - Image size: {cfg.data.image_size}")
+        print(f"  - Batch size: {cfg.data.batch_size}")
+        print(f"  - Total scenes available: {datamodule.total_available}")
+        print(f"  - Train frame pairs: {len(datamodule.train_dataset)}")
+        print(f"  - Val frame pairs: {len(datamodule.val_dataset)}")
 
-    # Print per-dataset frame pair breakdown
-    pairs_per_dataset = datamodule.get_pairs_per_dataset()
-    if pairs_per_dataset["train"]:
-        print(f"  - Train pairs by dataset: {pairs_per_dataset['train']}")
-    if pairs_per_dataset["val"]:
-        print(f"  - Val pairs by dataset: {pairs_per_dataset['val']}")
+        # Print per-dataset frame pair breakdown
+        pairs_per_dataset = datamodule.get_pairs_per_dataset()
+        if pairs_per_dataset["train"]:
+            print(f"  - Train pairs by dataset: {pairs_per_dataset['train']}")
+        if pairs_per_dataset["val"]:
+            print(f"  - Val pairs by dataset: {pairs_per_dataset['val']}")
 
     # Initialize LAQ task
     print("\n" + "=" * 80)
