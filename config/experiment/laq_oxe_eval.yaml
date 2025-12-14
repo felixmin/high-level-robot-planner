@@ -1,0 +1,77 @@
+# @package _global_
+
+# LAQ training on Open X-Embodiment language_table dataset
+# Streams from GCS without local caching
+
+defaults:
+  - /model@model: laq
+  - /data@data: laq_oxe
+  - /training@training: laq_optimizer
+  - /cluster@cluster: local_dev
+
+experiment:
+  name: laq_oxe_language_table
+  description: "LAQ training on OXE language_table dataset (streaming from GCS)"
+
+# Model adjustments for language_table images (360x640 resized to 256x256)
+model:
+  image_size: 256
+
+# Data settings
+data:
+  batch_size: 32
+  shuffle_buffer: 2000
+  prefetch_buffer: 4
+
+# Training settings
+training:
+  epochs: 100
+  max_steps: null
+  scheduler:
+    type: none
+  validation:
+    check_interval: 100  # Validate every X steps
+    limit_batches: 100    # Limit val batches (streaming dataset)
+    # Disable bucket-based validation (single dataset)
+    strategies:
+      basic:
+        enabled: true
+        visualize_train: true
+        visualize_val: true
+        visualize_per_bucket: false  # Single dataset, no buckets
+      latent_transfer:
+        enabled: true
+        every_n_validations: 1
+      clustering:
+        enabled: true
+        every_n_validations: 1
+      codebook_histogram:
+        enabled: true
+        every_n_validations: 1
+      action_token_scatter:
+        enabled: true
+        every_n_validations: 1
+        num_samples: 500
+      sequence_histogram:
+        enabled: true
+        every_n_validations: 1
+        num_top_sequences: 50
+      all_sequences_histogram:
+        enabled: true
+        every_n_validations: 1
+      action_sequence_scatter:
+        enabled: true
+        every_n_validations: 1
+        num_samples: 500
+      top_sequences_scatter:
+        enabled: true
+        every_n_validations: 1
+        num_samples: 500
+        num_top_sequences: 5
+      state_sequence_scatter:
+        enabled: true
+        every_n_validations: 1
+        num_samples: 500
+
+logging:
+  use_wandb: true

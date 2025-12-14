@@ -23,9 +23,12 @@ validation:
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+from collections import Counter
+import warnings
 
 import torch
 import torch.nn.functional as F
+import numpy as np
 from torchvision.utils import make_grid
 from einops import rearrange
 import lightning.pytorch as pl
@@ -250,6 +253,17 @@ class ValidationStrategy(ABC):
             Dict of metrics to log
         """
         pass
+
+    def _get_wandb_logger(self, trainer: pl.Trainer):
+        """Get WandB logger from trainer."""
+        if not WANDB_AVAILABLE:
+            return None
+        for logger in trainer.loggers:
+            if isinstance(logger, pl.loggers.WandbLogger):
+                return logger
+        return None
+
+
 
 
 class BasicVisualizationStrategy(ValidationStrategy):
@@ -570,15 +584,6 @@ class BasicVisualizationStrategy(ValidationStrategy):
             print(f"Warning: Could not sample from train dataloader: {e}")
             return None, None
 
-    def _get_wandb_logger(self, trainer: pl.Trainer):
-        """Get WandB logger from trainer."""
-        if not WANDB_AVAILABLE:
-            return None
-        for logger in trainer.loggers:
-            if isinstance(logger, pl.loggers.WandbLogger):
-                return logger
-        return None
-
     def _create_recon_grid(
         self,
         frames: torch.Tensor,
@@ -723,14 +728,6 @@ class LatentTransferStrategy(ValidationStrategy):
             )
 
         return metrics
-    
-    def _get_wandb_logger(self, trainer: pl.Trainer):
-        if not WANDB_AVAILABLE:
-            return None
-        for logger in trainer.loggers:
-            if isinstance(logger, pl.loggers.WandbLogger):
-                return logger
-        return None
     
     def _visualize_transfers(
         self,
@@ -916,13 +913,7 @@ class ClusteringStrategy(ValidationStrategy):
         probs = probs[probs > 0]
         return -(probs * probs.log()).sum().item()
     
-    def _get_wandb_logger(self, trainer: pl.Trainer):
-        if not WANDB_AVAILABLE:
-            return None
-        for logger in trainer.loggers:
-            if isinstance(logger, pl.loggers.WandbLogger):
-                return logger
-        return None
+
     
     def _visualize_clusters(
         self,
@@ -1035,13 +1026,7 @@ class CodebookHistogramStrategy(ValidationStrategy):
         probs = probs[probs > 0]
         return -(probs * probs.log()).sum().item()
 
-    def _get_wandb_logger(self, trainer: pl.Trainer):
-        if not WANDB_AVAILABLE:
-            return None
-        for logger in trainer.loggers:
-            if isinstance(logger, pl.loggers.WandbLogger):
-                return logger
-        return None
+
 
     def _create_histogram(
         self,
@@ -1052,10 +1037,6 @@ class CodebookHistogramStrategy(ValidationStrategy):
     ):
         """Create and log histogram of codebook usage."""
         try:
-            import matplotlib.pyplot as plt
-            import io
-            from PIL import Image
-
             fig, ax = plt.subplots(figsize=(10, 4))
 
             x = range(codebook_size)
@@ -1085,10 +1066,223 @@ class CodebookHistogramStrategy(ValidationStrategy):
             )
 
             plt.close(fig)
-        except ImportError as e:
-            print(f"Warning: codebook_histogram requires matplotlib: {e}")
         except Exception as e:
             print(f"Warning: codebook_histogram visualization failed: {e}")
+
+
+class LatentSequenceHistogramStrategy(ValidationStrategy):
+    """
+    Visualize the distribution of latent token sequences (combinations).
+
+    Since the combination space can be large (e.g., 8^4 = 4096), this strategy
+    plots the top-N most frequent sequences to show if the model collapses
+    to a few specific action patterns.
+    """
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        every_n_validations: int = 1,
+        num_top_sequences: int = 50,
+        **kwargs,
+    ):
+        super().__init__(
+            name="sequence_histogram",
+            enabled=enabled,
+            every_n_validations=every_n_validations,
+        )
+        self.num_top_sequences = num_top_sequences
+
+    def needs_caching(self) -> bool:
+        return True  # Need codes for sequence analysis
+
+    def run(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+    ) -> Dict[str, Any]:
+        """Generate sequence usage histogram."""
+        metrics = {}
+
+        all_codes = cache.get_all_codes()
+        if all_codes is None or len(all_codes) == 0:
+            return metrics
+
+        # all_codes shape: [N, code_seq_len]
+        # Convert to list of tuples for counting
+        sequences = [tuple(c.tolist()) for c in all_codes]
+        
+        counter = Counter(sequences)
+        
+        # Metrics
+        unique_seqs = len(counter)
+        
+        # Calculate entropy of sequence distribution
+        counts = torch.tensor(list(counter.values()), dtype=torch.float)
+        metrics["val/sequence_entropy"] = self._entropy(counts)
+        metrics["val/unique_sequences"] = unique_seqs
+        
+        pl_module.log_dict(metrics, sync_dist=True)
+
+        # Visualize
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is not None:
+            self._create_histogram(counter, wandb_logger, trainer.global_step)
+
+        return metrics
+
+    def _entropy(self, counts: torch.Tensor) -> float:
+        """Compute entropy of distribution."""
+        probs = counts / counts.sum()
+        probs = probs[probs > 0]
+        return -(probs * probs.log()).sum().item()
+
+
+
+    def _create_histogram(
+        self,
+        counter,
+        wandb_logger,
+        global_step: int,
+    ):
+        """Create and log histogram of top sequence usage."""
+        try:
+            # Get top N most common
+            most_common = counter.most_common(self.num_top_sequences)
+            if not most_common:
+                return
+
+            labels, values = zip(*most_common)
+            # Convert tuple labels to strings "1-2-3-4"
+            str_labels = ["-".join(map(str, l)) for l in labels]
+
+            fig, ax = plt.subplots(figsize=(12, 6))
+
+            x = range(len(values))
+            ax.bar(x, values, color='mediumpurple', alpha=0.8)
+            ax.set_xticks(x)
+            ax.set_xticklabels(str_labels, rotation=90, fontsize=8)
+            ax.set_xlabel('Token Sequence')
+            ax.set_ylabel('Count')
+            ax.set_title(f'Top {len(values)} Latent Sequences (Step {global_step})')
+
+            plt.tight_layout()
+
+            # Convert to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img = Image.open(buf)
+
+            wandb_logger.log_image(
+                key="val/sequence_histogram",
+                images=[img],
+                caption=[f"Step {global_step}: Distribution of top {len(values)} sequences"],
+            )
+
+            plt.close(fig)
+        except Exception as e:
+            print(f"Warning: sequence_histogram visualization failed: {e}")
+
+
+class AllSequencesHistogramStrategy(ValidationStrategy):
+    """
+    Visualize the distribution of ALL latent token sequences (sorted frequency).
+
+    This shows the "long tail" of the distribution.
+    X-axis: Sequence rank (1 to N)
+    Y-axis: Frequency count
+    No labels on X-axis to avoid clutter.
+    """
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        every_n_validations: int = 1,
+        **kwargs,
+    ):
+        super().__init__(
+            name="all_sequences_histogram",
+            enabled=enabled,
+            every_n_validations=every_n_validations,
+        )
+
+    def needs_caching(self) -> bool:
+        return True
+
+    def run(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+    ) -> Dict[str, Any]:
+        """Generate all sequences histogram."""
+        metrics = {}
+
+        all_codes = cache.get_all_codes()
+        if all_codes is None or len(all_codes) == 0:
+            return metrics
+
+        # all_codes shape: [N, code_seq_len]
+        sequences = [tuple(c.tolist()) for c in all_codes]
+        
+        from collections import Counter
+        counter = Counter(sequences)
+        
+        # Sort counts descending
+        sorted_counts = sorted(counter.values(), reverse=True)
+        
+        # Visualize
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is not None:
+            self._create_plot(sorted_counts, wandb_logger, trainer.global_step)
+
+        return metrics
+
+    def _create_plot(
+        self,
+        counts: List[int],
+        wandb_logger,
+        global_step: int,
+    ):
+        """Create and log plot of all sequence counts."""
+        try:
+            fig, ax = plt.subplots(figsize=(12, 6))
+
+            x = range(len(counts))
+            ax.bar(x, counts, color='teal', width=1.0, alpha=0.8)
+            # Alternatively use plot/fill_between for very dense data
+            # ax.plot(x, counts, color='teal')
+            # ax.fill_between(x, counts, color='teal', alpha=0.3)
+            
+            ax.set_xlabel('Sequence Rank')
+            ax.set_ylabel('Count')
+            ax.set_title(f'Distribution of All {len(counts)} Unique Sequences (Step {global_step})')
+            ax.set_yscale('log') # Log scale helps see the tail
+            
+            # Add stats
+            ax.text(0.95, 0.95, f'Total Unique: {len(counts)}',
+                   transform=ax.transAxes, ha='right', va='top',
+                   fontsize=10, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+            plt.tight_layout()
+
+            # Convert to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img = Image.open(buf)
+
+            wandb_logger.log_image(
+                key="val/all_sequences_histogram",
+                images=[img],
+                caption=[f"Step {global_step}: Long tail distribution (log scale)"],
+            )
+
+            plt.close(fig)
+        except Exception as e:
+            print(f"Warning: all_sequences_histogram visualization failed: {e}")
 
 
 class ActionTokenScatterStrategy(ValidationStrategy):
@@ -1172,14 +1366,6 @@ class ActionTokenScatterStrategy(ValidationStrategy):
 
         return metrics
 
-    def _get_wandb_logger(self, trainer: pl.Trainer):
-        if not WANDB_AVAILABLE:
-            return None
-        for logger in trainer.loggers:
-            if isinstance(logger, pl.loggers.WandbLogger):
-                return logger
-        return None
-
     def _create_scatter(
         self,
         actions: List[List[float]],
@@ -1240,10 +1426,527 @@ class ActionTokenScatterStrategy(ValidationStrategy):
             )
 
             plt.close(fig)
-        except ImportError as e:
-            print(f"Warning: action_token_scatter requires matplotlib: {e}")
         except Exception as e:
             print(f"Warning: action_token_scatter visualization failed: {e}")
+
+
+class ActionSequenceScatterStrategy(ValidationStrategy):
+    """
+    Scatter plot of 2D actions colored by their assigned FULL token sequence.
+
+    This visualizes if specific action trajectories (dx, dy) map consistently
+    to specific latent code sequences.
+    """
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        every_n_validations: int = 1,
+        num_samples: int = 1000,
+        **kwargs,
+    ):
+        super().__init__(
+            name="action_sequence_scatter",
+            enabled=enabled,
+            every_n_validations=every_n_validations,
+        )
+        self.num_samples = num_samples
+
+    def needs_caching(self) -> bool:
+        return True
+
+    def run(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+    ) -> Dict[str, Any]:
+        """Generate action-sequence scatter plot."""
+        metrics = {}
+
+        all_frames = cache.get_all_frames()
+        all_metadata = cache.get_all_metadata()
+        all_codes = cache.get_all_codes()
+
+        if all_frames is None or not all_metadata or all_codes is None:
+            return metrics
+
+        # Check if we have action data
+        actions = []
+        seq_ids = []
+        
+        # Map unique sequences to IDs
+        # all_codes shape: [N, code_seq_len]
+        sequences = [tuple(c.tolist()) for c in all_codes]
+        unique_seqs = list(set(sequences))
+        seq_to_id = {seq: i for i, seq in enumerate(unique_seqs)}
+        num_unique_seqs = len(unique_seqs)
+
+        for i, meta in enumerate(all_metadata):
+            if "action" not in meta:
+                continue
+            action = meta["action"]
+            # Only support 2D actions
+            if isinstance(action, (list, tuple)) and len(action) == 2:
+                if i < len(sequences):
+                    actions.append(action)
+                    seq_ids.append(seq_to_id[sequences[i]])
+
+        if len(actions) < 10:
+            return metrics
+
+        # Limit samples
+        n = min(self.num_samples, len(actions))
+        indices = torch.randperm(len(actions))[:n].tolist()
+        actions = [actions[i] for i in indices]
+        seq_ids = [seq_ids[i] for i in indices]
+
+        # Create scatter plot
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is not None:
+            self._create_scatter(
+                actions, seq_ids, wandb_logger, trainer.global_step, num_unique_seqs
+            )
+
+        return metrics
+
+    def _create_scatter(
+        self,
+        actions: List[List[float]],
+        seq_ids: List[int],
+        wandb_logger,
+        global_step: int,
+        num_unique: int,
+    ):
+        """Create scatter plot colored by sequence ID."""
+        try:
+            if num_unique > 100:
+                warnings.warn(f"ActionSequenceScatterStrategy: {num_unique} unique sequences. Colors may be indistinguishable.")
+
+            actions_np = np.array(actions)
+            ids_np = np.array(seq_ids)
+
+            fig, ax = plt.subplots(figsize=(10, 8))
+
+            # Use nipy_spectral for high number of classes
+            cmap = plt.cm.get_cmap('nipy_spectral', num_unique)
+            markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h', 'H', '+', 'x']
+
+            # Plot each sequence ID with a unique marker and color
+            unique_ids = np.unique(ids_np)
+            for uid in unique_ids:
+                mask = ids_np == uid
+                marker = markers[uid % len(markers)]
+                # Get color from colormap (0-1 range)
+                color = cmap(uid / max(1, num_unique - 1))
+                
+                ax.scatter(
+                    actions_np[mask, 0], 
+                    actions_np[mask, 1],
+                    color=color,
+                    marker=marker,
+                    alpha=0.6, 
+                    s=30
+                )
+
+            ax.set_xlabel('Action X (cumulative dx)')
+            ax.set_ylabel('Action Y (cumulative dy)')
+            ax.set_title(f'2D Actions Colored by Full Sequence (Step {global_step})')
+            ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
+            ax.axvline(x=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
+            ax.set_aspect('equal', adjustable='box')
+
+            # Add colorbar
+            norm = plt.Normalize(vmin=0, vmax=num_unique-1)
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+            sm.set_array([])
+            cbar = plt.colorbar(sm, ax=ax, label='Sequence ID')
+
+            # Add statistics
+            ax.text(0.02, 0.98, f'Samples: {len(actions)}\nUnique Seqs: {num_unique}',
+                   transform=ax.transAxes, ha='left', va='top',
+                   fontsize=9, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+            plt.tight_layout()
+
+            # Convert to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img = Image.open(buf)
+
+            wandb_logger.log_image(
+                key="val/action_sequence_scatter",
+                images=[img],
+                caption=[f"Step {global_step}: Colored by unique sequence ID"],
+            )
+
+            plt.close(fig)
+        except Exception as e:
+            print(f"Warning: action_sequence_scatter visualization failed: {e}")
+
+
+class TopSequencesScatterStrategy(ValidationStrategy):
+    """
+    Scatter plot highlighting ONLY the top N most frequent latent sequences.
+
+    Top sequences get distinct high-contrast colors.
+    All other sequences are plotted in grey.
+    This helps visualize if the most common modes correspond to specific
+    actions (e.g., "move forward", "stop") or are scattered noise.
+    """
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        every_n_validations: int = 1,
+        num_samples: int = 1000,
+        num_top_sequences: int = 5,
+        **kwargs,
+    ):
+        super().__init__(
+            name="top_sequences_scatter",
+            enabled=enabled,
+            every_n_validations=every_n_validations,
+        )
+        self.num_samples = num_samples
+        self.num_top_sequences = num_top_sequences
+
+    def needs_caching(self) -> bool:
+        return True
+
+    def run(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+    ) -> Dict[str, Any]:
+        """Generate top sequences scatter plot."""
+        metrics = {}
+
+        all_frames = cache.get_all_frames()
+        all_metadata = cache.get_all_metadata()
+        all_codes = cache.get_all_codes()
+
+        if all_frames is None or not all_metadata or all_codes is None:
+            return metrics
+
+        # Collect actions and sequences
+        actions = []
+        sequences = []
+
+        # all_codes shape: [N, code_seq_len]
+        all_seqs_list = [tuple(c.tolist()) for c in all_codes]
+
+        for i, meta in enumerate(all_metadata):
+            if "action" not in meta:
+                continue
+            action = meta["action"]
+            # Only support 2D actions
+            if isinstance(action, (list, tuple)) and len(action) == 2:
+                if i < len(all_seqs_list):
+                    actions.append(action)
+                    sequences.append(all_seqs_list[i])
+
+        if len(actions) < 10:
+            return metrics
+
+        # Find top N sequences from the full set (or sampled set)
+        from collections import Counter
+        counter = Counter(sequences)
+        top_seqs_counts = counter.most_common(self.num_top_sequences)
+        top_seqs = {seq for seq, count in top_seqs_counts}
+        
+        # Map sequences to color categories: 0-(N-1) for top, -1 for others
+        # Create explicit color list for legend
+        seq_to_cat = {seq: i for i, (seq, _) in enumerate(top_seqs_counts)}
+        
+        categories = []
+        for seq in sequences:
+            if seq in top_seqs:
+                categories.append(seq_to_cat[seq])
+            else:
+                categories.append(-1) # Grey
+
+        # Limit samples for plotting
+        n = min(self.num_samples, len(actions))
+        indices = torch.randperm(len(actions))[:n].tolist()
+        
+        actions_sampled = [actions[i] for i in indices]
+        categories_sampled = [categories[i] for i in indices]
+
+        # Visualize
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is not None:
+            self._create_scatter(
+                actions_sampled, 
+                categories_sampled, 
+                top_seqs_counts, 
+                wandb_logger, 
+                trainer.global_step
+            )
+
+        return metrics
+
+    def _create_scatter(
+        self,
+        actions: List[List[float]],
+        categories: List[int],
+        top_seqs_counts: List[Tuple[Tuple[int, ...], int]],
+        wandb_logger,
+        global_step: int,
+    ):
+        """Create scatter plot with top sequences highlighted."""
+        try:
+            actions_np = np.array(actions)
+            cats_np = np.array(categories)
+
+            fig, ax = plt.subplots(figsize=(10, 8))
+
+            # Plot "Other" (Grey) first
+            mask_other = cats_np == -1
+            if np.any(mask_other):
+                ax.scatter(
+                    actions_np[mask_other, 0], 
+                    actions_np[mask_other, 1],
+                    c='lightgrey', 
+                    alpha=0.5, 
+                    s=15, 
+                    label=f'Others ({np.sum(mask_other)})',
+                    zorder=1
+                )
+
+            # Plot Top N
+            # distinct colors
+            colors = plt.cm.tab10.colors 
+            
+            for i, (seq, count) in enumerate(top_seqs_counts):
+                mask = cats_np == i
+                if np.any(mask):
+                    color = colors[i % len(colors)]
+                    # Format seq string
+                    seq_str = str(seq) # e.g. "(1, 5, 2)"
+                    ax.scatter(
+                        actions_np[mask, 0], 
+                        actions_np[mask, 1],
+                        c=[color], 
+                        alpha=0.9, 
+                        s=30, 
+                        label=f'{seq_str}: {count}',
+                        zorder=2
+                    )
+
+            ax.set_xlabel('Action X (cumulative dx)')
+            ax.set_ylabel('Action Y (cumulative dy)')
+            ax.set_title(f'Top {self.num_top_sequences} Sequences vs Action (Step {global_step})')
+            ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
+            ax.axvline(x=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
+            ax.set_aspect('equal', adjustable='box')
+
+            # Add legend
+            ax.legend(loc='upper right', fontsize=8, framealpha=0.9)
+
+            plt.tight_layout()
+
+            # Convert to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img = Image.open(buf)
+
+            wandb_logger.log_image(
+                key="val/top_sequences_scatter",
+                images=[img],
+                caption=[f"Step {global_step}: Top {self.num_top_sequences} sequences highlighted"],
+            )
+
+            plt.close(fig)
+        except Exception as e:
+            print(f"Warning: top_sequences_scatter visualization failed: {e}")
+
+
+class StateSequenceScatterStrategy(ValidationStrategy):
+    """
+    Scatter plot of ROBOT STATE (x, y) colored by assigned token sequence.
+
+    Visualizes how latent sequences distribute across the state space.
+    Highlights the top N most frequent sequences to check for spatial clusters.
+    Requires 'initial_state' in metadata.
+    """
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        every_n_validations: int = 1,
+        num_samples: int = 1000,
+        num_top_sequences: int = 20,
+        **kwargs,
+    ):
+        super().__init__(
+            name="state_sequence_scatter",
+            enabled=enabled,
+            every_n_validations=every_n_validations,
+        )
+        self.num_samples = num_samples
+        self.num_top_sequences = num_top_sequences
+
+    def needs_caching(self) -> bool:
+        return True
+
+    def run(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+    ) -> Dict[str, Any]:
+        """Generate state-sequence scatter plot."""
+        metrics = {}
+
+        all_frames = cache.get_all_frames()
+        all_metadata = cache.get_all_metadata()
+        all_codes = cache.get_all_codes()
+
+        if all_frames is None or not all_metadata or all_codes is None:
+            return metrics
+
+        # Collect states and sequences
+        states = []
+        sequences = []
+
+        # Map all codes to sequence tuples first
+        all_seqs_list = [tuple(c.tolist()) for c in all_codes]
+
+        for i, meta in enumerate(all_metadata):
+            if "initial_state" not in meta:
+                continue
+            state = meta["initial_state"]
+            if isinstance(state, (list, tuple)) and len(state) >= 2:
+                if i < len(all_seqs_list):
+                    states.append(state[:2])
+                    sequences.append(all_seqs_list[i])
+
+        if len(states) < 10:
+            return metrics
+
+        # Identify Top N sequences
+        from collections import Counter
+        counter = Counter(sequences)
+        top_seqs_counts = counter.most_common(self.num_top_sequences)
+        top_seqs = {seq for seq, count in top_seqs_counts}
+        
+        # Map to categories: 0..N-1 for top, -1 for others
+        seq_to_cat = {seq: i for i, (seq, _) in enumerate(top_seqs_counts)}
+        categories = []
+        
+        for seq in sequences:
+            if seq in top_seqs:
+                categories.append(seq_to_cat[seq])
+            else:
+                categories.append(-1)
+
+        # Limit samples
+        n = min(self.num_samples, len(states))
+        indices = torch.randperm(len(states))[:n].tolist()
+        states_sampled = [states[i] for i in indices]
+        categories_sampled = [categories[i] for i in indices]
+
+        # Visualize
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is not None:
+            self._create_scatter(
+                states_sampled, 
+                categories_sampled, 
+                top_seqs_counts, 
+                wandb_logger, 
+                trainer.global_step
+            )
+
+        return metrics
+
+    def _create_scatter(
+        self,
+        states: List[List[float]],
+        categories: List[int],
+        top_seqs_counts: List[Tuple[Tuple[int, ...], int]],
+        wandb_logger,
+        global_step: int,
+    ):
+        """Create scatter plot."""
+        try:
+            states_np = np.array(states)
+            # Add jitter to reveal overlaps
+            jitter = np.random.normal(0, 0.005, size=states_np.shape)
+            states_np = states_np + jitter
+            
+            cats_np = np.array(categories)
+
+            fig, ax = plt.subplots(figsize=(10, 8))
+
+            # Use nipy_spectral or tab20 for top sequences
+            # Since N=20, tab20 is perfect
+            cmap = plt.cm.get_cmap('tab20', self.num_top_sequences)
+            markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h', 'H', '+', 'x']
+
+            # Plot "Other" (Grey) first
+            mask_other = cats_np == -1
+            if np.any(mask_other):
+                ax.scatter(
+                    states_np[mask_other, 0], 
+                    states_np[mask_other, 1],
+                    c='lightgrey', 
+                    marker='.',
+                    alpha=0.3, 
+                    s=15, 
+                    label=f'Others ({np.sum(mask_other)})',
+                    zorder=1
+                )
+
+            # Plot Top N loop
+            for i, (seq, count) in enumerate(top_seqs_counts):
+                mask = cats_np == i
+                if np.any(mask):
+                    marker = markers[i % len(markers)]
+                    color = cmap(i)
+                    
+                    # Convert seq tuple to short string
+                    seq_str = str(seq)
+                    
+                    ax.scatter(
+                        states_np[mask, 0], 
+                        states_np[mask, 1],
+                        color=color,
+                        marker=marker,
+                        alpha=0.8, 
+                        s=40,
+                        label=f'{seq_str}: {count}',
+                        zorder=2
+                    )
+
+            ax.set_xlabel('State X')
+            ax.set_ylabel('State Y')
+            ax.set_title(f'State vs Top {self.num_top_sequences} Sequences (Step {global_step})')
+            ax.grid(True, alpha=0.3)
+
+            # Legend outside if too many
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+
+            plt.tight_layout()
+
+            # Convert to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img = Image.open(buf)
+
+            wandb_logger.log_image(
+                key="val/state_sequence_scatter",
+                images=[img],
+                caption=[f"Step {global_step}: Top {self.num_top_sequences} sequences by state"],
+            )
+
+            plt.close(fig)
+        except Exception as e:
+            print(f"Warning: state_sequence_scatter visualization failed: {e}")
 
 
 def create_validation_strategies(
@@ -1302,10 +2005,40 @@ def create_validation_strategies(
             **config.get("codebook_histogram", {}),
         ))
 
+    # Sequence histogram (combinations)
+    if config.get("sequence_histogram", {}).get("enabled", False):
+        strategies.append(LatentSequenceHistogramStrategy(
+            **config.get("sequence_histogram", {}),
+        ))
+
+    # All sequences histogram (long tail)
+    if config.get("all_sequences_histogram", {}).get("enabled", False):
+        strategies.append(AllSequencesHistogramStrategy(
+            **config.get("all_sequences_histogram", {}),
+        ))
+
     # Action-token scatter (for datasets with 2D actions like language_table)
     if config.get("action_token_scatter", {}).get("enabled", False):
         strategies.append(ActionTokenScatterStrategy(
             **config.get("action_token_scatter", {}),
+        ))
+
+    # Action-sequence scatter
+    if config.get("action_sequence_scatter", {}).get("enabled", False):
+        strategies.append(ActionSequenceScatterStrategy(
+            **config.get("action_sequence_scatter", {}),
+        ))
+
+    # Top sequences scatter
+    if config.get("top_sequences_scatter", {}).get("enabled", False):
+        strategies.append(TopSequencesScatterStrategy(
+            **config.get("top_sequences_scatter", {}),
+        ))
+
+    # State-sequence scatter
+    if config.get("state_sequence_scatter", {}).get("enabled", False):
+        strategies.append(StateSequenceScatterStrategy(
+            **config.get("state_sequence_scatter", {}),
         ))
 
     return strategies

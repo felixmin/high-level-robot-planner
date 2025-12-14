@@ -153,13 +153,14 @@ class ValidationStrategyCallback(Callback):
                     if key == "frames":
                         continue
                     val = batch[key]
-                    # Special handling for 'action' which gets transposed by default collate
-                    # Original: [[dx0, dy0], [dx1, dy1], ...] -> collated: [[dx0, dx1, ...], [dy0, dy1, ...]]
-                    if key == "action" and isinstance(val, (list, tuple)) and len(val) > 0:
+                    
+                    # Special handling for 'action' and 'initial_state' which get transposed by default collate
+                    # Original: [[dx0, dy0], ...] -> collated: [[dx0, ...], [dy0, ...]]
+                    if (key == "action" or key == "initial_state") and isinstance(val, (list, tuple)) and len(val) > 0:
                         if isinstance(val[0], torch.Tensor) and val[0].ndim > 0:
-                            # Reconstruct per-sample action: [dx_i, dy_i, ...]
-                            action_dims = [v[i].item() for v in val if i < len(v)]
-                            meta[key] = action_dims
+                            # Reconstruct per-sample: [dx_i, dy_i, ...]
+                            dims = [v[i].item() for v in val if i < len(v)]
+                            meta[key] = dims
                         else:
                             meta[key] = val[i] if i < len(val) else None
                     elif isinstance(val, (list, tuple)):

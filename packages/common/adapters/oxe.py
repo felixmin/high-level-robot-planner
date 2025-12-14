@@ -27,9 +27,11 @@ class OXEDatasetConfig:
     gcs_path: str
     image_key: str = "rgb"  # Key in observation dict for images
     instruction_key: str = "instruction"  # Key for language instruction
+    state_key: str = "effector_translation"  # Key for robot state (e.g. gripper pos)
     image_shape: Tuple[int, int, int] = (360, 640, 3)  # H, W, C
     control_frequency_hz: float = 10.0  # For time calculations
     action_dim: int = 2  # Dimensionality of action space (2 for language_table)
+    state_dim: int = 2  # Dimensionality of state space to extract
 
 
 # Registry of supported OXE datasets
@@ -39,6 +41,7 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/language_table/0.0.1",
         image_key="rgb",
         instruction_key="instruction",
+        state_key="effector_translation",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
     ),
@@ -48,6 +51,7 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/language_table_blocktorelative_oracle_sim/0.0.1",
         image_key="rgb",
         instruction_key="instruction",
+        state_key="effector_translation",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
     ),
@@ -180,11 +184,13 @@ class OXEFramePairDataset(IterableDataset):
 
         image_key = self.config.image_key
         instruction_key = self.config.instruction_key
+        state_key = getattr(self.config, "state_key", "effector_translation")
         offset = self.offset
         image_size = self.image_size
         return_metadata = self.return_metadata
         dataset_name = self.config.name
         action_dim = self.config.action_dim
+        state_dim = getattr(self.config, "state_dim", 2)
 
         def episode_to_pairs_generator():
             """Generator that yields frame pairs from episodes."""
@@ -235,6 +241,15 @@ class OXEFramePairDataset(IterableDataset):
                         actions = np.stack([s["action"].numpy() for s in steps])
                     except Exception:
                         actions = None
+                        
+                # Extract states if available
+                states = None
+                if return_metadata and state_key in steps[0]["observation"]:
+                    try:
+                        # Only take first N dims (e.g. 2 for 2D plot)
+                        states = np.stack([s["observation"][state_key].numpy()[:state_dim] for s in steps])
+                    except Exception:
+                        states = None
 
                 # Generate pairs
                 for t in range(n_steps - offset):
@@ -243,11 +258,16 @@ class OXEFramePairDataset(IterableDataset):
 
                     if return_metadata:
                         # Compute accumulated action (sum of actions from t to t+offset)
-                        # This represents the total movement between the two frames
                         if actions is not None:
                             cumulative_action = actions[t : t + offset].sum(axis=0)
                         else:
                             cumulative_action = np.zeros(action_dim, dtype=np.float32)
+                            
+                        # Get initial state at start of pair
+                        if states is not None:
+                            initial_state = states[t]
+                        else:
+                            initial_state = np.zeros(state_dim, dtype=np.float32)
 
                         meta = {
                             "episode_id": episode_id,
@@ -257,6 +277,7 @@ class OXEFramePairDataset(IterableDataset):
                             "dataset_type": "oxe",
                             "dataset_name": dataset_name,
                             "action": cumulative_action.astype(np.float32),
+                            "initial_state": initial_state.astype(np.float32),
                         }
                         yield pair, meta
                     else:
@@ -277,6 +298,8 @@ class OXEFramePairDataset(IterableDataset):
                     "dataset_name": tf.TensorSpec(shape=(), dtype=tf.string),
                     # Action: cumulative action between frame pairs (e.g., 2D for language_table)
                     "action": tf.TensorSpec(shape=(action_dim,), dtype=tf.float32),
+                    # State: initial state
+                    "initial_state": tf.TensorSpec(shape=(state_dim,), dtype=tf.float32),
                 },
             )
         else:
@@ -339,6 +362,8 @@ class OXEFramePairDataset(IterableDataset):
                         ),
                         # Cumulative action between frames (for visualization)
                         "action": meta_tf["action"].numpy().tolist(),
+                        # Initial state (for visualization)
+                        "initial_state": meta_tf["initial_state"].numpy().tolist(),
                     }
                     yield {"frames": pair_pt, **meta}
                 else:
