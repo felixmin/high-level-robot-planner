@@ -48,6 +48,13 @@ training:
         every_n_validations: 1
       clustering:
         enabled: false
+      codebook_histogram:
+        enabled: true
+        every_n_validations: 1
+      action_token_scatter:
+        enabled: true
+        every_n_validations: 1
+        num_samples: 500
 
 logging:
   use_wandb: false

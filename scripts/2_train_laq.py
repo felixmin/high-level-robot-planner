@@ -277,7 +277,12 @@ def main(cfg: DictConfig):
     print("Starting Training")
     print("=" * 80)
 
-    trainer.fit(task, datamodule=datamodule)
+    # Check for resume checkpoint
+    ckpt_path = training_config.get("resume_from_checkpoint", None)
+    if ckpt_path:
+        print(f"✓ Resuming from checkpoint: {ckpt_path}")
+
+    trainer.fit(task, datamodule=datamodule, ckpt_path=ckpt_path)
 
     print("\n" + "=" * 80)
     print("Training Complete!")

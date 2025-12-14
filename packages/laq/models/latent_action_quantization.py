@@ -138,6 +138,19 @@ class LatentActionQuantization(nn.Module):
         self,
         tokens
     ):
+        """
+        Encodes continuous video tokens into latent representations.
+
+        Args:
+            tokens: Continuous feature vectors (embeddings) of shape [B, T, h, w, d].
+                    These are NOT discrete indices.
+                    h, w = patch_height_width (e.g., 8x8)
+                    d = dim (e.g., 1024)
+
+        Returns:
+            first_tokens: Latent representation of the first frame [B, 1, h, w, d]
+            last_tokens: Latent representation of the last frame [B, 1, h, w, d]
+        """
         b = tokens.shape[0]
         h, w = self.patch_height_width
 
@@ -170,6 +183,19 @@ class LatentActionQuantization(nn.Module):
         tokens,
         actions,
     ):
+        """
+        Decodes latent actions + context frame into reconstructed video.
+
+        Args:
+            tokens: Continuous embeddings of the first frame (context) [B, 1, h, w, d]
+            actions: Continuous embeddings of the latent action [B, 1, h', w', d].
+                     These are vectors projected from the codebook (e.g. 1024-dim),
+                     NOT discrete integer indices.
+                     h', w' depend on code_seq_len (e.g., 2x2 for len=4).
+
+        Returns:
+            recon_video: Reconstructed pixel values [B, C, 1, H, W]
+        """
         b = tokens.shape[0]
         h, w = self.patch_height_width
 
@@ -204,6 +230,15 @@ class LatentActionQuantization(nn.Module):
         return_recons_only = False,
         return_only_codebook_ids = False,
     ):
+        """
+        Forward pass for training.
+
+        Flow:
+        1. Preprocess: Image -> Patch Embeddings (Continuous 'tokens')
+        2. Encode: Patches -> Latent Features
+        3. VQ (NSVQ): Latent Features -> Quantized Vectors (with noise injection for grad flow)
+        4. Decode: Quantized Vectors + First Frame -> Reconstructed Next Frame
+        """
         assert video.ndim in {4, 5}
 
         is_image = video.ndim == 4

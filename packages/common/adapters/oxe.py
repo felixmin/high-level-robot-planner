@@ -29,6 +29,7 @@ class OXEDatasetConfig:
     instruction_key: str = "instruction"  # Key for language instruction
     image_shape: Tuple[int, int, int] = (360, 640, 3)  # H, W, C
     control_frequency_hz: float = 10.0  # For time calculations
+    action_dim: int = 2  # Dimensionality of action space (2 for language_table)
 
 
 # Registry of supported OXE datasets
@@ -183,6 +184,7 @@ class OXEFramePairDataset(IterableDataset):
         image_size = self.image_size
         return_metadata = self.return_metadata
         dataset_name = self.config.name
+        action_dim = self.config.action_dim
 
         def episode_to_pairs_generator():
             """Generator that yields frame pairs from episodes."""
@@ -226,20 +228,37 @@ class OXEFramePairDataset(IterableDataset):
 
                 frames = frames.numpy()
 
+                # Extract actions if available (for visualization)
+                actions = None
+                if return_metadata and "action" in steps[0]:
+                    try:
+                        actions = np.stack([s["action"].numpy() for s in steps])
+                    except Exception:
+                        actions = None
+
                 # Generate pairs
                 for t in range(n_steps - offset):
                     # Stack: [2, H, W, C]
                     pair = np.stack([frames[t], frames[t + offset]], axis=0)
 
                     if return_metadata:
-                        yield pair, {
+                        # Compute accumulated action (sum of actions from t to t+offset)
+                        # This represents the total movement between the two frames
+                        if actions is not None:
+                            cumulative_action = actions[t : t + offset].sum(axis=0)
+                        else:
+                            cumulative_action = np.zeros(action_dim, dtype=np.float32)
+
+                        meta = {
                             "episode_id": episode_id,
                             "frame_idx": t,
                             "offset": offset,
                             "instruction": instruction,
                             "dataset_type": "oxe",
                             "dataset_name": dataset_name,
+                            "action": cumulative_action.astype(np.float32),
                         }
+                        yield pair, meta
                     else:
                         yield pair
 
@@ -256,6 +275,8 @@ class OXEFramePairDataset(IterableDataset):
                     "instruction": tf.TensorSpec(shape=(), dtype=tf.string),
                     "dataset_type": tf.TensorSpec(shape=(), dtype=tf.string),
                     "dataset_name": tf.TensorSpec(shape=(), dtype=tf.string),
+                    # Action: cumulative action between frame pairs (e.g., 2D for language_table)
+                    "action": tf.TensorSpec(shape=(action_dim,), dtype=tf.float32),
                 },
             )
         else:
@@ -316,6 +337,8 @@ class OXEFramePairDataset(IterableDataset):
                             if isinstance(meta_tf["dataset_name"].numpy(), bytes)
                             else self.config.name
                         ),
+                        # Cumulative action between frames (for visualization)
+                        "action": meta_tf["action"].numpy().tolist(),
                     }
                     yield {"frames": pair_pt, **meta}
                 else:

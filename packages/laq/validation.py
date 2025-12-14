@@ -30,6 +30,14 @@ from torchvision.utils import make_grid
 from einops import rearrange
 import lightning.pytorch as pl
 
+# Configure matplotlib backend for headless/multi-threaded environments
+# Must be done before importing pyplot anywhere
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import io
+from PIL import Image
+
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -661,10 +669,13 @@ class LatentTransferStrategy(ValidationStrategy):
             
             # Encode source pairs to get latent actions
             # Use task helper which handles raw pixels -> quantized latents
-            source_latents, _ = pl_module.encode_latents(source_frames)  # z_a
+            source_latents, source_indices = pl_module.encode_latents(source_frames)  # z_a
             
             # Get target initial frames
             target_s0 = target_frames[:, :, 0:1]  # s_b (keep dim for concat)
+
+            # Also encode target frames to get their true indices (for comparison)
+            _, target_indices = pl_module.encode_latents(target_frames)
             
             # Decode: apply source latent to target initial frame
             # Use task helper which handles embedding and reshaping
@@ -705,6 +716,8 @@ class LatentTransferStrategy(ValidationStrategy):
                 target_frames[:4].cpu(),
                 transferred_recons[:4].cpu(),
                 self_recons[:4].cpu(),  # True reconstruction for comparison
+                source_indices[:4].cpu(),
+                target_indices[:4].cpu(),
                 wandb_logger,
                 trainer.global_step,
             )
@@ -725,6 +738,8 @@ class LatentTransferStrategy(ValidationStrategy):
         target_frames: torch.Tensor,
         transferred: torch.Tensor,
         true_recon: torch.Tensor,
+        source_indices: torch.Tensor,
+        target_indices: torch.Tensor,
         wandb_logger,
         global_step: int,
     ):
@@ -735,12 +750,9 @@ class LatentTransferStrategy(ValidationStrategy):
         1. s_a: Source first frame
         2. s_a': Source second frame (ground truth action result)
         3. s_b: Target first frame
-        4. D(s_b, z_b): True reconstruction (using target's own latent)
-        5. D(s_b, z_a): Transfer reconstruction (using source's latent)
+        4. D(s_b, z_a): Transfer reconstruction (using source's latent)
+        5. D(s_b, z_b): True reconstruction (using target's own latent)
         6. s_b': Target second frame (ground truth)
-
-        Comparing columns 4 vs 5 shows the effect of the transferred action.
-        Comparing column 5 vs 6 shows transfer error.
         """
         s_a = source_frames[:, :, 0]          # Source first frame
         s_a_prime = source_frames[:, :, 1]    # Source action result (GT)
@@ -749,19 +761,67 @@ class LatentTransferStrategy(ValidationStrategy):
         s_b_recon_transfer = transferred      # D(s_b, z_a) - transfer recon
         s_b_prime_true = target_frames[:, :, 1]  # Target GT
 
-        imgs = torch.stack([
-            s_a, s_a_prime, s_b, s_b_recon_true, s_b_recon_transfer, s_b_prime_true
-        ], dim=0)
-        imgs = rearrange(imgs, 'r b c h w -> (b r) c h w')
-        imgs = imgs.clamp(0.0, 1.0)
+        num_samples = len(s_a)
+        if num_samples == 0:
+            return
 
-        grid = make_grid(imgs, nrow=6, normalize=False)
+        # Create figure
+        # 6 columns of images
+        fig, axes = plt.subplots(num_samples, 6, figsize=(20, 3.5 * num_samples), squeeze=False)
+        
+        # Column titles
+        col_titles = ["s_a", "s_a'", "s_b", "D(s_b, z_a)\n(Transfer)", "D(s_b, z_b)\n(Self)", "s_b'"]
+        
+        for i in range(num_samples):
+            # Row images (swapped 4 and 5 as requested)
+            # 4: Transfer (z_a applied to s_b)
+            # 5: Self (z_b applied to s_b)
+            imgs = [
+                s_a[i], 
+                s_a_prime[i], 
+                s_b[i], 
+                s_b_recon_transfer[i], 
+                s_b_recon_true[i], 
+                s_b_prime_true[i]
+            ]
+            
+            # Prepare token string
+            tokens_a = str(source_indices[i].tolist())
+            tokens_b = str(target_indices[i].tolist())
+            
+            row_text = f"Row {i}\nDet(a): {tokens_a}\nDet(b): {tokens_b}\nApp(b): {tokens_a}"
+            
+            for j, img in enumerate(imgs):
+                ax = axes[i, j]
+                
+                # Convert [C, H, W] to [H, W, C] for imshow and clamp
+                img_np = img.permute(1, 2, 0).clamp(0.0, 1.0).numpy()
+                
+                ax.imshow(img_np)
+                ax.axis('off')
+                
+                if i == 0:
+                    ax.set_title(col_titles[j], fontsize=12)
+                
+                if j == 0:
+                    # Add text to the left of the first image of the row
+                    ax.text(-0.2, 0.5, row_text, transform=ax.transAxes, 
+                            va='center', ha='right', fontsize=10, rotation=0, family='monospace')
 
+        plt.tight_layout()
+        
+        # Save to buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        buf.seek(0)
+        img = Image.open(buf)
+        
         wandb_logger.log_image(
             key="val/latent_transfer",
-            images=[grid],
-            caption=[f"Step {global_step}: s_a | s_a' | s_b | D(s_b,z_b) | D(s_b,z_a) | s_b'"],
+            images=[img],
+            caption=[f"Step {global_step}"],
         )
+        plt.close(fig)
 
 
 class ClusteringStrategy(ValidationStrategy):
@@ -907,6 +967,285 @@ class ClusteringStrategy(ValidationStrategy):
             )
 
 
+class CodebookHistogramStrategy(ValidationStrategy):
+    """
+    Visualize codebook usage distribution as a histogram.
+
+    Shows which codebook entries are used most/least frequently,
+    helping identify if the codebook is being utilized effectively.
+    """
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        every_n_validations: int = 1,
+        **kwargs,
+    ):
+        super().__init__(
+            name="codebook_histogram",
+            enabled=enabled,
+            every_n_validations=every_n_validations,
+        )
+
+    def needs_caching(self) -> bool:
+        return True  # Need codes for histogram
+
+    def run(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+    ) -> Dict[str, Any]:
+        """Generate codebook usage histogram."""
+        metrics = {}
+
+        all_codes = cache.get_all_codes()
+        if all_codes is None or len(all_codes) == 0:
+            return metrics
+
+        # Flatten codes to get all codebook indices used
+        # all_codes shape: [N, code_seq_len] where values are codebook indices
+        codes_flat = all_codes.flatten()
+
+        # Get codebook size from model (NSVQ uses num_embeddings)
+        codebook_size = pl_module.model.vq.num_embeddings
+
+        # Count usage per codebook entry
+        counts = torch.bincount(codes_flat.long(), minlength=codebook_size)
+
+        # Compute metrics
+        total_codes = counts.sum().item()
+        used_codes = (counts > 0).sum().item()
+        metrics["val/codebook_utilization"] = used_codes / codebook_size
+        metrics["val/codebook_entropy"] = self._entropy(counts.float())
+
+        # Log to trainer
+        pl_module.log_dict(metrics, sync_dist=True)
+
+        # Create histogram visualization
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is not None:
+            self._create_histogram(counts, wandb_logger, trainer.global_step, codebook_size)
+
+        return metrics
+
+    def _entropy(self, counts: torch.Tensor) -> float:
+        """Compute entropy of codebook distribution."""
+        probs = counts / counts.sum()
+        probs = probs[probs > 0]
+        return -(probs * probs.log()).sum().item()
+
+    def _get_wandb_logger(self, trainer: pl.Trainer):
+        if not WANDB_AVAILABLE:
+            return None
+        for logger in trainer.loggers:
+            if isinstance(logger, pl.loggers.WandbLogger):
+                return logger
+        return None
+
+    def _create_histogram(
+        self,
+        counts: torch.Tensor,
+        wandb_logger,
+        global_step: int,
+        codebook_size: int,
+    ):
+        """Create and log histogram of codebook usage."""
+        try:
+            import matplotlib.pyplot as plt
+            import io
+            from PIL import Image
+
+            fig, ax = plt.subplots(figsize=(10, 4))
+
+            x = range(codebook_size)
+            ax.bar(x, counts.cpu().numpy(), color='steelblue', alpha=0.8)
+            ax.set_xlabel('Codebook Index')
+            ax.set_ylabel('Usage Count')
+            ax.set_title(f'Codebook Usage Distribution (Step {global_step})')
+
+            # Add statistics text
+            used = (counts > 0).sum().item()
+            ax.text(0.95, 0.95, f'Used: {used}/{codebook_size}',
+                   transform=ax.transAxes, ha='right', va='top',
+                   fontsize=10, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+            plt.tight_layout()
+
+            # Convert to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img = Image.open(buf)
+
+            wandb_logger.log_image(
+                key="val/codebook_histogram",
+                images=[img],
+                caption=[f"Step {global_step}"],
+            )
+
+            plt.close(fig)
+        except ImportError as e:
+            print(f"Warning: codebook_histogram requires matplotlib: {e}")
+        except Exception as e:
+            print(f"Warning: codebook_histogram visualization failed: {e}")
+
+
+class ActionTokenScatterStrategy(ValidationStrategy):
+    """
+    Scatter plot of 2D actions colored by their assigned codebook tokens.
+
+    Only runs when samples have 'action' metadata with 2D values.
+    This helps visualize how the codebook discretizes continuous action space.
+
+    For 3D actions, could extend to show 2D projections or use different viz.
+    """
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        every_n_validations: int = 1,
+        num_samples: int = 1000,
+        **kwargs,
+    ):
+        super().__init__(
+            name="action_token_scatter",
+            enabled=enabled,
+            every_n_validations=every_n_validations,
+        )
+        self.num_samples = num_samples
+
+    def needs_caching(self) -> bool:
+        return True
+
+    def run(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+    ) -> Dict[str, Any]:
+        """Generate action-token scatter plot."""
+        metrics = {}
+
+        all_frames = cache.get_all_frames()
+        all_metadata = cache.get_all_metadata()
+        all_codes = cache.get_all_codes()
+
+        if all_frames is None or not all_metadata or all_codes is None:
+            return metrics
+
+        # Check if we have action data
+        actions = []
+        codes_list = []
+
+        for i, meta in enumerate(all_metadata):
+            if "action" not in meta:
+                continue
+            action = meta["action"]
+            # Only support 2D actions for now
+            if isinstance(action, (list, tuple)) and len(action) == 2:
+                actions.append(action)
+                # Get corresponding code (use first token if multi-token)
+                if i < len(all_codes):
+                    code = all_codes[i]
+                    if code.ndim > 0:
+                        code = code[0]  # Use first token
+                    codes_list.append(code.item())
+
+        if len(actions) < 10:
+            # Not enough 2D action samples
+            return metrics
+
+        # Limit samples
+        n = min(self.num_samples, len(actions))
+        indices = torch.randperm(len(actions))[:n].tolist()
+        actions = [actions[i] for i in indices]
+        codes_list = [codes_list[i] for i in indices]
+
+        # Create scatter plot
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is not None:
+            self._create_scatter(
+                actions, codes_list, wandb_logger, trainer.global_step,
+                pl_module.model.vq.num_embeddings
+            )
+
+        return metrics
+
+    def _get_wandb_logger(self, trainer: pl.Trainer):
+        if not WANDB_AVAILABLE:
+            return None
+        for logger in trainer.loggers:
+            if isinstance(logger, pl.loggers.WandbLogger):
+                return logger
+        return None
+
+    def _create_scatter(
+        self,
+        actions: List[List[float]],
+        codes: List[int],
+        wandb_logger,
+        global_step: int,
+        codebook_size: int,
+    ):
+        """Create and log scatter plot of actions colored by tokens."""
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            import io
+            from PIL import Image
+
+            actions_np = np.array(actions)
+            codes_np = np.array(codes)
+
+            fig, ax = plt.subplots(figsize=(8, 8))
+
+            # Use a colormap with enough distinct colors
+            cmap = plt.cm.get_cmap('tab20', codebook_size)
+
+            scatter = ax.scatter(
+                actions_np[:, 0], actions_np[:, 1],
+                c=codes_np, cmap=cmap, alpha=0.6, s=20,
+                vmin=0, vmax=codebook_size-1
+            )
+
+            ax.set_xlabel('Action X (cumulative dx)')
+            ax.set_ylabel('Action Y (cumulative dy)')
+            ax.set_title(f'2D Actions Colored by Codebook Token (Step {global_step})')
+            ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
+            ax.axvline(x=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
+            ax.set_aspect('equal', adjustable='box')
+
+            # Add colorbar
+            cbar = plt.colorbar(scatter, ax=ax, label='Token ID')
+
+            # Add statistics
+            unique_codes = len(set(codes))
+            ax.text(0.02, 0.98, f'Samples: {len(actions)}\nUnique tokens: {unique_codes}',
+                   transform=ax.transAxes, ha='left', va='top',
+                   fontsize=9, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+            plt.tight_layout()
+
+            # Convert to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img = Image.open(buf)
+
+            wandb_logger.log_image(
+                key="val/action_token_scatter",
+                images=[img],
+                caption=[f"Step {global_step}: 2D actions colored by assigned token"],
+            )
+
+            plt.close(fig)
+        except ImportError as e:
+            print(f"Warning: action_token_scatter requires matplotlib: {e}")
+        except Exception as e:
+            print(f"Warning: action_token_scatter visualization failed: {e}")
+
+
 def create_validation_strategies(
     config: Dict[str, Any],
     val_buckets: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -955,6 +1294,18 @@ def create_validation_strategies(
     if config.get("clustering", {}).get("enabled", False):
         strategies.append(ClusteringStrategy(
             **config.get("clustering", {}),
+        ))
+
+    # Codebook histogram
+    if config.get("codebook_histogram", {}).get("enabled", False):
+        strategies.append(CodebookHistogramStrategy(
+            **config.get("codebook_histogram", {}),
+        ))
+
+    # Action-token scatter (for datasets with 2D actions like language_table)
+    if config.get("action_token_scatter", {}).get("enabled", False):
+        strategies.append(ActionTokenScatterStrategy(
+            **config.get("action_token_scatter", {}),
         ))
 
     return strategies
