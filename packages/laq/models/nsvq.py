@@ -8,7 +8,7 @@ import torch.distributions.uniform as uniform_dist
 ## add project_in, project_out layer 
 ## FYI vector_quantize_pytorch
 class NSVQ(torch.nn.Module):
-    def __init__(self, dim, num_embeddings, embedding_dim, device=torch.device('cpu'), discarding_threshold=0.1, initialization='normal', code_seq_len=1, patch_size=32, image_size = 256):
+    def __init__(self, dim, num_embeddings, embedding_dim, device=torch.device('cpu'), discarding_threshold=0.1, initialization='normal', code_seq_len=1, patch_size=32, image_size=256, grid_size=None):
         super(NSVQ, self).__init__()
 
         """
@@ -25,6 +25,8 @@ class NSVQ(torch.nn.Module):
         4. discarding_threshold = Percentage threshold for discarding unused codebooks
         
         5. initialization = Initial distribution for codebooks
+        
+        6. grid_size = Explicit spatial grid size (h, w). If None, computed from image_size/patch_size
 
         """
         self.image_size = image_size
@@ -35,6 +37,12 @@ class NSVQ(torch.nn.Module):
         self.eps = 1e-12
         self.dim = dim
         self.patch_size = patch_size
+        
+        # Compute effective grid size
+        if grid_size is not None:
+            self.grid_h, self.grid_w = grid_size
+        else:
+            self.grid_h = self.grid_w = int(image_size / patch_size)
 
         if initialization == 'normal':
             codebooks = torch.randn(self.num_embeddings, self.embedding_dim, device=device)
@@ -51,51 +59,76 @@ class NSVQ(torch.nn.Module):
         self.project_in = torch.nn.Linear(dim, embedding_dim)
         self.project_out = torch.nn.Linear(embedding_dim, dim) 
         
-        # 8 * 8  => 4 * 4 => 2 * 2
-        #assert patch_size == 32
-        if code_seq_len == 1:
-            self.cnn_encoder = torch.nn.Sequential(
-                torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
-                torch.nn.ReLU(),
-                torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=4, stride=1, padding=0),
-            )
-        elif code_seq_len == 2:
-            self.cnn_encoder = torch.nn.Sequential(
-                torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
-                torch.nn.ReLU(),
-                torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=(3, 4), stride=1, padding=0),
-            )
-            
-        elif code_seq_len == 4:
-            self.cnn_encoder = torch.nn.Sequential(
-                torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
-                torch.nn.ReLU(),
-                torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=1, padding=0),
-            )
-        elif code_seq_len == 16:
-            self.cnn_encoder = torch.nn.Sequential(
-                torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),  # 16x16 -> 8x8
-                torch.nn.ReLU(),
-                torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),  # 8x8 -> 4x4
-            )
-        elif code_seq_len == 64:
-            self.cnn_encoder = torch.nn.Sequential(
-                torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),  # 16x16 -> 8x8
-            )
-        elif code_seq_len == 256:
-            self.cnn_encoder = torch.nn.Sequential(
-                torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),  # 32x32 -> 16x16
-            )
+        # Build CNN encoder based on grid size and target code_seq_len
+        # Use predefined architectures for standard grid sizes, dynamic for others
+        input_size = self.grid_h  # Assuming square grid
+        
+        if input_size == 8:
+            # Original architectures for 8x8 grid (from image_size=256, patch_size=32)
+            if code_seq_len == 1:
+                self.cnn_encoder = torch.nn.Sequential(
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
+                    torch.nn.ReLU(),
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=4, stride=1, padding=0),
+                )
+            elif code_seq_len == 2:
+                self.cnn_encoder = torch.nn.Sequential(
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
+                    torch.nn.ReLU(),
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=(3, 4), stride=1, padding=0),
+                )
+            elif code_seq_len == 4:
+                self.cnn_encoder = torch.nn.Sequential(
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
+                    torch.nn.ReLU(),
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=1, padding=0),
+                )
+            else:
+                raise ValueError(f"code_seq_len={code_seq_len} not supported for 8x8 grid")
+        elif input_size == 16:
+            # Architectures for 16x16 grid (from DINO with patch_size=16 on 256x256)
+            if code_seq_len == 1:
+                # 16 -> 8 -> 4 -> 2 -> 1
+                self.cnn_encoder = torch.nn.Sequential(
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
+                    torch.nn.ReLU(),
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
+                    torch.nn.ReLU(),
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=4, stride=1, padding=0),
+                )
+            elif code_seq_len == 4:
+                # 16 -> 8 -> 4 -> 2
+                self.cnn_encoder = torch.nn.Sequential(
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
+                    torch.nn.ReLU(),
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
+                    torch.nn.ReLU(),
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=1, padding=0),
+                )
+            elif code_seq_len == 16:
+                # 16 -> 8 -> 4
+                self.cnn_encoder = torch.nn.Sequential(
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
+                    torch.nn.ReLU(),
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
+                )
+            elif code_seq_len == 64:
+                # 16 -> 8
+                self.cnn_encoder = torch.nn.Sequential(
+                    torch.nn.Conv2d(in_channels=embedding_dim, out_channels=embedding_dim, kernel_size=3, stride=2, padding=1),
+                )
+            else:
+                raise ValueError(f"code_seq_len={code_seq_len} not supported for 16x16 grid")
         else:
-            raise ValueError("Not Implement: code_seq_len should be one of the 1 and 4 integers")
+            raise ValueError(f"Grid size {input_size}x{input_size} not supported. Use 8 or 16.")
 
     def encode(self, input_data, batch_size):
         # compute the distances between input and codebooks vectors
         input_data = self.project_in(input_data) # b * 64 * 32
         # change the order of the input_data to b * 32 * 64
         input_data = input_data.permute(0, 2, 1).contiguous()
-        # reshape input_data to 4D b*h*w*d
-        input_data = input_data.reshape(batch_size, self.embedding_dim, int(self.image_size/self.patch_size), int(self.image_size/self.patch_size))
+        # reshape input_data to 4D b*h*w*d using actual grid size
+        input_data = input_data.reshape(batch_size, self.embedding_dim, self.grid_h, self.grid_w)
         input_data = self.cnn_encoder(input_data) # 1*1 tensor
         input_data = input_data.reshape(batch_size, self.embedding_dim, -1) # b * 32 * d^2
         input_data = input_data.permute(0, 2, 1).contiguous() # b * 1 * 32
@@ -222,7 +255,7 @@ class NSVQ(torch.nn.Module):
                     used_codebooks = used
 
                 self.codebooks[unused_indices] *= 0
-                self.codebooks[unused_indices] += used_codebooks[range(unused_count)] + self.eps * torch.randn(
+                self.codebooks[unused_indices] += used_codebooks[range(unused_count)] + 0.02 * torch.randn(
                     (unused_count, self.embedding_dim), device=self.device).clone()
 
             print(f'************* Replaced ' + str(unused_count) + f' codebooks *************')

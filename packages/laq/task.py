@@ -19,6 +19,7 @@ import lightning.pytorch as pl
 from omegaconf import DictConfig
 
 from laq.models.latent_action_quantization import LatentActionQuantization
+from laq.models.dino import DINOFeatureExtractor
 
 
 def separate_weight_decayable_params(
@@ -96,7 +97,30 @@ class LAQTask(pl.LightningModule):
             channels=model_config.get("channels", 3),
             attn_dropout=model_config.get("attn_dropout", 0.0),
             ff_dropout=model_config.get("ff_dropout", 0.0),
+            use_dinov3_encoder=model_config.get("use_dinov3_encoder", False),
+            dinov3_model_name=model_config.get("dinov3_model_name", "facebook/dinov3-vits16-pretrain-lvd1689m"),
+            dinov3_pool_to_grid=model_config.get("dinov3_pool_to_grid", None),
         )
+        
+        # Perceptual Loss Setup
+        self.perceptual_loss_config = training_config.get("perceptual_loss", {})
+        self.use_perceptual_loss = self.perceptual_loss_config.get("enabled", False)
+        
+        if self.use_perceptual_loss:
+            model_name = self.perceptual_loss_config.get("model_name", "facebook/dinov3-vits16-pretrain-lvd1689m")
+            print(f"Initializing DINO Perceptual Loss with {model_name}")
+            # Handle both int and tuple image_size
+            img_size = model_config.image_size
+            target_size = img_size[0] if isinstance(img_size, (list, tuple)) else img_size
+            self.perceptual_loss_net = DINOFeatureExtractor(
+                model_name=model_name,
+                freeze=True,
+                target_size=target_size
+            )
+            # Ensure it's in eval mode and frozen (handled by init but good to be safe)
+            self.perceptual_loss_net.eval()
+            for p in self.perceptual_loss_net.parameters():
+                p.requires_grad = False
 
         # Storage for validation and training batches (for visualization)
         self.validation_batch = None
@@ -107,9 +131,15 @@ class LAQTask(pl.LightningModule):
         video: torch.Tensor,
         step: int = 0,
         return_recons_only: bool = False,
+        return_only_codebook_ids: bool = False,
     ) -> Any:
         """Forward pass through LAQ model."""
-        return self.model(video, step=step, return_recons_only=return_recons_only)
+        return self.model(
+            video, 
+            step=step, 
+            return_recons_only=return_recons_only,
+            return_only_codebook_ids=return_only_codebook_ids
+        )
 
     def training_step(
         self,
@@ -133,11 +163,55 @@ class LAQTask(pl.LightningModule):
             frames = batch
 
         # Forward pass
-        loss, num_unique = self.model(frames, step=self.global_step)
+        # model.forward returns (loss, num_unique, recon_video)
+        pixel_loss, num_unique, recon_video = self.model(frames, step=self.global_step)
+        
+        total_loss = pixel_loss
+
+        # Add Perceptual Loss
+        if self.use_perceptual_loss:
+            # Target is the second frame (index 1)
+            # frames: [B, C, 2, H, W] -> target: [B, C, H, W]
+            target_frame = frames[:, :, 1]
+            
+            # Extract features for target and recon
+            layers = self.perceptual_loss_config.get("layers", [6, 11]) # Default for small
+            
+            # Using torch.no_grad() for target features
+            with torch.no_grad():
+                target_feats = self.perceptual_loss_net(
+                    target_frame, 
+                    output_hidden_states=True, 
+                    layer_indices=layers
+                )
+            
+            # Recon features (keep grad)
+            # Clamp reconstruction to [0, 1] before passing to DINO (which expects valid images)
+            # This is critical because DINO normalization (mean/std) assumes [0, 1] inputs.
+            # Unbounded reconstruction can lead to exploded features/gradients.
+            recon_video_clamped = torch.clamp(recon_video, 0.0, 1.0)
+            
+            recon_feats = self.perceptual_loss_net(
+                recon_video_clamped, 
+                output_hidden_states=True, 
+                layer_indices=layers
+            )
+            
+            # Compute L1 loss between features
+            p_loss = 0.0
+            for r_f, t_f in zip(recon_feats, target_feats):
+                p_loss += F.l1_loss(r_f, t_f)
+            
+            weight = self.perceptual_loss_config.get("weight", 1.0)
+            total_loss = total_loss + (weight * p_loss)
+            
+            if self._trainer is not None:
+                self.log("train/perceptual_loss", p_loss, prog_bar=True, sync_dist=True)
 
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
-            self.log("train/loss", loss, prog_bar=True, sync_dist=True)
+            self.log("train/loss", total_loss, prog_bar=True, sync_dist=True)
+            self.log("train/pixel_loss", pixel_loss, prog_bar=True, sync_dist=True)
             self.log("train/num_unique_codes", num_unique, prog_bar=True, sync_dist=True)
             self.log("train/lr", self.optimizers().param_groups[0]["lr"], prog_bar=True)
 
@@ -145,7 +219,7 @@ class LAQTask(pl.LightningModule):
         if batch_idx == 0 and self.training_batch is None:
             self.training_batch = frames[:8].detach().cpu()  # Store up to 8 samples
 
-        return loss
+        return total_loss
 
     def validation_step(
         self,
@@ -170,18 +244,47 @@ class LAQTask(pl.LightningModule):
 
         # Forward pass - use step=0 to avoid codebook replacement during validation
         # (LAPA behavior: codebook replacement only during training via step != 0 check)
-        loss, num_unique = self.model(frames, step=0)
+        pixel_loss, num_unique, recon_video = self.model(frames, step=0)
+        
+        total_loss = pixel_loss
+        
+        if self.use_perceptual_loss:
+            target_frame = frames[:, :, 1]
+            layers = self.perceptual_loss_config.get("layers", [6, 11])
+            
+            # No grad for validation
+            with torch.no_grad():
+                target_feats = self.perceptual_loss_net(
+                    target_frame, output_hidden_states=True, layer_indices=layers
+                )
+                
+                # Clamp for consistency with training
+                recon_video_clamped = torch.clamp(recon_video, 0.0, 1.0)
+                recon_feats = self.perceptual_loss_net(
+                    recon_video_clamped, output_hidden_states=True, layer_indices=layers
+                )
+                
+                p_loss = 0.0
+                for r_f, t_f in zip(recon_feats, target_feats):
+                    p_loss += F.l1_loss(r_f, t_f)
+                
+            weight = self.perceptual_loss_config.get("weight", 1.0)
+            total_loss = total_loss + (weight * p_loss)
+            
+            if self._trainer is not None:
+                self.log("val/perceptual_loss", p_loss, sync_dist=True)
 
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
-            self.log("val/loss", loss, prog_bar=True, sync_dist=True)
+            self.log("val/loss", total_loss, prog_bar=True, sync_dist=True)
+            self.log("val/pixel_loss", pixel_loss, sync_dist=True)
             self.log("val/num_unique_codes", num_unique, sync_dist=True)
 
         # Store first batch for visualization
         if batch_idx == 0 and self.validation_batch is None:
             self.validation_batch = frames[:8].detach().cpu()  # Store up to 8 samples
 
-        return loss
+        return total_loss
 
     def on_train_epoch_end(self) -> None:
         """Called at the end of training epoch."""
@@ -344,7 +447,8 @@ class LAQTask(pl.LightningModule):
                 first_frames = first_frames.unsqueeze(2)  # [B, C, H, W] -> [B, C, 1, H, W]
 
             # Get first frame tokens
-            first_frame_tokens = self.model.to_patch_emb_first_frame(first_frames)
+            # Use decoder_context_projection to match model forward pass (handles DINO vs learned embeddings)
+            first_frame_tokens = self.model.decoder_context_projection(first_frames)
 
             # Reshape latents for decode
             code_seq_len = self.model.code_seq_len

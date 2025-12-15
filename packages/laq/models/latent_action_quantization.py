@@ -9,6 +9,7 @@ from einops.layers.torch import Rearrange
 
 from laq.models.attention import Transformer, ContinuousPositionBias
 from laq.models.nsvq import NSVQ
+from laq.models.dino import DINOFeatureExtractor, DINOEncoder, DINOWrapper
 
 def exists(val):
     return val is not None
@@ -37,6 +38,9 @@ class LatentActionQuantization(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         code_seq_len = 1,
+        use_dinov3_encoder = False,
+        dinov3_model_name = "facebook/dinov3-vits16-pretrain-lvd1689m",
+        dinov3_pool_to_grid = None,  # Pool DINO features to this grid size (e.g., 8 for 8x8)
     ):
         """
         einstein notations:
@@ -60,12 +64,50 @@ class LatentActionQuantization(nn.Module):
         image_height, image_width = self.image_size
         assert (image_height % patch_height) == 0 and (image_width % patch_width) == 0
 
-        self.to_patch_emb_first_frame = nn.Sequential(
-            Rearrange('b c 1 (h p1) (w p2) -> b 1 h w (c p1 p2)', p1 = patch_height, p2 = patch_width),
-            nn.LayerNorm(channels * patch_width * patch_height),
-            nn.Linear(channels * patch_width * patch_height, dim),
+        if use_dinov3_encoder:
+            print(f"Using DINOv3 Encoder: {dinov3_model_name}")
+            self.dino_feature_extractor = DINOFeatureExtractor(
+                model_name=dinov3_model_name,
+                target_size=self.image_size[0] # Assuming square
+            )
+            # DINOEncoder returns [B, 1, h, w, d]
+            # Pool to match original grid size if specified (reduces memory 16x for attention)
+            self.dino_encoder = DINOEncoder(
+                self.dino_feature_extractor, 
+                dim,
+                pool_to_grid=dinov3_pool_to_grid
+            )
+            
+            self.encoder_projection = DINOWrapper(self.dino_encoder)
+            
+            # Use encoder's output grid size (accounts for pooling)
+            output_grid = self.dino_encoder.output_grid_size
+            self._effective_grid_size = (output_grid, output_grid)
+            print(f"  - Effective grid size: {self._effective_grid_size}")
+        else:
+            self._effective_grid_size = (image_height // patch_height, image_width // patch_width)
+            self.encoder_projection = None
+
+        # Decoder Pixel Projection (Also used for Encoder if DINO is disabled)
+        # Ensure patch size matches the effective grid size (critical if DINO pooling is used)
+        eff_h, eff_w = self._effective_grid_size
+        pixel_p1 = image_height // eff_h
+        pixel_p2 = image_width // eff_w
+        
+        self.pixel_projection = nn.Sequential(
+            Rearrange('b c 1 (h p1) (w p2) -> b 1 h w (c p1 p2)', p1 = pixel_p1, p2 = pixel_p2),
+            nn.LayerNorm(channels * pixel_p1 * pixel_p2),
+            nn.Linear(channels * pixel_p1 * pixel_p2, dim),
             nn.LayerNorm(dim)
         )
+        
+        self.decoder_context_projection = self.pixel_projection
+        
+        if self.encoder_projection is None:
+             self.encoder_projection = self.pixel_projection
+             
+        # Backwards compatibility / Legacy name mapping
+        self.to_patch_emb_first_frame = self.encoder_projection
 
 
         transformer_kwargs = dict(
@@ -101,14 +143,20 @@ class LatentActionQuantization(nn.Module):
             device='cuda',
             code_seq_len=code_seq_len,
             patch_size=patch_size,
-            image_size=image_size
+            image_size=image_size,
+            grid_size=self._effective_grid_size
         )
             
             
         self.dec_spatial_transformer = Transformer(depth = spatial_depth, **transformer_with_action_kwargs)
+        
+        # Decoder pixel projection - must match effective grid size
+        eff_h, eff_w = self._effective_grid_size
+        eff_patch_h = image_height // eff_h
+        eff_patch_w = image_width // eff_w
         self.to_pixels_first_frame = nn.Sequential(
-            nn.Linear(dim, channels * patch_width * patch_height),
-            Rearrange('b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)', p1 = patch_height, p2 = patch_width)
+            nn.Linear(dim, channels * eff_patch_h * eff_patch_w),
+            Rearrange('b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)', p1 = eff_patch_h, p2 = eff_patch_w)
         )
 
 
@@ -132,7 +180,7 @@ class LatentActionQuantization(nn.Module):
 
     @property
     def patch_height_width(self):
-        return self.image_size[0] // self.patch_size[0], self.image_size[1] // self.patch_size[1]
+        return self._effective_grid_size
 
     def encode(
         self,
@@ -255,14 +303,14 @@ class LatentActionQuantization(nn.Module):
         first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
 
 
-        first_frame_tokens = self.to_patch_emb_first_frame(first_frame)
-        rest_frames_tokens = self.to_patch_emb_first_frame(rest_frames)
-        tokens = torch.cat((first_frame_tokens, rest_frames_tokens), dim = 1)
+        enc_first_frame_tokens = self.encoder_projection(first_frame)
+        enc_rest_frames_tokens = self.encoder_projection(rest_frames)
+        enc_tokens = torch.cat((enc_first_frame_tokens, enc_rest_frames_tokens), dim = 1)
 
-        shape = tokens.shape
+        shape = enc_tokens.shape
         *_, h, w, _ = shape
 
-        first_tokens, last_tokens = self.encode(tokens)
+        first_tokens, last_tokens = self.encode(enc_tokens)
 
         first_tokens, first_packed_fhw_shape = pack([first_tokens], 'b * d')
         last_tokens, last_packed_fhw_shape = pack([last_tokens], 'b * d')
@@ -300,8 +348,11 @@ class LatentActionQuantization(nn.Module):
             return
         
         tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = action_h, w = action_w)
-        concat_tokens = first_frame_tokens # + tokens
-        recon_video = self.decode(concat_tokens, tokens)
+        
+        # Use pixel-based projection for decoder context
+        dec_first_frame_tokens = self.decoder_context_projection(first_frame)
+        
+        recon_video = self.decode(dec_first_frame_tokens, tokens)
 
         returned_recon = rearrange(recon_video, 'b c 1 h w -> b c h w')
         video = rest_frames 
@@ -317,7 +368,7 @@ class LatentActionQuantization(nn.Module):
         else:
             recon_loss = F.mse_loss(video, recon_video)
 
-        return recon_loss, num_unique_indices
+        return recon_loss, num_unique_indices, returned_recon
         
 
     def inference(
@@ -344,15 +395,15 @@ class LatentActionQuantization(nn.Module):
 
         first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
 
-        first_frame_tokens = self.to_patch_emb_first_frame(first_frame)
-        rest_frames_tokens = self.to_patch_emb_first_frame(rest_frames)
-        tokens = torch.cat((first_frame_tokens, rest_frames_tokens), dim = 1)
+        enc_first_frame_tokens = self.encoder_projection(first_frame)
+        enc_rest_frames_tokens = self.encoder_projection(rest_frames)
+        enc_tokens = torch.cat((enc_first_frame_tokens, enc_rest_frames_tokens), dim = 1)
 
 
-        shape = tokens.shape
+        shape = enc_tokens.shape
         *_, h, w, _ = shape
 
-        first_tokens, last_tokens = self.encode(tokens)
+        first_tokens, last_tokens = self.encode(enc_tokens)
 
         # quantize
         first_tokens, first_packed_fhw_shape = pack([first_tokens], 'b * d')
@@ -380,8 +431,11 @@ class LatentActionQuantization(nn.Module):
         
 
         tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = action_h, w = action_w)
-        concat_tokens = first_frame_tokens #.detach() #+ tokens
-        recon_video = self.decode(concat_tokens, actions=tokens)
+        
+        # Decoder uses pixel projection context
+        dec_first_frame_tokens = self.decoder_context_projection(first_frame)
+        
+        recon_video = self.decode(dec_first_frame_tokens, actions=tokens)
         returned_recon = rearrange(recon_video, 'b c 1 h w -> b c h w')
         video = rest_frames 
         

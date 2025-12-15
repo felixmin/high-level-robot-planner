@@ -16,10 +16,13 @@ experiment:
 # Model adjustments for language_table images (360x640 resized to 256x256)
 model:
   image_size: 256
+  use_dinov3_encoder: true
+  dinov3_model_name: "facebook/dinov3-vits16-pretrain-lvd1689m"
+  dinov3_pool_to_grid: 8  # Pool DINO's 16x16 grid to 8x8 to reduce memory (16x less for attention)
 
 # Data settings
 data:
-  batch_size: 32
+  batch_size: 32  # Works with pooling (8x8 grid matches original architecture)
   shuffle_buffer: 2000
   prefetch_buffer: 4
 
@@ -29,6 +32,11 @@ training:
   max_steps: null
   scheduler:
     type: none
+  perceptual_loss:
+    enabled: false
+    weight: 0.1  # Reduced weight since perceptual loss is typically larger
+    layers: [3, 6, 9, 11]  # Reduced from [3, 6, 9, 11] to save memory
+    model_name: "facebook/dinov3-vits16-pretrain-lvd1689m"
   validation:
     check_interval: 1000  # Validate every 1000 steps
     limit_batches: 100    # Limit val batches (streaming dataset)
@@ -51,6 +59,26 @@ training:
       action_token_scatter:
         enabled: true
         every_n_validations: 3
+        num_samples: 500
+      sequence_histogram:
+        enabled: true
+        every_n_validations: 1
+        num_top_sequences: 50
+      all_sequences_histogram:
+        enabled: true
+        every_n_validations: 1
+      action_sequence_scatter:
+        enabled: true
+        every_n_validations: 1
+        num_samples: 500
+      top_sequences_scatter:
+        enabled: true
+        every_n_validations: 1
+        num_samples: 500
+        num_top_sequences: 5
+      state_sequence_scatter:
+        enabled: true
+        every_n_validations: 1
         num_samples: 500
 
 logging:
