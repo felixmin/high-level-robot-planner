@@ -163,10 +163,10 @@ class LAQTask(pl.LightningModule):
             frames = batch
 
         # Forward pass
-        # model.forward returns (loss, num_unique, recon_video)
-        pixel_loss, num_unique, recon_video = self.model(frames, step=self.global_step)
+        # model.forward returns (total_decoder_loss, num_unique, recon_video, aux_pixel_loss)
+        combined_decoder_loss, num_unique, recon_video, aux_pixel_loss = self.model(frames, step=self.global_step)
         
-        total_loss = pixel_loss
+        total_loss = combined_decoder_loss
 
         # Add Perceptual Loss
         if self.use_perceptual_loss:
@@ -211,7 +211,10 @@ class LAQTask(pl.LightningModule):
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
             self.log("train/loss", total_loss, prog_bar=True, sync_dist=True)
-            self.log("train/pixel_loss", pixel_loss, prog_bar=True, sync_dist=True)
+            self.log("train/combined_decoder_loss", combined_decoder_loss, prog_bar=True, sync_dist=True)
+            self.log("train/aux_pixel_loss", aux_pixel_loss, prog_bar=True, sync_dist=True)
+            # Main DINO loss is the remainder
+            self.log("train/main_dino_loss", combined_decoder_loss - aux_pixel_loss, prog_bar=True, sync_dist=True)
             self.log("train/num_unique_codes", num_unique, prog_bar=True, sync_dist=True)
             self.log("train/lr", self.optimizers().param_groups[0]["lr"], prog_bar=True)
 
@@ -244,9 +247,9 @@ class LAQTask(pl.LightningModule):
 
         # Forward pass - use step=0 to avoid codebook replacement during validation
         # (LAPA behavior: codebook replacement only during training via step != 0 check)
-        pixel_loss, num_unique, recon_video = self.model(frames, step=0)
+        combined_decoder_loss, num_unique, recon_video, aux_pixel_loss = self.model(frames, step=0)
         
-        total_loss = pixel_loss
+        total_loss = combined_decoder_loss
         
         if self.use_perceptual_loss:
             target_frame = frames[:, :, 1]
@@ -277,7 +280,9 @@ class LAQTask(pl.LightningModule):
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
             self.log("val/loss", total_loss, prog_bar=True, sync_dist=True)
-            self.log("val/pixel_loss", pixel_loss, sync_dist=True)
+            self.log("val/combined_decoder_loss", combined_decoder_loss, sync_dist=True)
+            self.log("val/aux_pixel_loss", aux_pixel_loss, sync_dist=True)
+            self.log("val/main_dino_loss", combined_decoder_loss - aux_pixel_loss, sync_dist=True)
             self.log("val/num_unique_codes", num_unique, sync_dist=True)
 
         # Store first batch for visualization

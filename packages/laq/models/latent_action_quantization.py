@@ -4,7 +4,7 @@ import math
 import torch
 import torch.nn.functional as F
 from torch import nn
-from einops import rearrange, pack
+from einops import rearrange, pack, repeat
 from einops.layers.torch import Rearrange
 
 from laq.models.attention import Transformer, ContinuousPositionBias
@@ -140,24 +140,34 @@ class LatentActionQuantization(nn.Module):
             dim=dim,
             num_embeddings=codebook_size,
             embedding_dim=quant_dim,
-            device='cuda',
             code_seq_len=code_seq_len,
             patch_size=patch_size,
             image_size=image_size,
             grid_size=self._effective_grid_size
         )
             
-            
+        # --- Main Decoder (DINO-to-DINO) ---
+        # Predicts next frame's DINO embeddings
         self.dec_spatial_transformer = Transformer(depth = spatial_depth, **transformer_with_action_kwargs)
+        
+        # --- Auxiliary Decoder (Pixels-to-Pixels) ---
+        # Predicts next frame's Pixels for visualization (gradients stopped at latent z)
+        self.aux_decoder = Transformer(depth = spatial_depth, **transformer_with_action_kwargs)
         
         # Decoder pixel projection - must match effective grid size
         eff_h, eff_w = self._effective_grid_size
         eff_patch_h = image_height // eff_h
         eff_patch_w = image_width // eff_w
-        self.to_pixels_first_frame = nn.Sequential(
+        
+        # Projector for the Aux Decoder output
+        self.aux_to_pixels = nn.Sequential(
             nn.Linear(dim, channels * eff_patch_h * eff_patch_w),
             Rearrange('b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)', p1 = eff_patch_h, p2 = eff_patch_w)
         )
+        
+        # Keep this for compatibility if anything external references it, 
+        # but internal logic will use aux_to_pixels
+        self.to_pixels_first_frame = self.aux_to_pixels
 
 
     def state_dict(self, *args, **kwargs):
@@ -233,13 +243,13 @@ class LatentActionQuantization(nn.Module):
     ):
         """
         Decodes latent actions + context frame into reconstructed video.
+        
+        This uses the AUXILIARY PIXEL DECODER path.
+        Use this for visualization and inference.
 
         Args:
-            tokens: Continuous embeddings of the first frame (context) [B, 1, h, w, d]
+            tokens: Continuous embeddings of the first frame (PIXEL CONTEXT) [B, 1, h, w, d]
             actions: Continuous embeddings of the latent action [B, 1, h', w', d].
-                     These are vectors projected from the codebook (e.g. 1024-dim),
-                     NOT discrete integer indices.
-                     h', w' depend on code_seq_len (e.g., 2x2 for len=4).
 
         Returns:
             recon_video: Reconstructed pixel values [B, C, 1, H, W]
@@ -258,14 +268,16 @@ class LatentActionQuantization(nn.Module):
 
         attn_bias = self.spatial_rel_pos_bias(h, w, device = tokens.device)
 
-        tokens = self.dec_spatial_transformer(tokens, attn_bias = attn_bias, video_shape = video_shape, context=actions)
+        # Use AUX decoder for pixel reconstruction
+        tokens = self.aux_decoder(tokens, attn_bias = attn_bias, video_shape = video_shape, context=actions)
         
 
         tokens = rearrange(tokens, '(b t) (h w) d -> b t h w d', b = b, h = h , w = w)
 
         rest_frames_tokens = tokens
 
-        recon_video = self.to_pixels_first_frame(rest_frames_tokens)
+        # Use AUX projector
+        recon_video = self.aux_to_pixels(rest_frames_tokens)
 
         return recon_video
     
@@ -349,10 +361,52 @@ class LatentActionQuantization(nn.Module):
         
         tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = action_h, w = action_w)
         
+        # --- 1. Main Path: DINO Decoding (Learning) ---
+        # Predict DINO tokens of next frame from DINO context of first frame + Action
+        
+        # Prepare inputs for Main Decoder
+        main_context = enc_first_frame_tokens # DINO context [B, 1, h, w, d]
+        main_query = tokens # Action [B, 1, h, w, d]
+        
+        # Helper for main decoder pass (similar to decode() but uses dec_spatial_transformer)
+        b_main = main_context.shape[0]
+        h_main, w_main = self.patch_height_width
+        
+        # Flatten for transformer
+        main_context_flat = rearrange(main_context, 'b t h w d -> (b t) (h w) d')
+        main_query_flat = rearrange(main_query, 'b t h w d -> (b t) (h w) d')
+        
+        video_shape = tuple(main_context.shape[:-1])
+        attn_bias = self.spatial_rel_pos_bias(h_main, w_main, device=main_context.device)
+        
+        # Run Main Decoder
+        pred_dino_tokens = self.dec_spatial_transformer(
+            main_context_flat, 
+            attn_bias=attn_bias, 
+            video_shape=video_shape, 
+            context=main_query_flat
+        )
+        
+        # Reshape back
+        pred_dino_tokens = rearrange(pred_dino_tokens, '(b t) (h w) d -> b t h w d', b=b_main, h=h_main, w=w_main)
+        
+        # Main Loss: MSE between Predicted DINO tokens and True DINO tokens (enc_rest_frames_tokens)
+        # Target must be detached to act as ground truth
+        target_dino_tokens = enc_rest_frames_tokens.detach()
+        main_loss = F.mse_loss(pred_dino_tokens, target_dino_tokens)
+
+
+        # --- 2. Aux Path: Pixel Decoding (Visualization) ---
+        # Predict Pixels of next frame from Pixel context + Detached Action
+        
         # Use pixel-based projection for decoder context
         dec_first_frame_tokens = self.decoder_context_projection(first_frame)
         
-        recon_video = self.decode(dec_first_frame_tokens, tokens)
+        # Detach action so Aux loss doesn't affect Encoder/VQ
+        aux_actions = tokens.detach()
+        
+        # Run Aux Decoder (via self.decode which is now mapped to Aux)
+        recon_video = self.decode(dec_first_frame_tokens, aux_actions)
 
         returned_recon = rearrange(recon_video, 'b c 1 h w -> b c h w')
         video = rest_frames 
@@ -362,13 +416,16 @@ class LatentActionQuantization(nn.Module):
 
         if exists(mask):
             # variable lengthed video / images training
-            recon_loss = F.mse_loss(video, recon_video, reduction = 'none')
-            recon_loss = recon_loss[repeat(mask, 'b t -> b c t', c = c)]
-            recon_loss = recon_loss.mean()
+            aux_loss = F.mse_loss(video, recon_video, reduction = 'none')
+            aux_loss = aux_loss[repeat(mask, 'b t -> b c t', c = c)]
+            aux_loss = aux_loss.mean()
         else:
-            recon_loss = F.mse_loss(video, recon_video)
+            aux_loss = F.mse_loss(video, recon_video)
+            
+        # Combine losses (Aux loss is just for the Aux decoder)
+        total_loss = main_loss + aux_loss
 
-        return recon_loss, num_unique_indices, returned_recon
+        return total_loss, num_unique_indices, returned_recon, aux_loss
         
 
     def inference(

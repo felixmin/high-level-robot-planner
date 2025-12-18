@@ -62,23 +62,23 @@ training:
         num_samples: 500
       sequence_histogram:
         enabled: true
-        every_n_validations: 1
+        every_n_validations: 3
         num_top_sequences: 50
       all_sequences_histogram:
         enabled: true
-        every_n_validations: 1
+        every_n_validations: 3
       action_sequence_scatter:
         enabled: true
-        every_n_validations: 1
+        every_n_validations: 3
         num_samples: 500
       top_sequences_scatter:
         enabled: true
-        every_n_validations: 1
+        every_n_validations: 3
         num_samples: 500
         num_top_sequences: 5
       state_sequence_scatter:
         enabled: true
-        every_n_validations: 1
+        every_n_validations: 3
         num_samples: 500
 
 logging:

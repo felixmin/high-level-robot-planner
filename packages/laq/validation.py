@@ -5,18 +5,38 @@ Implements flexible, configurable validation that can run:
 - Light validation (always): reconstruction loss + visualizations
 - Heavy validation (periodic): latent transfer analysis, clustering
 
+Architecture:
+- Buckets: Named data subsets with filters (e.g., "youtube_iid", "bridge_holdout")
+- Strategies: Validation logic bound to specific buckets
+- Each strategy declares its metadata requirements and minimum sample counts
+
 Usage in config:
 ```yaml
 validation:
+  buckets:
+    youtube_iid:
+      filters: {dataset_type: "youtube"}
+      max_samples: 100
+    bridge_holdout:
+      filters: {dataset_type: "bridge", environment: "toykitchen7"}
+      max_samples: 100
+      is_holdout: true
+    language_table:
+      filters: {dataset_type: "language_table"}
+      max_samples: 200
+
   strategies:
     basic:
       enabled: true
+      buckets: all
+    action_token_scatter:
+      enabled: true
+      buckets: [language_table]
     latent_transfer:
       enabled: true
       every_n_validations: 10
-    clustering:
-      enabled: true
-      every_n_validations: 20
+      buckets: [bridge_iid, bridge_holdout]
+      compare_buckets: true
 ```
 """
 
@@ -49,6 +69,62 @@ except ImportError:
 
 
 @dataclass
+class BucketConfig:
+    """Configuration for a validation data bucket."""
+    name: str
+    filters: Dict[str, Any] = field(default_factory=dict)
+    max_samples: int = 100
+    is_holdout: bool = False  # True if this is OOD/distribution shift data
+
+    def matches(self, metadata: Dict[str, Any]) -> bool:
+        """Check if sample metadata matches this bucket's filters."""
+        if not self.filters:
+            return True
+        return _matches_filters(metadata, self.filters)
+
+
+def _matches_filters(meta: Dict[str, Any], filters: Dict[str, Any]) -> bool:
+    """Check if metadata matches all filter criteria."""
+    if not filters:
+        return True
+
+    for key, condition in filters.items():
+        value = meta.get(key)
+
+        # Handle operator-based conditions like ["!=", "static"] or [">", 10]
+        if isinstance(condition, (list, tuple)) and len(condition) == 2:
+            op, target = condition
+            if op == "!=":
+                if value == target:
+                    return False
+            elif op == "==":
+                if value != target:
+                    return False
+            elif op == ">":
+                if value is None or value <= target:
+                    return False
+            elif op == "<":
+                if value is None or value >= target:
+                    return False
+            elif op == "in":
+                if value not in target:
+                    return False
+            elif op == "not_null":
+                if value is None:
+                    return False
+        # Handle list of allowed values
+        elif isinstance(condition, (list, tuple)):
+            if value not in condition:
+                return False
+        # Handle exact match
+        else:
+            if value != condition:
+                return False
+
+    return True
+
+
+@dataclass
 class ValidationCache:
     """Cache for validation data across batches."""
     frames: List[torch.Tensor] = field(default_factory=list)
@@ -68,6 +144,14 @@ class ValidationCache:
     train_frames: Optional[torch.Tensor] = None
     train_metadata: Optional[List[Dict[str, Any]]] = None
 
+    # Bucket info (set when this cache belongs to a bucket)
+    bucket_name: Optional[str] = None
+    is_holdout: bool = False
+
+    # Sample count tracking
+    _sample_count: int = 0
+    max_samples: int = 256
+
     def clear(self):
         """Clear all cached data (but keep fixed samples and train samples)."""
         self.frames.clear()
@@ -75,6 +159,58 @@ class ValidationCache:
         self.codes.clear()
         self.losses.clear()
         self.metadata.clear()
+        self._sample_count = 0
+
+    def is_full(self) -> bool:
+        """Check if cache has reached max_samples."""
+        return self._sample_count >= self.max_samples
+
+    def add_sample(
+        self,
+        frame: torch.Tensor,
+        meta: Dict[str, Any],
+        code: Optional[torch.Tensor] = None,
+        latent: Optional[torch.Tensor] = None,
+    ):
+        """Add a single sample to the cache."""
+        if self.is_full():
+            return
+
+        self.frames.append(frame.cpu() if frame.is_cuda else frame)
+        self.metadata.append([meta])  # Wrap in list to match batch format
+        self._sample_count += 1
+
+        if code is not None:
+            self.codes.append(code.cpu() if code.is_cuda else code)
+        if latent is not None:
+            self.latents.append(latent.cpu() if latent.is_cuda else latent)
+
+    def add_batch(
+        self,
+        frames: torch.Tensor,
+        metadata_list: List[Dict[str, Any]],
+        codes: Optional[torch.Tensor] = None,
+        latents: Optional[torch.Tensor] = None,
+    ):
+        """Add a batch of samples to the cache, respecting max_samples."""
+        remaining = self.max_samples - self._sample_count
+        if remaining <= 0:
+            return
+
+        n_to_add = min(frames.shape[0], remaining)
+
+        self.frames.append(frames[:n_to_add].cpu() if frames.is_cuda else frames[:n_to_add])
+        self.metadata.append(metadata_list[:n_to_add])
+        self._sample_count += n_to_add
+
+        if codes is not None:
+            self.codes.append(codes[:n_to_add].cpu() if codes.is_cuda else codes[:n_to_add])
+        if latents is not None:
+            self.latents.append(latents[:n_to_add].cpu() if latents.is_cuda else latents[:n_to_add])
+
+    def sample_count(self) -> int:
+        """Return current number of samples in cache."""
+        return self._sample_count
 
     def get_all_frames(self) -> Optional[torch.Tensor]:
         """Concatenate all cached frames."""
@@ -133,7 +269,7 @@ class ValidationCache:
         # Find matching indices
         indices = []
         for i, meta in enumerate(metadata):
-            if self._matches_filters(meta, filters):
+            if _matches_filters(meta, filters):
                 indices.append(i)
 
         if not indices:
@@ -143,45 +279,24 @@ class ValidationCache:
         filtered_metadata = [metadata[i] for i in indices]
         return filtered_frames, filtered_metadata
 
-    def _matches_filters(self, meta: Dict[str, Any], filters: Dict[str, Any]) -> bool:
-        """Check if metadata matches all filter criteria."""
-        if not filters:
-            return True
-
-        for key, condition in filters.items():
-            value = meta.get(key)
-
-            # Handle operator-based conditions like ["!=", "static"] or [">", 10]
-            if isinstance(condition, (list, tuple)) and len(condition) == 2:
-                op, target = condition
-                if op == "!=":
-                    if value == target:
-                        return False
-                elif op == "==":
-                    if value != target:
-                        return False
-                elif op == ">":
-                    if value is None or value <= target:
-                        return False
-                elif op == "<":
-                    if value is None or value >= target:
-                        return False
-                elif op == "in":
-                    if value not in target:
-                        return False
-                elif op == "not_null":
-                    if value is None:
-                        return False
-            # Handle list of allowed values
-            elif isinstance(condition, (list, tuple)):
-                if value not in condition:
-                    return False
-            # Handle exact match
-            else:
-                if value != condition:
-                    return False
-
-        return True
+    def count_samples_with_metadata(self, required_keys: List[str]) -> int:
+        """Count samples that have all required metadata keys with non-None values."""
+        all_metadata = self.get_all_metadata()
+        count = 0
+        for meta in all_metadata:
+            has_all = True
+            for key in required_keys:
+                val = meta.get(key)
+                if val is None:
+                    has_all = False
+                    break
+                # Special check for 2D actions
+                if key == "action" and isinstance(val, (list, tuple)) and len(val) != 2:
+                    has_all = False
+                    break
+            if has_all:
+                count += 1
+        return count
 
     def get_frames_by_dataset_type(self, dataset_type: str) -> Optional[torch.Tensor]:
         """Get frames filtered by dataset type (convenience method)."""
@@ -201,54 +316,96 @@ class ValidationCache:
 class ValidationStrategy(ABC):
     """
     Base class for validation strategies.
-    
+
     Each strategy decides:
     - When to run (via should_run)
+    - What data it needs (via required_metadata, min_samples)
     - What to compute and log (via run)
+
+    Strategies are bound to buckets and can operate in compare mode
+    (run separately on each bucket) or merged mode (combine bucket data).
     """
-    
+
     def __init__(
         self,
         name: str,
         enabled: bool = True,
         every_n_validations: int = 1,
+        min_samples: int = 10,
         **kwargs,
     ):
         self.name = name
         self.enabled = enabled
         self.every_n_validations = every_n_validations
+        self.min_samples = min_samples
         self.validation_count = 0
-    
+
     def should_run(self) -> bool:
         """Check if this strategy should run on current validation."""
         if not self.enabled:
             return False
         return (self.validation_count % self.every_n_validations) == 0
-    
+
     def increment_count(self):
         """Increment validation counter."""
         self.validation_count += 1
-    
+
+    def required_metadata(self) -> List[str]:
+        """
+        Return list of metadata keys this strategy requires.
+
+        Override in subclasses to declare requirements.
+        Empty list means strategy works with any data.
+        """
+        return []
+
+    def can_run(self, cache: ValidationCache) -> Tuple[bool, str]:
+        """
+        Check if strategy has sufficient applicable data in cache.
+
+        Returns:
+            Tuple of (can_run, reason_if_not)
+        """
+        # Check minimum sample count
+        sample_count = cache.sample_count()
+        if sample_count < self.min_samples:
+            return False, f"Only {sample_count} samples (need {self.min_samples})"
+
+        # Check required metadata
+        required = self.required_metadata()
+        if required:
+            count_with_meta = cache.count_samples_with_metadata(required)
+            if count_with_meta < self.min_samples:
+                return False, f"Only {count_with_meta} samples with {required} (need {self.min_samples})"
+
+        return True, ""
+
     @abstractmethod
     def needs_caching(self) -> bool:
         """Return True if this strategy needs data cached during validation."""
         pass
-    
+
+    def needs_codes(self) -> bool:
+        """Return True if this strategy needs codebook indices cached."""
+        return False
+
     @abstractmethod
     def run(
         self,
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """
         Run the validation strategy.
-        
+
         Args:
             cache: Cached validation data
             pl_module: The Lightning module
             trainer: The trainer
-            
+            metric_suffix: Suffix for metric names (e.g., "_bridge_holdout" for bucket-specific logging)
+
         Returns:
             Dict of metrics to log
         """
@@ -325,18 +482,23 @@ class BasicVisualizationStrategy(ValidationStrategy):
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """Generate reconstruction visualizations for both train and val."""
         metrics = {}
         wandb_logger = self._get_wandb_logger(trainer)
 
+        # Use bucket name for prefixing if available
+        bucket_name = cache.bucket_name or ""
+        prefix = f"val/{bucket_name}" if bucket_name else "val"
+
         # === Training samples visualization ===
-        if self.visualize_train:
+        if self.visualize_train and not bucket_name:  # Only for global cache
             self._visualize_training_samples(cache, pl_module, trainer, wandb_logger)
 
         # === Validation samples visualization ===
         if self.visualize_val:
-            self._visualize_validation_samples(cache, pl_module, trainer, wandb_logger)
+            self._visualize_validation_samples(cache, pl_module, trainer, wandb_logger, prefix)
 
         return metrics
 
@@ -390,6 +552,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
         wandb_logger,
+        prefix: str = "val",
     ) -> None:
         """Visualize validation samples from cache."""
         all_frames = cache.get_all_frames()
@@ -400,16 +563,17 @@ class BasicVisualizationStrategy(ValidationStrategy):
 
         # Log cache distribution for debugging
         distribution = cache.get_dataset_distribution()
+        bucket_name = cache.bucket_name or "global"
         if distribution:
-            print(f"  Cached validation samples per datasource: {distribution}")
-            print(f"  Total cached validation samples: {sum(distribution.values())}")
+            print(f"  [{bucket_name}] Cached validation samples per datasource: {distribution}")
+            print(f"  [{bucket_name}] Total cached validation samples: {sum(distribution.values())}")
 
         # === Fixed samples (diverse across datasets) ===
         if cache.fixed_frames is not None and len(cache.fixed_frames) > 0:
             fixed_grid = self._create_recon_grid(cache.fixed_frames, pl_module)
             if wandb_logger and fixed_grid is not None:
                 wandb_logger.log_image(
-                    key="val/fixed_reconstructions",
+                    key=f"{prefix}/fixed_reconstructions",
                     images=[fixed_grid],
                     caption=[f"Step {trainer.global_step} (fixed diverse samples)"],
                 )
@@ -422,7 +586,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
             random_grid = self._create_recon_grid(random_frames, pl_module)
             if random_grid is not None:
                 wandb_logger.log_image(
-                    key="val/random_reconstructions",
+                    key=f"{prefix}/random_reconstructions",
                     images=[random_grid],
                     caption=[f"Step {trainer.global_step} (random samples)"],
                 )
@@ -618,98 +782,103 @@ class BasicVisualizationStrategy(ValidationStrategy):
 class LatentTransferStrategy(ValidationStrategy):
     """
     Test if latent actions transfer between different scenes.
-    
+
     For pairs (s_a, s_a') and (s_b, s_b'):
     1. Encode z_a = E(s_a, s_a')
     2. Apply z_a to s_b: s_b'_pred = D(s_b, z_a)
     3. Compare s_b'_pred with actual s_b' (should be different)
        and with s_a' (should be similar in "action" applied)
-    
+
     This measures how "action-like" vs "state-specific" the latents are.
+    Useful for comparing IID vs holdout buckets to see if actions generalize.
     """
-    
+
     def __init__(
         self,
         enabled: bool = True,
         every_n_validations: int = 10,
         num_pairs: int = 256,
+        min_samples: int = 4,  # Need at least 4 samples for 2 pairs
         **kwargs,
     ):
         super().__init__(
             name="latent_transfer",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            min_samples=min_samples,
         )
         self.num_pairs = num_pairs
-    
+
     def needs_caching(self) -> bool:
         return True
-    
+
     def run(
         self,
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """Run latent transfer analysis."""
         metrics = {}
-        
+
         all_frames = cache.get_all_frames()
         if all_frames is None or len(all_frames) < 4:
             return metrics
-        
+
         # Sample pairs
         n = min(self.num_pairs, len(all_frames) // 2)
         indices = torch.randperm(len(all_frames))[:n * 2]
-        
+
         # Split into source and target pairs
         source_frames = all_frames[indices[:n]]  # (s_a, s_a')
         target_frames = all_frames[indices[n:]]  # (s_b, s_b')
-        
+
         pl_module.eval()
         with torch.no_grad():
             device = pl_module.device
             source_frames = source_frames.to(device)
             target_frames = target_frames.to(device)
-            
+
             # Encode source pairs to get latent actions
             # Use task helper which handles raw pixels -> quantized latents
             source_latents, source_indices = pl_module.encode_latents(source_frames)  # z_a
-            
+
             # Get target initial frames
             target_s0 = target_frames[:, :, 0:1]  # s_b (keep dim for concat)
 
             # Also encode target frames to get their true indices (for comparison)
             _, target_indices = pl_module.encode_latents(target_frames)
-            
+
             # Decode: apply source latent to target initial frame
             # Use task helper which handles embedding and reshaping
             transferred_recons = pl_module.decode_with_latents(
                 target_s0,
                 source_latents,
             )  # s_b'_pred
-            
+
             # Remove time dim if present [B, C, 1, H, W] -> [B, C, H, W]
             if transferred_recons.ndim == 5:
                 transferred_recons = transferred_recons.squeeze(2)
-            
+
             # Get ground truth
             target_s1_true = target_frames[:, :, 1]  # s_b' (true)
             source_s1_true = source_frames[:, :, 1]  # s_a' (true)
-            
+
             # Compute transfer error (pred vs true target)
             transfer_mse = F.mse_loss(transferred_recons, target_s1_true)
-            
+
             # Compute self-reconstruction error (for reference)
             self_recons = pl_module.model(target_frames, return_recons_only=True)
             self_mse = F.mse_loss(self_recons, target_s1_true)
-        
+
         pl_module.train()
-        
-        metrics["val/latent_transfer_mse"] = transfer_mse.item()
-        metrics["val/self_recon_mse"] = self_mse.item()
-        metrics["val/transfer_ratio"] = transfer_mse.item() / (self_mse.item() + 1e-8)
-        
+
+        # Use metric_suffix for bucket-specific logging
+        metrics[f"val/latent_transfer_mse{metric_suffix}"] = transfer_mse.item()
+        metrics[f"val/self_recon_mse{metric_suffix}"] = self_mse.item()
+        metrics[f"val/transfer_ratio{metric_suffix}"] = transfer_mse.item() / (self_mse.item() + 1e-8)
+
         # Log to trainer
         pl_module.log_dict(metrics, sync_dist=True)
         
@@ -824,12 +993,12 @@ class LatentTransferStrategy(ValidationStrategy):
 class ClusteringStrategy(ValidationStrategy):
     """
     Analyze latent action distribution via clustering.
-    
+
     - Collect latent codes from validation set
     - Run k-means clustering
     - Log cluster statistics and example frame pairs per cluster
     """
-    
+
     def __init__(
         self,
         enabled: bool = True,
@@ -837,61 +1006,67 @@ class ClusteringStrategy(ValidationStrategy):
         num_samples: int = 1000,
         num_clusters: int = 16,
         num_examples_per_cluster: int = 4,
+        min_samples: int = 16,  # Need at least num_clusters samples
         **kwargs,
     ):
         super().__init__(
             name="clustering",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            min_samples=min_samples,
         )
         self.num_samples = num_samples
         self.num_clusters = num_clusters
         self.num_examples_per_cluster = num_examples_per_cluster
-    
+
     def needs_caching(self) -> bool:
         return True
-    
+
+    def needs_codes(self) -> bool:
+        return True
+
     def run(
         self,
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """Run clustering analysis."""
         metrics = {}
-        
+
         all_frames = cache.get_all_frames()
         all_codes = cache.get_all_codes()
-        
+
         if all_codes is None or len(all_codes) < self.num_clusters:
             return metrics
-        
+
         # Limit samples
         n = min(self.num_samples, len(all_codes))
         indices = torch.randperm(len(all_codes))[:n]
         codes = all_codes[indices]
         frames = all_frames[indices] if all_frames is not None else None
-        
+
         # Flatten codes for clustering (if multi-token)
         codes_flat = codes.reshape(len(codes), -1).float()
-        
+
         # K-means clustering
         try:
             from sklearn.cluster import KMeans
-            
+
             kmeans = KMeans(n_clusters=self.num_clusters, n_init=10, random_state=42)
             cluster_labels = kmeans.fit_predict(codes_flat.cpu().numpy())
             cluster_labels = torch.from_numpy(cluster_labels)
-            
+
             # Compute cluster sizes
             cluster_sizes = torch.bincount(cluster_labels, minlength=self.num_clusters)
-            
-            # Log metrics
-            metrics["val/cluster_entropy"] = self._entropy(cluster_sizes.float())
-            metrics["val/num_empty_clusters"] = (cluster_sizes == 0).sum().item()
-            metrics["val/max_cluster_size"] = cluster_sizes.max().item()
-            metrics["val/min_cluster_size"] = cluster_sizes[cluster_sizes > 0].min().item() if (cluster_sizes > 0).any() else 0
-            
+
+            # Log metrics with suffix
+            metrics[f"val/cluster_entropy{metric_suffix}"] = self._entropy(cluster_sizes.float())
+            metrics[f"val/num_empty_clusters{metric_suffix}"] = (cluster_sizes == 0).sum().item()
+            metrics[f"val/max_cluster_size{metric_suffix}"] = cluster_sizes.max().item()
+            metrics[f"val/min_cluster_size{metric_suffix}"] = cluster_sizes[cluster_sizes > 0].min().item() if (cluster_sizes > 0).any() else 0
+
             pl_module.log_dict(metrics, sync_dist=True)
             
             # Visualize examples from each cluster
@@ -970,22 +1145,28 @@ class CodebookHistogramStrategy(ValidationStrategy):
         self,
         enabled: bool = True,
         every_n_validations: int = 1,
+        min_samples: int = 10,
         **kwargs,
     ):
         super().__init__(
             name="codebook_histogram",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            min_samples=min_samples,
         )
 
     def needs_caching(self) -> bool:
         return True  # Need codes for histogram
+
+    def needs_codes(self) -> bool:
+        return True
 
     def run(
         self,
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """Generate codebook usage histogram."""
         metrics = {}
@@ -1004,11 +1185,11 @@ class CodebookHistogramStrategy(ValidationStrategy):
         # Count usage per codebook entry
         counts = torch.bincount(codes_flat.long(), minlength=codebook_size)
 
-        # Compute metrics
+        # Compute metrics with suffix
         total_codes = counts.sum().item()
         used_codes = (counts > 0).sum().item()
-        metrics["val/codebook_utilization"] = used_codes / codebook_size
-        metrics["val/codebook_entropy"] = self._entropy(counts.float())
+        metrics[f"val/codebook_utilization{metric_suffix}"] = used_codes / codebook_size
+        metrics[f"val/codebook_entropy{metric_suffix}"] = self._entropy(counts.float())
 
         # Log to trainer
         pl_module.log_dict(metrics, sync_dist=True)
@@ -1084,23 +1265,29 @@ class LatentSequenceHistogramStrategy(ValidationStrategy):
         enabled: bool = True,
         every_n_validations: int = 1,
         num_top_sequences: int = 50,
+        min_samples: int = 10,
         **kwargs,
     ):
         super().__init__(
             name="sequence_histogram",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            min_samples=min_samples,
         )
         self.num_top_sequences = num_top_sequences
 
     def needs_caching(self) -> bool:
         return True  # Need codes for sequence analysis
 
+    def needs_codes(self) -> bool:
+        return True
+
     def run(
         self,
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """Generate sequence usage histogram."""
         metrics = {}
@@ -1112,17 +1299,17 @@ class LatentSequenceHistogramStrategy(ValidationStrategy):
         # all_codes shape: [N, code_seq_len]
         # Convert to list of tuples for counting
         sequences = [tuple(c.tolist()) for c in all_codes]
-        
+
         counter = Counter(sequences)
-        
+
         # Metrics
         unique_seqs = len(counter)
-        
+
         # Calculate entropy of sequence distribution
         counts = torch.tensor(list(counter.values()), dtype=torch.float)
-        metrics["val/sequence_entropy"] = self._entropy(counts)
-        metrics["val/unique_sequences"] = unique_seqs
-        
+        metrics[f"val/sequence_entropy{metric_suffix}"] = self._entropy(counts)
+        metrics[f"val/unique_sequences{metric_suffix}"] = unique_seqs
+
         pl_module.log_dict(metrics, sync_dist=True)
 
         # Visualize
@@ -1200,15 +1387,20 @@ class AllSequencesHistogramStrategy(ValidationStrategy):
         self,
         enabled: bool = True,
         every_n_validations: int = 1,
+        min_samples: int = 10,
         **kwargs,
     ):
         super().__init__(
             name="all_sequences_histogram",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            min_samples=min_samples,
         )
 
     def needs_caching(self) -> bool:
+        return True
+
+    def needs_codes(self) -> bool:
         return True
 
     def run(
@@ -1216,6 +1408,7 @@ class AllSequencesHistogramStrategy(ValidationStrategy):
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """Generate all sequences histogram."""
         metrics = {}
@@ -1226,13 +1419,13 @@ class AllSequencesHistogramStrategy(ValidationStrategy):
 
         # all_codes shape: [N, code_seq_len]
         sequences = [tuple(c.tolist()) for c in all_codes]
-        
+
         from collections import Counter
         counter = Counter(sequences)
-        
+
         # Sort counts descending
         sorted_counts = sorted(counter.values(), reverse=True)
-        
+
         # Visualize
         wandb_logger = self._get_wandb_logger(trainer)
         if wandb_logger is not None:
@@ -1300,23 +1493,32 @@ class ActionTokenScatterStrategy(ValidationStrategy):
         enabled: bool = True,
         every_n_validations: int = 1,
         num_samples: int = 1000,
+        min_samples: int = 10,
         **kwargs,
     ):
         super().__init__(
             name="action_token_scatter",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            min_samples=min_samples,
         )
         self.num_samples = num_samples
 
     def needs_caching(self) -> bool:
         return True
 
+    def needs_codes(self) -> bool:
+        return True
+
+    def required_metadata(self) -> List[str]:
+        return ["action"]  # Requires 2D action metadata
+
     def run(
         self,
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """Generate action-token scatter plot."""
         metrics = {}
@@ -1346,7 +1548,7 @@ class ActionTokenScatterStrategy(ValidationStrategy):
                         code = code[0]  # Use first token
                     codes_list.append(code.item())
 
-        if len(actions) < 10:
+        if len(actions) < self.min_samples:
             # Not enough 2D action samples
             return metrics
 
@@ -1443,23 +1645,32 @@ class ActionSequenceScatterStrategy(ValidationStrategy):
         enabled: bool = True,
         every_n_validations: int = 1,
         num_samples: int = 1000,
+        min_samples: int = 10,
         **kwargs,
     ):
         super().__init__(
             name="action_sequence_scatter",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            min_samples=min_samples,
         )
         self.num_samples = num_samples
 
     def needs_caching(self) -> bool:
         return True
 
+    def needs_codes(self) -> bool:
+        return True
+
+    def required_metadata(self) -> List[str]:
+        return ["action"]  # Requires 2D action metadata
+
     def run(
         self,
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """Generate action-sequence scatter plot."""
         metrics = {}
@@ -1474,7 +1685,7 @@ class ActionSequenceScatterStrategy(ValidationStrategy):
         # Check if we have action data
         actions = []
         seq_ids = []
-        
+
         # Map unique sequences to IDs
         # all_codes shape: [N, code_seq_len]
         sequences = [tuple(c.tolist()) for c in all_codes]
@@ -1492,7 +1703,7 @@ class ActionSequenceScatterStrategy(ValidationStrategy):
                     actions.append(action)
                     seq_ids.append(seq_to_id[sequences[i]])
 
-        if len(actions) < 10:
+        if len(actions) < self.min_samples:
             return metrics
 
         # Limit samples
@@ -1602,12 +1813,14 @@ class TopSequencesScatterStrategy(ValidationStrategy):
         every_n_validations: int = 1,
         num_samples: int = 1000,
         num_top_sequences: int = 5,
+        min_samples: int = 10,
         **kwargs,
     ):
         super().__init__(
             name="top_sequences_scatter",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            min_samples=min_samples,
         )
         self.num_samples = num_samples
         self.num_top_sequences = num_top_sequences
@@ -1615,11 +1828,18 @@ class TopSequencesScatterStrategy(ValidationStrategy):
     def needs_caching(self) -> bool:
         return True
 
+    def needs_codes(self) -> bool:
+        return True
+
+    def required_metadata(self) -> List[str]:
+        return ["action"]  # Requires 2D action metadata
+
     def run(
         self,
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """Generate top sequences scatter plot."""
         metrics = {}
@@ -1648,7 +1868,7 @@ class TopSequencesScatterStrategy(ValidationStrategy):
                     actions.append(action)
                     sequences.append(all_seqs_list[i])
 
-        if len(actions) < 10:
+        if len(actions) < self.min_samples:
             return metrics
 
         # Find top N sequences from the full set (or sampled set)
@@ -1780,12 +2000,14 @@ class StateSequenceScatterStrategy(ValidationStrategy):
         every_n_validations: int = 1,
         num_samples: int = 1000,
         num_top_sequences: int = 20,
+        min_samples: int = 10,
         **kwargs,
     ):
         super().__init__(
             name="state_sequence_scatter",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            min_samples=min_samples,
         )
         self.num_samples = num_samples
         self.num_top_sequences = num_top_sequences
@@ -1793,11 +2015,18 @@ class StateSequenceScatterStrategy(ValidationStrategy):
     def needs_caching(self) -> bool:
         return True
 
+    def needs_codes(self) -> bool:
+        return True
+
+    def required_metadata(self) -> List[str]:
+        return ["initial_state"]  # Requires robot state metadata
+
     def run(
         self,
         cache: ValidationCache,
         pl_module: pl.LightningModule,
         trainer: pl.Trainer,
+        metric_suffix: str = "",
     ) -> Dict[str, Any]:
         """Generate state-sequence scatter plot."""
         metrics = {}
@@ -1825,7 +2054,7 @@ class StateSequenceScatterStrategy(ValidationStrategy):
                     states.append(state[:2])
                     sequences.append(all_seqs_list[i])
 
-        if len(states) < 10:
+        if len(states) < self.min_samples:
             return metrics
 
         # Identify Top N sequences

@@ -2,11 +2,12 @@
 PyTorch Lightning callbacks for LAQ training.
 
 Includes:
-- ValidationStrategyCallback: Flexible validation with multiple strategies
+- ValidationStrategyCallback: Flexible validation with bucket-aware routing
 - EMACallback: Exponential moving average of model weights
 """
 
 from typing import Optional, List, Dict, Any, Tuple
+from dataclasses import dataclass, field
 
 import torch
 from torchvision.utils import make_grid
@@ -21,112 +22,198 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 
+@dataclass
+class StrategyBucketBinding:
+    """Binding between a strategy and its assigned buckets."""
+    strategy: Any  # ValidationStrategy
+    bucket_names: List[str]  # ["bridge_iid", "bridge_holdout"] or ["all"]
+    compare_buckets: bool = False  # If True, run separately on each bucket with suffix
+
+
 class ValidationStrategyCallback(Callback):
     """
-    Flexible validation callback that runs multiple validation strategies.
-    
+    Flexible validation callback with bucket-aware routing.
+
+    Architecture:
+    - Buckets: Named data subsets with filters (e.g., "youtube_iid", "bridge_holdout")
+    - Strategies: Validation logic bound to specific buckets
+    - Each strategy declares its metadata requirements and minimum sample counts
+
     Features:
-    - Fixed samples: diverse samples across datasets, same every validation
-    - Random samples: different samples each time for diversity
-    - Per-bucket visualization: separate grids for YouTube/Bridge etc.
-    - Periodic heavy validation: latent transfer, clustering (configurable frequency)
-    - Memory efficient: only caches limited samples, not entire val set
-    
+    - Per-bucket caching: Each bucket has its own cache
+    - Strategy-bucket binding: Strategies run on their assigned buckets
+    - Compare mode: Run strategy separately on each bucket for distribution shift analysis
+    - Automatic applicability checks: Strategies check if they have enough valid data
+
     Args:
         strategies: List of ValidationStrategy instances
-        num_fixed_samples: Number of fixed samples to track (diverse across datasets)
-        num_random_samples: Number of random samples to show
-        max_cached_samples: Maximum samples to cache (prevents OOM)
+        strategy_bucket_bindings: Dict mapping strategy names to bucket configs
+        bucket_configs: Dict of bucket name -> BucketConfig
+        num_fixed_samples: Number of fixed samples per bucket
+        global_cache_max: Maximum samples for global cache (fallback)
     """
-    
+
     def __init__(
         self,
         strategies: Optional[List] = None,
+        strategy_bucket_bindings: Optional[Dict[str, Dict[str, Any]]] = None,
+        bucket_configs: Optional[Dict[str, Any]] = None,
         num_fixed_samples: int = 8,
         num_random_samples: int = 8,
-        max_cached_samples: int = 256,  # Limit to prevent OOM
+        max_cached_samples: int = 256,
     ):
         super().__init__()
         self.strategies = strategies or []
         self.num_fixed_samples = num_fixed_samples
         self.num_random_samples = num_random_samples
         self.max_cached_samples = max_cached_samples
-        
+
         # Import here to avoid circular imports
-        from laq.validation import ValidationCache
-        self.cache = ValidationCache()
-        
-        # Track fixed sample indices (set on first validation with full data)
+        from laq.validation import ValidationCache, BucketConfig
+
+        # Create bucket configs
+        self.bucket_configs: Dict[str, BucketConfig] = {}
+        if bucket_configs:
+            for name, cfg in bucket_configs.items():
+                if isinstance(cfg, BucketConfig):
+                    self.bucket_configs[name] = cfg
+                else:
+                    self.bucket_configs[name] = BucketConfig(
+                        name=name,
+                        filters=cfg.get("filters", {}),
+                        max_samples=cfg.get("max_samples", 100),
+                        is_holdout=cfg.get("is_holdout", False),
+                    )
+
+        # Create per-bucket caches
+        self.bucket_caches: Dict[str, ValidationCache] = {}
+        for name, cfg in self.bucket_configs.items():
+            cache = ValidationCache()
+            cache.bucket_name = name
+            cache.is_holdout = cfg.is_holdout
+            cache.max_samples = cfg.max_samples
+            self.bucket_caches[name] = cache
+
+        # Global cache (fallback for strategies without bucket bindings)
+        self.global_cache = ValidationCache()
+        self.global_cache.max_samples = max_cached_samples
+
+        # Build strategy-bucket bindings
+        self.bindings: List[StrategyBucketBinding] = []
+        bindings_config = strategy_bucket_bindings or {}
+
+        for strategy in self.strategies:
+            binding_cfg = bindings_config.get(strategy.name, {})
+            bucket_names = binding_cfg.get("buckets", "all")
+
+            if bucket_names == "all":
+                # Use all defined buckets, or fall back to global
+                bucket_names = list(self.bucket_configs.keys()) if self.bucket_configs else []
+
+            compare_buckets = binding_cfg.get("compare_buckets", False)
+
+            self.bindings.append(StrategyBucketBinding(
+                strategy=strategy,
+                bucket_names=bucket_names,
+                compare_buckets=compare_buckets,
+            ))
+
+        # Track fixed sample indices
         self.fixed_indices: Optional[List[int]] = None
         self.validation_count = 0
         self._first_full_validation_done = False
-        self._cached_sample_count = 0
-    
-    def _any_heavy_strategy_running(self) -> bool:
-        """Check if any heavy strategy wants to run this validation."""
-        for strategy in self.strategies:
-            if strategy.needs_caching() and strategy.should_run():
+
+    def _any_strategy_needs_codes(self) -> bool:
+        """Check if any running strategy needs codebook indices."""
+        for binding in self.bindings:
+            if binding.strategy.should_run() and binding.strategy.needs_codes():
                 return True
         return False
-    
+
+    def _extract_metadata(self, batch: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract per-sample metadata from batch."""
+        frames = batch["frames"]
+        batch_metadata = []
+        batch_size = frames.shape[0]
+
+        for i in range(batch_size):
+            meta = {}
+            for key in batch.keys():
+                if key == "frames":
+                    continue
+                val = batch[key]
+
+                # Special handling for 'action' and 'initial_state' which get transposed
+                if (key == "action" or key == "initial_state") and isinstance(val, (list, tuple)) and len(val) > 0:
+                    if isinstance(val[0], torch.Tensor) and val[0].ndim > 0:
+                        dims = [v[i].item() for v in val if i < len(v)]
+                        meta[key] = dims
+                    else:
+                        meta[key] = val[i] if i < len(val) else None
+                elif isinstance(val, (list, tuple)):
+                    meta[key] = val[i] if i < len(val) else None
+                elif isinstance(val, torch.Tensor):
+                    if val.ndim > 0 and i < len(val):
+                        meta[key] = val[i].item() if val[i].ndim == 0 else val[i].tolist()
+                    elif val.ndim == 0:
+                        meta[key] = val.item()
+                else:
+                    meta[key] = val
+            batch_metadata.append(meta)
+
+        return batch_metadata
+
     def _select_diverse_fixed_samples(
         self,
-        all_frames: torch.Tensor,
-        all_metadata: List[Dict[str, Any]],
+        cache,
         num_samples: int,
-    ) -> Tuple[List[int], torch.Tensor, List[Dict[str, Any]]]:
-        """
-        Select diverse fixed samples across different datasets/scenes.
-        
-        Tries to get equal representation from each dataset type.
-        """
-        if not all_metadata:
-            # No metadata - just use random sampling
-            indices = torch.randperm(len(all_frames))[:num_samples].tolist()
-            return indices, all_frames[indices], [{} for _ in indices]
-        
-        # Group indices by dataset_type
+    ) -> None:
+        """Select diverse fixed samples for a cache."""
+        all_frames = cache.get_all_frames()
+        all_metadata = cache.get_all_metadata()
+
+        if all_frames is None or len(all_frames) < num_samples:
+            return
+
+        # Group by dataset_type for diversity
         by_dataset: Dict[str, List[int]] = {}
         for i, meta in enumerate(all_metadata):
             dtype = meta.get("dataset_type", "unknown")
             if dtype not in by_dataset:
                 by_dataset[dtype] = []
             by_dataset[dtype].append(i)
-        
-        # Sample equally from each dataset type
+
         selected_indices = []
         dataset_types = list(by_dataset.keys())
-        samples_per_dataset = max(1, num_samples // len(dataset_types))
-        
+        samples_per_dataset = max(1, num_samples // len(dataset_types)) if dataset_types else num_samples
+
         for dtype in dataset_types:
             indices = by_dataset[dtype]
-            # Shuffle and take samples
             shuffled = torch.randperm(len(indices)).tolist()
             for j in shuffled[:samples_per_dataset]:
                 if len(selected_indices) < num_samples:
                     selected_indices.append(indices[j])
-        
-        # If we need more samples, add randomly
-        remaining_indices = [i for i in range(len(all_frames)) if i not in selected_indices]
-        while len(selected_indices) < num_samples and remaining_indices:
-            idx = remaining_indices.pop(torch.randint(len(remaining_indices), (1,)).item())
+
+        # Fill remaining with random
+        remaining = [i for i in range(len(all_frames)) if i not in selected_indices]
+        while len(selected_indices) < num_samples and remaining:
+            idx = remaining.pop(torch.randint(len(remaining), (1,)).item())
             selected_indices.append(idx)
-        
-        # Get frames and metadata for selected indices
-        selected_frames = all_frames[selected_indices]
-        selected_metadata = [all_metadata[i] for i in selected_indices]
-        
-        return selected_indices, selected_frames, selected_metadata
-    
+
+        cache.fixed_indices = selected_indices
+        cache.fixed_frames = all_frames[selected_indices]
+        cache.fixed_metadata = [all_metadata[i] for i in selected_indices]
+
     def on_validation_epoch_start(
         self,
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
     ) -> None:
-        """Initialize cache at start of validation."""
-        self.cache.clear()
-        self._cached_sample_count = 0
-    
+        """Clear all caches at start of validation."""
+        self.global_cache.clear()
+        for cache in self.bucket_caches.values():
+            cache.clear()
+
     def on_validation_batch_end(
         self,
         trainer: pl.Trainer,
@@ -136,187 +223,135 @@ class ValidationStrategyCallback(Callback):
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
-        """Cache validation data with stratified sampling across datasets."""
-        # Stop caching if we have enough samples
-        if self._cached_sample_count >= self.max_cached_samples:
-            return
-
-        # Extract frames and metadata from batch
+        """Route samples to appropriate bucket caches."""
+        # Extract frames and metadata
         if isinstance(batch, dict):
             frames = batch["frames"]
-            # Extract ALL per-sample metadata dynamically (not just 4 hardcoded keys)
-            batch_metadata = []
-            batch_size = frames.shape[0]
-            for i in range(batch_size):
-                meta = {}
-                for key in batch.keys():
-                    if key == "frames":
-                        continue
-                    val = batch[key]
-                    
-                    # Special handling for 'action' and 'initial_state' which get transposed by default collate
-                    # Original: [[dx0, dy0], ...] -> collated: [[dx0, ...], [dy0, ...]]
-                    if (key == "action" or key == "initial_state") and isinstance(val, (list, tuple)) and len(val) > 0:
-                        if isinstance(val[0], torch.Tensor) and val[0].ndim > 0:
-                            # Reconstruct per-sample: [dx_i, dy_i, ...]
-                            dims = [v[i].item() for v in val if i < len(v)]
-                            meta[key] = dims
-                        else:
-                            meta[key] = val[i] if i < len(val) else None
-                    elif isinstance(val, (list, tuple)):
-                        meta[key] = val[i] if i < len(val) else None
-                    elif isinstance(val, torch.Tensor):
-                        if val.ndim > 0 and i < len(val):
-                            # Scalar tensor element
-                            meta[key] = val[i].item() if val[i].ndim == 0 else val[i].tolist()
-                        elif val.ndim == 0:
-                            meta[key] = val.item()
-                    else:
-                        meta[key] = val
-                batch_metadata.append(meta)
+            metadata_list = self._extract_metadata(batch)
         else:
             frames = batch
-            batch_metadata = [{} for _ in range(frames.shape[0])]
+            metadata_list = [{} for _ in range(frames.shape[0])]
 
-        # Implement stratified caching: ensure proportional representation
-        # Group samples by dataset_type to cache proportionally
-        remaining_capacity = self.max_cached_samples - self._cached_sample_count
-        if remaining_capacity <= 0:
-            return
-
-        samples_to_cache = min(frames.shape[0], remaining_capacity)
-
-        # Check current cache distribution
-        current_distribution = {}
-        all_meta = self.cache.get_all_metadata()
-        for m in all_meta:
-            dtype = m.get("dataset_type", "unknown")
-            current_distribution[dtype] = current_distribution.get(dtype, 0) + 1
-
-        # Check batch distribution
-        batch_distribution = {}
-        for m in batch_metadata:
-            dtype = m.get("dataset_type", "unknown")
-            batch_distribution[dtype] = batch_distribution.get(dtype, 0) + 1
-
-        # If we have multiple dataset types, try to balance
-        if len(batch_distribution) > 1 or len(current_distribution) > 1:
-            # Use stratified sampling: prioritize underrepresented datasets
-            selected_indices = self._stratified_sample_indices(
-                batch_metadata, current_distribution, samples_to_cache
-            )
-        else:
-            # Simple case: just take first N samples
-            selected_indices = list(range(samples_to_cache))
-
-        # Extract selected samples
-        frames = frames[selected_indices].detach().cpu()
-        batch_metadata = [batch_metadata[i] for i in selected_indices]
-
-        # Cache frames and metadata
-        self.cache.frames.append(frames)
-        self.cache.metadata.append(batch_metadata)
-        self._cached_sample_count += len(selected_indices)
-
-        # Cache latents and codes if heavy strategies are running
-        if self._any_heavy_strategy_running():
+        # Compute codes if any strategy needs them
+        codes = None
+        latents = None
+        if self._any_strategy_needs_codes():
             with torch.no_grad():
                 device = pl_module.device
                 frames_gpu = frames.to(device)
+                codes = pl_module.model(frames_gpu, return_only_codebook_ids=True).cpu()
+                latents = pl_module.model.vq.codebooks[codes.to(device)].cpu()
 
-                # Get codebook indices
-                indices = pl_module.model(frames_gpu, return_only_codebook_ids=True)
-                self.cache.codes.append(indices.cpu())
+        # Route each sample to matching bucket(s) AND global cache
+        for i, meta in enumerate(metadata_list):
+            frame = frames[i:i+1].detach().cpu()
+            code = codes[i:i+1] if codes is not None else None
+            latent = latents[i:i+1] if latents is not None else None
 
-                # Get quantized latents
-                latents = pl_module.model.vq.codebooks[indices]
-                self.cache.latents.append(latents.cpu())
+            # Add to global cache (with stratified balancing)
+            if not self.global_cache.is_full():
+                self.global_cache.add_sample(frame, meta, code, latent)
 
-    def _stratified_sample_indices(
-        self,
-        batch_metadata: List[Dict[str, Any]],
-        current_distribution: Dict[str, int],
-        num_samples: int,
-    ) -> List[int]:
-        """Select indices to balance dataset representation in cache."""
-        # Group batch indices by dataset_type
-        by_dataset: Dict[str, List[int]] = {}
-        for i, meta in enumerate(batch_metadata):
-            dtype = meta.get("dataset_type", "unknown")
-            if dtype not in by_dataset:
-                by_dataset[dtype] = []
-            by_dataset[dtype].append(i)
+            # Route to matching buckets
+            for bucket_name, bucket_cfg in self.bucket_configs.items():
+                cache = self.bucket_caches[bucket_name]
+                if not cache.is_full() and bucket_cfg.matches(meta):
+                    cache.add_sample(frame, meta, code, latent)
 
-        # Calculate how many samples we want from each dataset
-        # Prioritize datasets that are underrepresented in current cache
-        total_current = sum(current_distribution.values()) if current_distribution else 0
-
-        selected_indices = []
-        datasets = list(by_dataset.keys())
-
-        if total_current == 0:
-            # No samples yet - sample equally from each dataset type
-            samples_per_dataset = max(1, num_samples // len(datasets))
-            for dtype in datasets:
-                indices = by_dataset[dtype]
-                n = min(samples_per_dataset, len(indices))
-                selected_indices.extend(indices[:n])
-        else:
-            # Prioritize underrepresented datasets
-            # Target equal representation
-            target_per_dataset = (total_current + num_samples) // max(len(datasets), len(current_distribution))
-
-            for dtype in datasets:
-                current_count = current_distribution.get(dtype, 0)
-                needed = max(0, target_per_dataset - current_count)
-                available = by_dataset[dtype]
-                n = min(needed, len(available), num_samples - len(selected_indices))
-                if n > 0:
-                    selected_indices.extend(available[:n])
-
-        # If we still need more samples, add randomly
-        remaining = num_samples - len(selected_indices)
-        if remaining > 0:
-            all_indices = set(range(len(batch_metadata)))
-            unused = list(all_indices - set(selected_indices))
-            selected_indices.extend(unused[:remaining])
-
-        return selected_indices[:num_samples]
-    
     def on_validation_epoch_end(
         self,
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
     ) -> None:
-        """Run all validation strategies."""
+        """Run strategies on their assigned buckets."""
         self.validation_count += 1
-        
+
         # Update strategy counters
-        for strategy in self.strategies:
-            strategy.increment_count()
-        
-        # Get all cached data
-        all_frames = self.cache.get_all_frames()
-        all_metadata = self.cache.get_all_metadata()
-        
-        # Select diverse fixed samples on first validation with enough data
-        if all_frames is not None and not self._first_full_validation_done:
-            if len(all_frames) >= self.num_fixed_samples:
-                indices, fixed_frames, fixed_meta = self._select_diverse_fixed_samples(
-                    all_frames, all_metadata, self.num_fixed_samples
-                )
-                self.fixed_indices = indices
-                self.cache.fixed_indices = indices
-                self.cache.fixed_frames = fixed_frames
-                self.cache.fixed_metadata = fixed_meta
-                self._first_full_validation_done = True
-                print(f"✓ Selected {len(indices)} diverse fixed samples for visualization")
-        
-        # Run strategies
-        for strategy in self.strategies:
-            if strategy.should_run():
+        for binding in self.bindings:
+            binding.strategy.increment_count()
+
+        # Select fixed samples for global cache on first validation
+        if not self._first_full_validation_done:
+            self._select_diverse_fixed_samples(self.global_cache, self.num_fixed_samples)
+            for cache in self.bucket_caches.values():
+                self._select_diverse_fixed_samples(cache, min(4, self.num_fixed_samples))
+            self._first_full_validation_done = True
+
+            # Log cache stats
+            global_count = self.global_cache.sample_count()
+            print(f"✓ Global cache: {global_count} samples")
+            for name, cache in self.bucket_caches.items():
+                count = cache.sample_count()
+                holdout_tag = " (holdout)" if cache.is_holdout else ""
+                print(f"  [{name}]{holdout_tag}: {count} samples")
+
+        # Run each strategy on its assigned buckets
+        for binding in self.bindings:
+            strategy = binding.strategy
+
+            if not strategy.should_run():
+                continue
+
+            # No bucket bindings -> use global cache
+            if not binding.bucket_names:
+                can_run, reason = strategy.can_run(self.global_cache)
+                if not can_run:
+                    print(f"⚠️ Skipping {strategy.name}: {reason}")
+                    continue
                 try:
-                    metrics = strategy.run(self.cache, pl_module, trainer)
+                    strategy.run(self.global_cache, pl_module, trainer)
+                except Exception as e:
+                    print(f"Warning: Strategy {strategy.name} failed: {e}")
+                continue
+
+            if binding.compare_buckets:
+                # Run separately on each bucket with metric suffix
+                for bucket_name in binding.bucket_names:
+                    if bucket_name not in self.bucket_caches:
+                        continue
+                    cache = self.bucket_caches[bucket_name]
+                    can_run, reason = strategy.can_run(cache)
+                    if not can_run:
+                        print(f"⚠️ Skipping {strategy.name} on {bucket_name}: {reason}")
+                        continue
+                    try:
+                        strategy.run(cache, pl_module, trainer, metric_suffix=f"_{bucket_name}")
+                    except Exception as e:
+                        print(f"Warning: Strategy {strategy.name} on {bucket_name} failed: {e}")
+            else:
+                # Merge bucket caches and run once
+                from laq.validation import ValidationCache
+                merged = ValidationCache()
+                merged.max_samples = sum(
+                    self.bucket_caches[b].max_samples
+                    for b in binding.bucket_names
+                    if b in self.bucket_caches
+                )
+
+                for bucket_name in binding.bucket_names:
+                    if bucket_name not in self.bucket_caches:
+                        continue
+                    bucket_cache = self.bucket_caches[bucket_name]
+                    bucket_frames = bucket_cache.get_all_frames()
+                    bucket_meta = bucket_cache.get_all_metadata()
+                    bucket_codes = bucket_cache.get_all_codes()
+                    bucket_latents = bucket_cache.get_all_latents()
+
+                    if bucket_frames is not None:
+                        merged.frames.append(bucket_frames)
+                        merged.metadata.append(bucket_meta)
+                        merged._sample_count += len(bucket_frames)
+                        if bucket_codes is not None:
+                            merged.codes.append(bucket_codes)
+                        if bucket_latents is not None:
+                            merged.latents.append(bucket_latents)
+
+                can_run, reason = strategy.can_run(merged)
+                if not can_run:
+                    print(f"⚠️ Skipping {strategy.name}: {reason}")
+                    continue
+                try:
+                    strategy.run(merged, pl_module, trainer)
                 except Exception as e:
                     print(f"Warning: Strategy {strategy.name} failed: {e}")
 

@@ -175,7 +175,8 @@ class NSVQ(torch.nn.Module):
                 
         hard_quantized_input = self.codebooks[min_indices]
         
-        random_vector = normal_dist.Normal(0, 1).sample(input_data.shape).to(self.device)
+        # Use input_data.device to ensure random vector is on the correct device
+        random_vector = normal_dist.Normal(0, 1).sample(input_data.shape).to(input_data.device)
 
         norm_quantization_residual = (input_data - hard_quantized_input).square().sum(dim=1, keepdim=True).sqrt()
         norm_random_vector = random_vector.square().sum(dim=1, keepdim=True).sqrt()
@@ -245,7 +246,7 @@ class NSVQ(torch.nn.Module):
 
             if used_count == 0:
                 print(f'####### used_indices equals zero / shuffling whole codebooks ######')
-                self.codebooks += self.eps * torch.randn(self.codebooks.size(), device=self.device).clone()
+                self.codebooks += self.eps * torch.randn(self.codebooks.size(), device=self.codebooks.device).clone()
             else:
                 used = self.codebooks[used_indices].clone()
                 if used_count < unused_count:
@@ -256,7 +257,7 @@ class NSVQ(torch.nn.Module):
 
                 self.codebooks[unused_indices] *= 0
                 self.codebooks[unused_indices] += used_codebooks[range(unused_count)] + 0.02 * torch.randn(
-                    (unused_count, self.embedding_dim), device=self.device).clone()
+                    (unused_count, self.embedding_dim), device=self.codebooks.device).clone()
 
             print(f'************* Replaced ' + str(unused_count) + f' codebooks *************')
             self.codebooks_used[:] = 0.0    
@@ -301,9 +302,9 @@ class NSVQ(torch.nn.Module):
         
         if user_action_token_num is not None:
             if type(user_action_token_num) == list:
-                min_indices = torch.tensor(user_action_token_num, device=self.device)
+                min_indices = torch.tensor(user_action_token_num, device=input_data.device)
             else:                
-                min_indices = torch.tensor([[user_action_token_num]], device=self.device).repeat(input_data.shape[0], 1)
+                min_indices = torch.tensor([[user_action_token_num]], device=input_data.device).repeat(input_data.shape[0], 1)
         quantized_input = codebooks[min_indices]
         
         quantized_input = self.decode(quantized_input, batch_size)

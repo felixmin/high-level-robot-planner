@@ -473,6 +473,7 @@ class LAQDataModule(pl.LightningDataModule):
         offset: int = 30,
         use_metadata: bool = True,
         pair_level: bool = True,
+        max_samples: Optional[int] = None,  # Use max_pairs instead
     ):
         """
         Args:
