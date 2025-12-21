@@ -1,0 +1,13 @@
+# OXE Bridge dataset configuration
+# WidowX kitchen manipulation from Open X-Embodiment
+
+dataset_name: bridge
+train_split: "train[:90%]"  # 22,914 episodes
+val_split: "train[90%:]"    # 2,546 episodes
+offset: 5                    # ~1 second at 5Hz
+image_size: 256
+batch_size: 32
+num_workers: 0               # tf.data handles parallelism
+shuffle_buffer: 30         # Keep small for Bridge (large images need more memory per episode)
+prefetch_buffer: 4
+return_metadata: true        # Required for action/state scatter validation

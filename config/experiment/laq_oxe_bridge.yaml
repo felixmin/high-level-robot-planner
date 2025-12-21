@@ -1,0 +1,86 @@
+# @package _global_
+
+# LAQ training on OXE Bridge dataset
+# Uses smaller cache and less frequent validation due to larger images
+
+defaults:
+  - /model@model: laq
+  - /data@data: laq_oxe_bridge
+  - /training@training: laq_optimizer
+  - /cluster@cluster: local_dev
+
+experiment:
+  name: laq_oxe_bridge
+  description: LAQ training on OXE Bridge dataset (streaming from GCS)
+
+# Model settings (same as laq_oxe)
+model:
+  image_size: 256
+  use_dinov3_encoder: true
+  dinov3_model_name: "facebook/dinov3-vits16-pretrain-lvd1689m"
+  dinov3_pool_to_grid: 8
+
+# Data settings - Bridge needs small shuffle buffer due to large images
+data:
+  batch_size: 32
+  shuffle_buffer: 200  # Keep small - Bridge images are 480x640 before resize
+  prefetch_buffer: 4
+
+# Training settings - memory leak fixed in OXE adapter, using reasonable defaults
+training:
+  epochs: 100
+  max_steps: null
+  scheduler:
+    type: none
+  perceptual_loss:
+    enabled: false
+  validation:
+    check_interval: 1000  # Standard validation frequency
+    limit_batches: 100    # Standard batch limit
+    max_cached_samples: 256  # Reasonable cache size
+    num_fixed_samples: 8
+    num_random_samples: 8
+    strategies:
+      basic:
+        enabled: true
+        visualize_train: true
+        visualize_val: true
+        visualize_per_bucket: false
+      latent_transfer:
+        enabled: true
+        every_n_validations: 5
+        num_pairs: 128
+      clustering:
+        enabled: true
+        every_n_validations: 5
+        num_samples: 256
+      codebook_histogram:
+        enabled: true
+        every_n_validations: 3
+      action_token_scatter:
+        enabled: true
+        every_n_validations: 3
+        num_samples: 256
+      sequence_histogram:
+        enabled: true
+        every_n_validations: 5
+        num_top_sequences: 30
+      all_sequences_histogram:
+        enabled: true
+        every_n_validations: 5
+      action_sequence_scatter:
+        enabled: true
+        every_n_validations: 5
+        num_samples: 256
+      top_sequences_scatter:
+        enabled: true
+        every_n_validations: 5
+        num_top_sequences: 5
+      state_sequence_scatter:
+        enabled: true
+        every_n_validations: 5
+        num_samples: 256
+
+logging:
+  use_wandb: true
+  tags: ["oxe", "bridge", "laq", "streaming"]

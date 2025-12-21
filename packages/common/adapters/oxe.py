@@ -5,10 +5,29 @@ This adapter is different from file-based adapters (YouTube, Bridge) because:
 1. Data streams from Google Cloud Storage, not local files
 2. Uses tf.data pipelines for efficient prefetching
 3. Returns tensors directly, not file paths
+4. Handles heterogeneous action/observation formats across datasets
 
 Currently supports:
 - language_table: gs://gresearch/robotics/language_table/0.0.1
-- language_table_blocktorelative_oracle_sim (200k episodes, longer sequences)
+  * 442k episodes, 2D tabletop manipulation
+  * Action: 2D (x, y), State: 2D effector_translation
+  * Language instructions as encoded tensors
+
+- language_table_blocktorelative_oracle_sim: gs://gresearch/robotics/language_table_blocktorelative_oracle_sim/0.0.1
+  * 200k episodes, oracle agent with longer trajectories (27-46 steps)
+  * Same format as language_table
+
+- bridge: gs://gresearch/robotics/bridge/0.1.0
+  * 25,460 train + 3,475 test episodes, WidowX kitchen manipulation
+  * Action: 3D world_vector (xyz translation) - uses first 2 dims for 2D plots
+  * State: 7D robot state - uses first 2 dims for visualization
+  * Language instructions as string tensors
+
+Key features:
+- Automatic handling of dict-based actions (Bridge) vs flat arrays (language_table)
+- Automatic handling of string vs encoded instruction formats
+- Cumulative action computation between frame pairs
+- TFDS split syntax support (e.g., "train[:90%]", "train[1000:2000]")
 """
 
 from dataclasses import dataclass
@@ -32,6 +51,9 @@ class OXEDatasetConfig:
     control_frequency_hz: float = 10.0  # For time calculations
     action_dim: int = 2  # Dimensionality of action space (2 for language_table)
     state_dim: int = 2  # Dimensionality of state space to extract
+    # For datasets with dict-based actions (like Bridge)
+    action_key: Optional[str] = None  # If None, action is flat array; if set, extract this key
+    action_is_dict: bool = False  # True if action is a dict with multiple keys
 
 
 # Registry of supported OXE datasets
@@ -78,6 +100,20 @@ OXE_DATASETS = {
         instruction_key="instruction",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
+    ),
+    # Bridge dataset (WidowX kitchen manipulation)
+    "bridge": OXEDatasetConfig(
+        name="bridge",
+        gcs_path="gs://gresearch/robotics/bridge/0.1.0",
+        image_key="image",  # Bridge uses "image" not "rgb"
+        instruction_key="natural_language_instruction",
+        state_key="state",  # 7D robot state
+        image_shape=(480, 640, 3),
+        control_frequency_hz=5.0,  # Bridge is ~5Hz
+        action_dim=3,  # world_vector is 3D (we use first 2 for 2D plots)
+        state_dim=2,  # Use first 2 dims of 7D state for visualization
+        action_key="world_vector",  # Extract world_vector from action dict
+        action_is_dict=True,
     ),
 }
 
@@ -146,6 +182,7 @@ class OXEFramePairDataset(IterableDataset):
         # Lazy initialization of tf.data pipeline
         self._builder = None
         self._num_episodes = None
+        self._cached_pipeline = None  # Cache the tf.data pipeline to prevent memory leaks
 
     def _init_tfds(self):
         """Initialize TFDS builder and dataset (lazy)."""
@@ -191,6 +228,8 @@ class OXEFramePairDataset(IterableDataset):
         dataset_name = self.config.name
         action_dim = self.config.action_dim
         state_dim = getattr(self.config, "state_dim", 2)
+        action_key = getattr(self.config, "action_key", None)
+        action_is_dict = getattr(self.config, "action_is_dict", False)
 
         def episode_to_pairs_generator():
             """Generator that yields frame pairs from episodes."""
@@ -212,14 +251,20 @@ class OXEFramePairDataset(IterableDataset):
                 if return_metadata and instruction_key in steps[0]["observation"]:
                     instr_tensor = steps[0]["observation"][instruction_key]
                     try:
-                        instruction = (
-                            tf.strings.unicode_encode(
-                                tf.cast(instr_tensor, tf.int32), "UTF-8"
+                        # Check if it's a string tensor (Bridge) or encoded ints (language_table)
+                        if instr_tensor.dtype == tf.string:
+                            # String tensor (e.g., Bridge's natural_language_instruction)
+                            instruction = instr_tensor.numpy().decode("utf-8")
+                        else:
+                            # Encoded int tensor (e.g., language_table)
+                            instruction = (
+                                tf.strings.unicode_encode(
+                                    tf.cast(instr_tensor, tf.int32), "UTF-8"
+                                )
+                                .numpy()
+                                .decode("utf-8")
+                                .rstrip("\x00")
                             )
-                            .numpy()
-                            .decode("utf-8")
-                            .rstrip("\x00")
-                        )
                     except Exception:
                         instruction = ""
 
@@ -238,7 +283,12 @@ class OXEFramePairDataset(IterableDataset):
                 actions = None
                 if return_metadata and "action" in steps[0]:
                     try:
-                        actions = np.stack([s["action"].numpy() for s in steps])
+                        if action_is_dict and action_key:
+                            # Dict-based actions (e.g., Bridge has world_vector, rotation_delta)
+                            actions = np.stack([s["action"][action_key].numpy() for s in steps])
+                        else:
+                            # Flat action array (e.g., language_table)
+                            actions = np.stack([s["action"].numpy() for s in steps])
                     except Exception:
                         actions = None
                         
@@ -323,8 +373,22 @@ class OXEFramePairDataset(IterableDataset):
     def __iter__(self) -> Iterator:
         """Iterate over frame pairs."""
         import tensorflow as tf
+        import gc
 
+        # CRITICAL: Clear TensorFlow session before creating new pipeline
+        # This prevents memory leaks from accumulated tf.Graph objects
+        # when __iter__ is called multiple times (once per epoch)
+        if self._cached_pipeline is not None:
+            # Release the old pipeline
+            del self._cached_pipeline
+            self._cached_pipeline = None
+            gc.collect()
+            # Clear TensorFlow's internal caches
+            tf.keras.backend.clear_session()
+
+        # Create fresh pipeline for this epoch
         tf_ds = self._create_tf_pipeline()
+        self._cached_pipeline = tf_ds  # Store reference for cleanup on next iteration
 
         # Iterate and convert to PyTorch
         for item in tf_ds:

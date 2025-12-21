@@ -167,7 +167,11 @@ Before running full training:
 
 ### Data Loading (LAQ Training)
 
-LAQ training uses multi-dataset loading with adapters. Configure datasets via the `sources` list:
+LAQ training supports two data loading modes:
+
+#### 1. Local Multi-Dataset Loading (Bridge, YouTube)
+
+Uses multi-dataset loading with adapters. Configure datasets via the `sources` list:
 
 ```bash
 # Debug mode - small subset for quick iteration
@@ -178,11 +182,44 @@ python scripts/2_train_laq.py experiment=laq_normal
 ```
 
 Key parameters:
-- `max_samples`: Limit dataset size for debugging (e.g., `max_samples=20`)
+- `max_pairs`: Limit frame pairs for debugging
 - `offsets`: Frame offsets for pair generation (e.g., `offsets=[15, 30, 60]`)
 - `val_split`: Train/val split ratio (default 0.1)
 
 Data loading pre-computes all valid frame pairs across datasets for deterministic training.
+
+#### 2. OXE Streaming (Open X-Embodiment)
+
+Stream data from Google Cloud Storage using TensorFlow Datasets:
+
+```bash
+# Language Table from OXE
+python scripts/2_train_laq.py experiment=laq_oxe
+
+# Bridge from OXE
+python scripts/2_train_laq.py data=laq_oxe_bridge training.epochs=100
+```
+
+**Available OXE Datasets**:
+- `language_table` - 442k episodes, 2D tabletop manipulation
+- `language_table_blocktorelative_oracle_sim` - 200k episodes, oracle agent
+- `bridge` - 25,460 train episodes, WidowX kitchen manipulation
+
+**OXE Config Example** (`config/data/laq_oxe_bridge.yaml`):
+```yaml
+dataset_name: bridge
+train_split: "train[:90%]"
+val_split: "train[90%:]"
+offset: 5  # Frame offset (steps)
+image_size: 256
+batch_size: 32
+return_metadata: true  # Required for validation strategies
+```
+
+**Key Differences**:
+- **Streaming**: OXE data streams from GCS, no local storage needed
+- **TFDS splits**: Use TensorFlow Datasets split syntax (e.g., `train[:1000]`, `train[90%:]`)
+- **Metadata**: OXE provides `action`, `initial_state`, and `instruction` automatically
 
 ### Multi-Dataset Training
 
@@ -259,31 +296,65 @@ python scripts/2_train_laq.py experiment=laq_debug \
 
 ### Validation Configuration
 
-Configure validation frequency and strategies:
+The validation system uses **bucket-strategy binding** for flexible, multi-dataset validation:
+
 ```yaml
 validation:
   # Validate 100 times per epoch (important for large datasets)
   check_interval: 0.01
-  
+
   # Fixed samples: diverse across datasets, tracked every validation
   num_fixed_samples: 8
   # Random samples: different each time for diversity
   num_random_samples: 8
-  
+  max_cached_samples: 1024  # Per-bucket cache limit
+
+  # Define validation buckets (data subsets with filters)
+  buckets:
+    youtube_iid:
+      filters: {dataset_type: "youtube"}
+      max_samples: 100
+    bridge_iid:
+      filters: {dataset_type: "bridge", environment: ["!=", "toykitchen7"]}
+      max_samples: 100
+    bridge_holdout:
+      filters: {dataset_type: "bridge", environment: "toykitchen7"}
+      max_samples: 100
+      is_holdout: true  # Distribution shift data
+    language_table:
+      filters: {dataset_type: "oxe", dataset_name: "language_table"}
+      max_samples: 200
+
+  # Bind strategies to buckets
+  strategy_bucket_bindings:
+    basic_visualization:
+      buckets: all  # Run on all buckets
+    latent_transfer:
+      buckets: [bridge_iid, bridge_holdout]
+      compare_buckets: true  # Run separately per bucket with metric suffix
+    action_token_scatter:
+      buckets: [language_table]  # Only bucket with action metadata
+    clustering:
+      buckets: all
+
   strategies:
-    basic:
+    basic_visualization:
       enabled: true
       visualize_train: true
       visualize_val: true
-      visualize_per_bucket: true  # Separate grids for YouTube/Bridge
-      samples_per_bucket: 4
-    
+
     # Latent transfer: test action transfer between scenes
     latent_transfer:
       enabled: true
       every_n_validations: 10
       num_pairs: 256
-    
+
+    # Action visualization (requires action metadata)
+    action_token_scatter:
+      enabled: true
+      every_n_validations: 3
+      num_samples: 1000
+
     # Clustering: analyze latent action distribution
     clustering:
       enabled: true
@@ -291,19 +362,43 @@ validation:
       num_clusters: 16
 ```
 
-Key features:
-- **Fixed samples**: Diverse across datasets (equally samples from YouTube, Bridge, etc.)
-- **Per-bucket visualization**: Separate reconstruction grids for each dataset type
-- **Configurable frequency**: `check_interval: 0.01` = validate every 1% of epoch
+**Key Features**:
+- **Bucket-aware routing**: Samples routed to matching buckets based on filters
+- **Strategy-bucket binding**: Strategies declare which buckets they operate on
+- **Compare mode**: Run separately on each bucket for distribution shift analysis (e.g., `val/latent_transfer_mse_bridge_iid` vs `val/latent_transfer_mse_bridge_holdout`)
+- **Automatic applicability checks**: Strategies skip execution if insufficient data
+- **Metadata requirements**: Strategies declare required metadata (e.g., `action`, `initial_state`)
+
+**Validation Strategy Compatibility**:
+
+| Strategy | Requires | Compatible Datasets |
+|----------|----------|---------------------|
+| `basic_visualization` | frames | All |
+| `latent_transfer` | frames | All |
+| `clustering` | codes | All |
+| `codebook_histogram` | codes | All |
+| `action_token_scatter` | codes + `action` metadata | language_table, bridge |
+| `state_sequence_scatter` | codes + `initial_state` metadata | language_table, bridge |
 
 ## Implementation Notes
 
 - **LAQ Training** (Stage 1): Implemented in `scripts/2_train_laq.py`. Uses PyTorch Lightning for standard supervised learning with DDP.
 - **Foundation Training** (Stage 2): Implement in `scripts/4_train_foundation.py`. Use Lightning Fabric for FSDP multi-node training with fine training loop control.
 - **Data Loading**:
-  - Stage 1 (LAQ): Uses `LAQDataModule` with multi-source adapters (`MultiSourcePairDataset`). Pre-computes all valid frame pairs for deterministic training.
+  - **Local datasets** (Bridge, YouTube): Uses `LAQDataModule` with multi-source adapters (`MultiSourcePairDataset`). Pre-computes all valid frame pairs for deterministic training.
+  - **OXE datasets** (language_table, bridge): Uses `OXEDataModule` with `OXEFramePairDataset`. Streams from GCS using TensorFlow Datasets with `tf.data` pipelines.
+  - **Auto-detection**: Training script automatically selects `OXEDataModule` if `dataset_name` field present in config.
   - Stage 2/3: Implement WebDataset-based loaders in `packages/common/` for streaming TAR shards.
-- **Validation**: Uses `ValidationStrategyCallback` with configurable strategies (basic visualization, latent transfer, clustering). Supports per-bucket visualization for different dataset types.
+- **Validation**: Uses `ValidationStrategyCallback` with bucket-strategy binding:
+  - **Architecture**: Bucket-aware routing where samples are filtered to named buckets based on metadata
+  - **Strategies**: Each strategy declares metadata requirements (e.g., `action`, `initial_state`) and bucket bindings
+  - **Applicability checks**: Strategies automatically skip execution if insufficient data via `can_run()` method
+  - **Compare mode**: Strategies can run separately on each bucket for distribution shift analysis
+  - **Implementations**: Basic visualization, latent transfer, clustering, action/state scatter plots
+- **OXE Adapters**: Located in `packages/common/adapters/oxe.py`:
+  - Handles dict-based actions (Bridge) vs flat arrays (language_table)
+  - Handles string instructions (Bridge) vs encoded tensors (language_table)
+  - Configurable via `OXEDatasetConfig` registry
 - **Logging**: Use `packages/common/logging.py` for consistent logging across stages.
 - **Checkpointing**: Lightning handles checkpoint saving; configure paths via Hydra config.
 

@@ -23,7 +23,7 @@ model:
 # Data settings
 data:
   batch_size: 32  # Works with pooling (8x8 grid matches original architecture)
-  shuffle_buffer: 2000
+  shuffle_buffer: 200
   prefetch_buffer: 4
 
 # Training settings

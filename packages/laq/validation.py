@@ -290,8 +290,8 @@ class ValidationCache:
                 if val is None:
                     has_all = False
                     break
-                # Special check for 2D actions
-                if key == "action" and isinstance(val, (list, tuple)) and len(val) != 2:
+                # Check for 2D+ actions (need at least 2 dims for scatter plots)
+                if key == "action" and isinstance(val, (list, tuple)) and len(val) < 2:
                     has_all = False
                     break
             if has_all:
@@ -1538,9 +1538,9 @@ class ActionTokenScatterStrategy(ValidationStrategy):
             if "action" not in meta:
                 continue
             action = meta["action"]
-            # Only support 2D actions for now
-            if isinstance(action, (list, tuple)) and len(action) == 2:
-                actions.append(action)
+            # Support 2D+ actions (use first 2 dims for scatter plot)
+            if isinstance(action, (list, tuple)) and len(action) >= 2:
+                actions.append(action[:2])  # Take first 2 dims
                 # Get corresponding code (use first token if multi-token)
                 if i < len(all_codes):
                     code = all_codes[i]
@@ -1549,7 +1549,7 @@ class ActionTokenScatterStrategy(ValidationStrategy):
                     codes_list.append(code.item())
 
         if len(actions) < self.min_samples:
-            # Not enough 2D action samples
+            # Not enough action samples
             return metrics
 
         # Limit samples
@@ -1697,10 +1697,10 @@ class ActionSequenceScatterStrategy(ValidationStrategy):
             if "action" not in meta:
                 continue
             action = meta["action"]
-            # Only support 2D actions
-            if isinstance(action, (list, tuple)) and len(action) == 2:
+            # Support 2D+ actions (use first 2 dims for scatter plot)
+            if isinstance(action, (list, tuple)) and len(action) >= 2:
                 if i < len(sequences):
-                    actions.append(action)
+                    actions.append(action[:2])  # Take first 2 dims
                     seq_ids.append(seq_to_id[sequences[i]])
 
         if len(actions) < self.min_samples:
@@ -1862,10 +1862,10 @@ class TopSequencesScatterStrategy(ValidationStrategy):
             if "action" not in meta:
                 continue
             action = meta["action"]
-            # Only support 2D actions
-            if isinstance(action, (list, tuple)) and len(action) == 2:
+            # Support 2D+ actions (use first 2 dims for scatter plot)
+            if isinstance(action, (list, tuple)) and len(action) >= 2:
                 if i < len(all_seqs_list):
-                    actions.append(action)
+                    actions.append(action[:2])  # Take first 2 dims
                     sequences.append(all_seqs_list[i])
 
         if len(actions) < self.min_samples:
