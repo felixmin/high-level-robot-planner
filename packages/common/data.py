@@ -237,6 +237,44 @@ def load_scenes_csv(csv_path: Union[str, Path]) -> List[SceneMetadata]:
     return scenes
 
 
+def oxe_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Custom collate function for OXE datasets.
+    
+    Stacks 'frames' into a tensor but keeps other metadata fields as lists.
+    This prevents errors when collating heterogeneous data (e.g., variable length actions).
+    """
+    if not batch:
+        return {}
+
+    # Separate frames and metadata
+    frames_list = []
+    metadata = {}
+    
+    # Initialize metadata lists
+    for key in batch[0].keys():
+        if key != "frames":
+            metadata[key] = []
+
+    for item in batch:
+        frames_list.append(item["frames"])
+        for key, value in item.items():
+            if key != "frames":
+                # Handle cases where keys might be missing in some items (though unlikely with consistent dataset)
+                if key in metadata:
+                    metadata[key].append(value)
+    
+    # Stack frames
+    result = {
+        "frames": torch.stack(frames_list),
+    }
+    
+    # Add metadata lists
+    result.update(metadata)
+    
+    return result
+
+
 def metadata_collate_fn(batch: List[Dict]) -> Dict:
     """
     Custom collate function for MultiSourcePairDataset.
@@ -940,35 +978,48 @@ class OXEDataModule(pl.LightningDataModule):
     without caching to local disk. Designed for large-scale OXE datasets
     like language_table (442k episodes, multi-TB).
 
-    Key differences from LAQDataModule:
-    - Uses IterableDataset (streaming) instead of map-style Dataset
-    - No local file caching - streams from GCS
-    - tf.data handles prefetching and shuffling efficiently
-    - Train/val split is episode-based, not scene-based
+    Supports both single-dataset and multi-dataset configurations:
 
-    Example config:
+    Single dataset (legacy format):
     ```yaml
-    dataset_name: language_table
-    gcs_path: gs://gresearch/robotics/language_table/0.0.1
+    dataset_name: bridge
     train_split: "train[:90%]"
     val_split: "train[90%:]"
-    offset: 5  # Steps between frame pairs
+    offset: 5
+    ```
+
+    Multi-dataset (new format):
+    ```yaml
+    datasets:
+      - name: language_table
+        train_split: "train[:90%]"
+        val_split: "train[90%:]"
+        weight: 0.6
+      - name: bridge
+        train_split: "train[:90%]"
+        val_split: "train[90%:]"
+        weight: 0.4
+    offset: 5  # Shared default
     ```
     """
 
     def __init__(
         self,
-        dataset_name: str = "language_table",
+        # New multi-dataset format
+        datasets: Optional[list] = None,
+        # Legacy single-dataset format (still supported)
+        dataset_name: Optional[str] = None,
         gcs_path: Optional[str] = None,
         train_split: str = "train[:90%]",
         val_split: str = "train[90%:]",
+        # Shared settings
         offset: int = 5,
         image_size: int = 256,
         batch_size: int = 32,
         num_workers: int = 0,  # IterableDataset + tf.data handles parallelism
-        shuffle_buffer: int = 1000,
-        prefetch_buffer: int = 2,
-        return_metadata: bool = False,
+        shuffle_buffer: int = 200,
+        prefetch_buffer: int = 4,
+        return_metadata: bool = True,
         # Legacy parameters (ignored but kept for config compatibility)
         name: Optional[str] = None,
         task: Optional[str] = None,
@@ -976,11 +1027,17 @@ class OXEDataModule(pl.LightningDataModule):
     ):
         """
         Args:
-            dataset_name: Name of OXE dataset (e.g., "language_table")
+            datasets: List of dataset configs (new format), each with:
+                - name: Dataset name (e.g., "bridge", "language_table")
+                - train_split: TFDS split for training
+                - val_split: TFDS split for validation
+                - weight: Sampling weight (default 1.0)
+                - offset: Optional per-dataset offset override
+            dataset_name: Name of OXE dataset (legacy single-dataset format)
             gcs_path: Override GCS path (optional, uses registry default)
-            train_split: TFDS split for training (e.g., "train[:90%]")
-            val_split: TFDS split for validation (e.g., "train[90%:]")
-            offset: Frame offset for pairs (in steps)
+            train_split: TFDS split for training (legacy format)
+            val_split: TFDS split for validation (legacy format)
+            offset: Default frame offset for pairs (in steps)
             image_size: Target image size (will resize)
             batch_size: Batch size for dataloaders
             num_workers: DataLoader workers (0 recommended for IterableDataset)
@@ -990,10 +1047,22 @@ class OXEDataModule(pl.LightningDataModule):
         """
         super().__init__()
 
-        self.dataset_name = dataset_name
-        self.gcs_path = gcs_path
-        self.train_split = train_split
-        self.val_split = val_split
+        # Normalize config: convert legacy format to list-based format
+        if datasets is not None:
+            # New multi-dataset format
+            self.dataset_configs = list(datasets)
+        elif dataset_name is not None:
+            # Legacy single-dataset format -> convert to list
+            self.dataset_configs = [{
+                "name": dataset_name,
+                "train_split": train_split,
+                "val_split": val_split,
+                "weight": 1.0,
+                "gcs_path": gcs_path,
+            }]
+        else:
+            raise ValueError("Must provide either 'datasets' list or 'dataset_name'")
+
         self.offset = offset
         self.image_size = image_size
         self.batch_size = batch_size
@@ -1008,38 +1077,62 @@ class OXEDataModule(pl.LightningDataModule):
 
     def setup(self, stage: Optional[str] = None):
         """Create train and val datasets."""
-        from common.adapters.oxe import OXEFramePairDataset
+        from common.adapters.oxe import OXEFramePairDataset, MultiOXEFramePairDataset
 
-        # Training dataset with shuffling
-        self.train_dataset = OXEFramePairDataset(
-            dataset_name=self.dataset_name,
-            gcs_path=self.gcs_path,
-            split=self.train_split,
-            offset=self.offset,
-            image_size=self.image_size,
-            shuffle_buffer=self.shuffle_buffer,
-            prefetch_buffer=self.prefetch_buffer,
-            return_metadata=self.return_metadata,
-        )
+        if len(self.dataset_configs) == 1:
+            # Single dataset - use simple implementation
+            cfg = self.dataset_configs[0]
+            self.train_dataset = OXEFramePairDataset(
+                dataset_name=cfg["name"],
+                gcs_path=cfg.get("gcs_path"),
+                split=cfg.get("train_split", "train[:90%]"),
+                offset=cfg.get("offset", self.offset),
+                image_size=self.image_size,
+                shuffle_buffer=self.shuffle_buffer,
+                prefetch_buffer=self.prefetch_buffer,
+                return_metadata=self.return_metadata,
+            )
+            self.val_dataset = OXEFramePairDataset(
+                dataset_name=cfg["name"],
+                gcs_path=cfg.get("gcs_path"),
+                split=cfg.get("val_split", "train[90%:]"),
+                offset=cfg.get("offset", self.offset),
+                image_size=self.image_size,
+                shuffle_buffer=0,  # No shuffle for val
+                prefetch_buffer=self.prefetch_buffer,
+                return_metadata=self.return_metadata,
+            )
+            print(f"✓ OXE DataModule initialized (single dataset)")
+            print(f"  - Dataset: {cfg['name']}")
+            print(f"  - Train split: {cfg.get('train_split', 'train[:90%]')}")
+            print(f"  - Val split: {cfg.get('val_split', 'train[90%:]')}")
+        else:
+            # Multiple datasets - use interleaving
+            self.train_dataset = MultiOXEFramePairDataset(
+                datasets=self.dataset_configs,
+                image_size=self.image_size,
+                offset=self.offset,
+                shuffle_buffer=self.shuffle_buffer,
+                prefetch_buffer=self.prefetch_buffer,
+                return_metadata=self.return_metadata,
+                is_train=True,
+            )
+            self.val_dataset = MultiOXEFramePairDataset(
+                datasets=self.dataset_configs,
+                image_size=self.image_size,
+                offset=self.offset,
+                shuffle_buffer=0,  # No shuffle for val
+                prefetch_buffer=self.prefetch_buffer,
+                return_metadata=self.return_metadata,
+                is_train=False,
+            )
+            dataset_names = [cfg["name"] for cfg in self.dataset_configs]
+            print(f"✓ OXE DataModule initialized (multi-dataset)")
+            print(f"  - Datasets: {', '.join(dataset_names)}")
 
-        # Validation dataset without shuffling
-        self.val_dataset = OXEFramePairDataset(
-            dataset_name=self.dataset_name,
-            gcs_path=self.gcs_path,
-            split=self.val_split,
-            offset=self.offset,
-            image_size=self.image_size,
-            shuffle_buffer=0,  # No shuffle for val
-            prefetch_buffer=self.prefetch_buffer,
-            return_metadata=self.return_metadata,
-        )
-
-        print(f"✓ OXE DataModule initialized")
-        print(f"  - Dataset: {self.dataset_name}")
-        print(f"  - Train split: {self.train_split}")
-        print(f"  - Val split: {self.val_split}")
         print(f"  - Offset: {self.offset} steps")
         print(f"  - Image size: {self.image_size}")
+        print(f"  - Shuffle buffer: {self.shuffle_buffer}")
 
     def train_dataloader(self):
         """Create training dataloader."""
@@ -1048,6 +1141,7 @@ class OXEDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=True,
+            collate_fn=oxe_collate_fn if self.return_metadata else None,
             # Note: shuffle=False because IterableDataset handles shuffling internally
         )
 
@@ -1058,4 +1152,5 @@ class OXEDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=True,
+            collate_fn=oxe_collate_fn if self.return_metadata else None,
         )

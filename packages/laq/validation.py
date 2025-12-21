@@ -177,7 +177,7 @@ class ValidationCache:
             return
 
         self.frames.append(frame.cpu() if frame.is_cuda else frame)
-        self.metadata.append([meta])  # Wrap in list to match batch format
+        self.metadata.append([meta])  # Always store as list for consistency with add_batch
         self._sample_count += 1
 
         if code is not None:
@@ -1535,6 +1535,10 @@ class ActionTokenScatterStrategy(ValidationStrategy):
         codes_list = []
 
         for i, meta in enumerate(all_metadata):
+            # Strict filtering for language_table as requested
+            if meta.get("dataset_name") != "language_table":
+                continue
+
             if "action" not in meta:
                 continue
             action = meta["action"]
@@ -1694,9 +1698,14 @@ class ActionSequenceScatterStrategy(ValidationStrategy):
         num_unique_seqs = len(unique_seqs)
 
         for i, meta in enumerate(all_metadata):
+            # Strict filtering for language_table as requested
+            if meta.get("dataset_name") != "language_table":
+                continue
+
             if "action" not in meta:
                 continue
             action = meta["action"]
+
             # Support 2D+ actions (use first 2 dims for scatter plot)
             if isinstance(action, (list, tuple)) and len(action) >= 2:
                 if i < len(sequences):
@@ -1859,6 +1868,10 @@ class TopSequencesScatterStrategy(ValidationStrategy):
         all_seqs_list = [tuple(c.tolist()) for c in all_codes]
 
         for i, meta in enumerate(all_metadata):
+            # Strict filtering for language_table as requested
+            if meta.get("dataset_name") != "language_table":
+                continue
+
             if "action" not in meta:
                 continue
             action = meta["action"]
@@ -2046,6 +2059,10 @@ class StateSequenceScatterStrategy(ValidationStrategy):
         all_seqs_list = [tuple(c.tolist()) for c in all_codes]
 
         for i, meta in enumerate(all_metadata):
+            # Strict filtering for language_table as requested
+            if meta.get("dataset_name") != "language_table":
+                continue
+
             if "initial_state" not in meta:
                 continue
             state = meta["initial_state"]

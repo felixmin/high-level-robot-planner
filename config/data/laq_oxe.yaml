@@ -1,32 +1,19 @@
-# OXE (Open X-Embodiment) LAQ Training Configuration
+# OXE (Open X-Embodiment) LAQ Training Configuration (unified format)
 # Streams data from Google Cloud Storage without local caching
 
-name: laq_oxe
-task: laq
+datasets:
+  - name: language_table_blocktorelative_oracle_sim
+    train_split: "train[:90%]"   # 180,000 episodes
+    val_split: "train[90%:]"     # 20,000 episodes
+    weight: 1.0
 
-# Dataset configuration
-# Options: language_table, language_table_blocktorelative_oracle_sim,
-#          language_table_blocktoblock_oracle_sim, etc.
-dataset_name: language_table_blocktorelative_oracle_sim
-
-# Train/val splits using TFDS split syntax
-# blocktorelative_oracle_sim has 200,000 episodes with longer sequences (27-46 steps)
-train_split: "train[:90%]"
-val_split: "train[90%:]"
-
-# Frame pair settings
+# Shared settings
 # oracle_sim episodes are 27-46 steps (mean ~34) at 10Hz
 # offset=10 means 1 second between frames
 offset: 10
 image_size: 256
-
-# Batch size and workers
 batch_size: 32
-num_workers: 0  # IterableDataset + tf.data handles parallelism internally
-
-# tf.data pipeline settings
-shuffle_buffer: 2000  # Larger buffer for better randomization
-prefetch_buffer: 4    # Prefetch multiple batches
-
-# Metadata - enable for validation strategies to work properly
-return_metadata: true
+num_workers: 0               # tf.data handles parallelism internally
+shuffle_buffer: 500          # Buffer for randomization
+prefetch_buffer: 4
+return_metadata: true        # Required for validation strategies

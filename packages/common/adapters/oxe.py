@@ -1,3 +1,5 @@
+import logging
+
 """
 Open X-Embodiment (OXE) adapter for streaming RLDS datasets from GCS.
 
@@ -28,6 +30,9 @@ Key features:
 - Automatic handling of string vs encoded instruction formats
 - Cumulative action computation between frame pairs
 - TFDS split syntax support (e.g., "train[:90%]", "train[1000:2000]")
+"""
+
+logger = logging.getLogger(__name__)
 """
 
 from dataclasses import dataclass
@@ -82,6 +87,7 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/language_table_blocktoblock_oracle_sim/0.0.1",
         image_key="rgb",
         instruction_key="instruction",
+        state_key="effector_translation",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
     ),
@@ -90,6 +96,7 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/language_table_blocktoabsolute_oracle_sim/0.0.1",
         image_key="rgb",
         instruction_key="instruction",
+        state_key="effector_translation",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
     ),
@@ -98,6 +105,7 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/language_table_separate_oracle_sim/0.0.1",
         image_key="rgb",
         instruction_key="instruction",
+        state_key="effector_translation",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
     ),
@@ -440,9 +448,128 @@ class OXEFramePairDataset(IterableDataset):
             except tf.errors.OutOfRangeError:
                 break
             except Exception as e:
-                # Log but continue on errors (some episodes may be malformed)
-                print(f"Warning: Error processing item: {e}")
+                logger.warning(f"Error processing OXE item: {e}")
                 continue
+
+
+class MultiOXEFramePairDataset(IterableDataset):
+    """
+    PyTorch IterableDataset that interleaves frame pairs from multiple OXE datasets.
+
+    Alternates between datasets based on weights to ensure good mixing.
+    Each dataset can have different configs (action format, image size, etc.)
+
+    Args:
+        datasets: List of dataset configs, each with:
+            - name: Dataset name (e.g., "bridge", "language_table")
+            - train_split / val_split: TFDS split strings
+            - weight: Sampling weight (default 1.0)
+            - offset: Optional per-dataset offset override
+        image_size: Target image size (shared)
+        offset: Default frame offset for pairs
+        shuffle_buffer: Size of shuffle buffer (split across datasets)
+        prefetch_buffer: tf.data prefetch buffer size
+        return_metadata: If True, return dict with metadata
+        is_train: If True, use train_split; else use val_split
+    """
+
+    def __init__(
+        self,
+        datasets: list,
+        image_size: int = 256,
+        offset: int = 5,
+        shuffle_buffer: int = 200,
+        prefetch_buffer: int = 2,
+        return_metadata: bool = True,
+        is_train: bool = True,
+    ):
+        super().__init__()
+
+        self.dataset_configs = datasets
+        self.image_size = image_size
+        self.default_offset = offset
+        self.shuffle_buffer = shuffle_buffer
+        self.prefetch_buffer = prefetch_buffer
+        self.return_metadata = return_metadata
+        self.is_train = is_train
+
+        # Will be populated lazily
+        self._datasets = None
+        self._weights = None
+
+    def _init_datasets(self):
+        """Initialize individual datasets lazily."""
+        if self._datasets is not None:
+            return
+
+        self._datasets = []
+        weights = []
+
+        # Split shuffle buffer across datasets
+        buffer_per_dataset = max(10, self.shuffle_buffer // len(self.dataset_configs))
+
+        for cfg in self.dataset_configs:
+            # Get split based on train/val mode
+            if self.is_train:
+                split = cfg.get("train_split", cfg.get("split", "train[:90%]"))
+            else:
+                split = cfg.get("val_split", "train[90%:]")
+
+            ds = OXEFramePairDataset(
+                dataset_name=cfg["name"],
+                split=split,
+                image_size=self.image_size,
+                offset=cfg.get("offset", self.default_offset),
+                shuffle_buffer=buffer_per_dataset if self.is_train else 0,
+                prefetch_buffer=self.prefetch_buffer,
+                return_metadata=self.return_metadata,
+            )
+            self._datasets.append(ds)
+            weights.append(cfg.get("weight", 1.0))
+
+        # Normalize weights
+        total_weight = sum(weights)
+        self._weights = [w / total_weight for w in weights]
+
+    def __len__(self):
+        """Approximate total length across all datasets."""
+        self._init_datasets()
+        return sum(len(ds) for ds in self._datasets)
+
+    def __iter__(self):
+        """Interleave samples from all datasets based on weights."""
+        import random
+
+        self._init_datasets()
+
+        # Create iterators for each dataset
+        iterators = [iter(ds) for ds in self._datasets]
+        active = list(range(len(iterators)))  # Indices of active iterators
+
+        while active:
+            # Choose dataset based on weights (only from active ones)
+            active_weights = [self._weights[i] for i in active]
+            total = sum(active_weights)
+            normalized = [w / total for w in active_weights]
+
+            # Weighted random selection
+            r = random.random()
+            cumsum = 0
+            chosen_idx = 0
+            for i, w in enumerate(normalized):
+                cumsum += w
+                if r <= cumsum:
+                    chosen_idx = i
+                    break
+
+            dataset_idx = active[chosen_idx]
+
+            try:
+                item = next(iterators[dataset_idx])
+                yield item
+            except StopIteration:
+                # This dataset is exhausted, remove from active
+                active.remove(dataset_idx)
 
 
 def get_oxe_dataset_info(dataset_name: str = "language_table") -> Dict[str, Any]:

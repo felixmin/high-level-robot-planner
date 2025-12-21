@@ -170,7 +170,7 @@ class TestDataIntegrationWithModel:
         batch = batch.to(device)
 
         with torch.no_grad():
-            loss, num_unique = model(batch, step=0)
+            loss, num_unique, recon, aux_loss = model(batch, step=0)
 
         assert isinstance(loss.item(), float)
         assert loss.item() >= 0

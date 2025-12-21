@@ -71,16 +71,10 @@ def main(cfg: DictConfig):
     # Detect data module type based on config
     data_config = {k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
 
-    if "dataset_name" in cfg.data:
-        # OXE streaming dataset (e.g., language_table)
+    if "dataset_name" in cfg.data or "datasets" in cfg.data:
+        # OXE streaming dataset (single or multi-dataset)
         datamodule = OXEDataModule(**data_config)
         datamodule.setup()
-        print(f"✓ OXE DataModule initialized (streaming from GCS)")
-        print(f"  - Dataset: {cfg.data.dataset_name}")
-        print(f"  - Train split: {cfg.data.train_split}")
-        print(f"  - Val split: {cfg.data.val_split}")
-        print(f"  - Offset: {cfg.data.offset} steps")
-        print(f"  - Image size: {cfg.data.image_size}")
         print(f"  - Batch size: {cfg.data.batch_size}")
         print(f"  - Estimated train pairs: ~{len(datamodule.train_dataset):,}")
     else:

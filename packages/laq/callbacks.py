@@ -388,8 +388,10 @@ class EMACallback(Callback):
     ) -> None:
         """Initialize EMA model."""
         # Clone model for EMA
+        # Convert OmegaConf to dict if needed
+        model_config = dict(pl_module.model_config) if hasattr(pl_module.model_config, 'items') else pl_module.model_config
         self.ema_model = type(pl_module.model)(
-            **pl_module.model_config
+            **model_config
         ).to(pl_module.device)
         self.ema_model.load_state_dict(pl_module.model.state_dict())
         self.ema_model.eval()

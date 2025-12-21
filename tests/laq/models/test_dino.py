@@ -207,7 +207,7 @@ class TestLAQWithDINO:
         x = torch.randn(2, 3, 2, 256, 256, device=device)
         
         with torch.no_grad():
-            loss, num_unique, recon = laq_with_dino(x, step=0)
+            loss, num_unique, recon, aux_loss = laq_with_dino(x, step=0)
         
         assert loss.item() >= 0
         assert num_unique > 0
@@ -244,7 +244,7 @@ class TestLAQWithDINO:
         """Test gradients flow through LAQ+DINO (DINO frozen)."""
         x = torch.randn(2, 3, 2, 256, 256, device=device, requires_grad=True)
         
-        loss, num_unique, recon = laq_with_dino(x, step=0)
+        loss, num_unique, recon, aux_loss = laq_with_dino(x, step=0)
         loss.backward()
         
         # Input should have gradients (through unfrozen parts)

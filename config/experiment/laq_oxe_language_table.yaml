@@ -1,32 +1,32 @@
 # @package _global_
 
-# LAQ training on OXE Bridge dataset
-# Uses smaller cache and less frequent validation due to larger images
+# LAQ training on OXE Language Table dataset
+# 2D tabletop manipulation with 442k episodes
 
 defaults:
   - /model@model: laq
-  - /data@data: laq_oxe_bridge
+  - /data@data: laq_oxe_language_table
   - /training@training: laq_optimizer
   - /cluster@cluster: local_dev
 
 experiment:
-  name: laq_oxe_bridge
-  description: LAQ training on OXE Bridge dataset (streaming from GCS)
+  name: laq_oxe_language_table
+  description: LAQ training on OXE Language Table dataset (streaming from GCS)
 
-# Model settings (same as laq_oxe)
+# Model settings
 model:
   image_size: 256
   use_dinov3_encoder: true
   dinov3_model_name: "facebook/dinov3-vits16-pretrain-lvd1689m"
   dinov3_pool_to_grid: 8
 
-# Data settings - Bridge needs small shuffle buffer due to large images
+# Data settings - language_table has smaller images, can use larger buffer
 data:
   batch_size: 32
-  shuffle_buffer: 500  # Keep small - Bridge images are 480x640 before resize
+  shuffle_buffer: 500
   prefetch_buffer: 4
 
-# Training settings - memory leak fixed in OXE adapter, using reasonable defaults
+# Training settings
 training:
   epochs: 100
   max_steps: null
@@ -35,9 +35,9 @@ training:
   perceptual_loss:
     enabled: false
   validation:
-    check_interval: 1000  # Standard validation frequency
-    limit_batches: 100    # Standard batch limit
-    max_cached_samples: 256  # Reasonable cache size
+    check_interval: 1000
+    limit_batches: 100
+    max_cached_samples: 256
     num_fixed_samples: 8
     num_random_samples: 8
     strategies:
@@ -83,4 +83,4 @@ training:
 
 logging:
   use_wandb: true
-  tags: ["oxe", "bridge", "laq", "streaming"]
+  tags: ["oxe", "language_table", "laq", "streaming"]

@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from torch import nn, einsum
 
 from beartype import beartype
-from typing import Tuple
 
 from einops import rearrange, repeat
 
@@ -60,7 +59,7 @@ class PEG(nn.Module):
         self.dsconv = nn.Conv3d(dim, dim, 3, groups = dim)
 
     @beartype
-    def forward(self, x, shape: Tuple[int, int, int, int] = None):
+    def forward(self, x, shape: tuple[int, int, int, int] = None):
         needs_shape = x.ndim == 3
         assert not (needs_shape and not exists(shape))
 
@@ -310,7 +309,7 @@ class Transformer(nn.Module):
     def forward(
         self,
         x,
-        video_shape: Tuple[int, int, int, int] = None,
+        video_shape: tuple[int, int, int, int] = None,
         attn_bias = None,
         context = None,
         self_attn_mask = None,

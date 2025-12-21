@@ -188,21 +188,6 @@ class DINOEncoder(nn.Module):
 
 
 class DINOWrapper(nn.Module):
-    """
-    Wrapper to handle [B, C, T, H, W] -> [B, T, h, w, d] conversion.
-    Squeezes out the time dimension for single-frame processing.
-    """
-    def __init__(self, encoder):
-        super().__init__()
-        self.encoder = encoder
-        
-    def forward(self, x):
-        # x: [B, C, 1, H, W] -> [B, C, H, W]
-        x = x.squeeze(2)
-        return self.encoder(x)
-
-
-class DINOWrapper(nn.Module):
     """Wrapper to handle [B, C, 1, H, W] -> [B, C, H, W] conversion."""
     def __init__(self, encoder):
         super().__init__()
