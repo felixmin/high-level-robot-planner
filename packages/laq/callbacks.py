@@ -6,6 +6,7 @@ Includes:
 - EMACallback: Exponential moving average of model weights
 """
 
+import gc
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, field
 
@@ -61,12 +62,14 @@ class ValidationStrategyCallback(Callback):
         num_fixed_samples: int = 8,
         num_random_samples: int = 8,
         max_cached_samples: int = 256,
+        run_gc_after_validation: bool = True,
     ):
         super().__init__()
         self.strategies = strategies or []
         self.num_fixed_samples = num_fixed_samples
         self.num_random_samples = num_random_samples
         self.max_cached_samples = max_cached_samples
+        self.run_gc_after_validation = run_gc_after_validation
 
         # Import here to avoid circular imports
         from laq.validation import ValidationCache, BucketConfig
@@ -354,6 +357,13 @@ class ValidationStrategyCallback(Callback):
                     strategy.run(merged, pl_module, trainer)
                 except Exception as e:
                     print(f"Warning: Strategy {strategy.name} failed: {e}")
+
+        # Run garbage collection after validation to free memory
+        # This helps prevent memory buildup when using tf.data pipelines
+        # Can be disabled on high-memory systems (cluster) via config
+        if self.run_gc_after_validation:
+            gc.collect()
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
 
 class EMACallback(Callback):

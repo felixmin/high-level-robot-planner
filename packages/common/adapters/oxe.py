@@ -33,7 +33,6 @@ Key features:
 """
 
 logger = logging.getLogger(__name__)
-"""
 
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, Optional, Tuple
@@ -133,6 +132,10 @@ class OXEFramePairDataset(IterableDataset):
     Uses tf.data internally for efficient streaming and prefetching,
     converts to PyTorch tensors on iteration.
 
+    IMPORTANT: This dataset uses persistent tf.data pipelines to avoid memory leaks.
+    The pipeline is created once and reused across epochs. Call cleanup() explicitly
+    if you need to release TensorFlow resources before the object is garbage collected.
+
     Args:
         dataset_name: Name of OXE dataset (e.g., "language_table")
         split: TFDS split string (e.g., "train", "train[:1000]")
@@ -190,7 +193,10 @@ class OXEFramePairDataset(IterableDataset):
         # Lazy initialization of tf.data pipeline
         self._builder = None
         self._num_episodes = None
-        self._cached_pipeline = None  # Cache the tf.data pipeline to prevent memory leaks
+        # Persistent pipeline - created once, reused across epochs
+        self._persistent_pipeline = None
+        self._pipeline_iterator = None
+        self._epoch_count = 0
 
     def _init_tfds(self):
         """Initialize TFDS builder and dataset (lazy)."""
@@ -259,9 +265,9 @@ class OXEFramePairDataset(IterableDataset):
                 if return_metadata and instruction_key in steps[0]["observation"]:
                     instr_tensor = steps[0]["observation"][instruction_key]
                     try:
-                        # Check if it's a string tensor (Bridge) or encoded ints (language_table)
+                        # Check if it is a string tensor (Bridge) or encoded ints (language_table)
                         if instr_tensor.dtype == tf.string:
-                            # String tensor (e.g., Bridge's natural_language_instruction)
+                            # String tensor (e.g., Bridge natural_language_instruction)
                             instruction = instr_tensor.numpy().decode("utf-8")
                         else:
                             # Encoded int tensor (e.g., language_table)
@@ -378,25 +384,49 @@ class OXEFramePairDataset(IterableDataset):
 
         return tf_ds
 
+    def _get_or_create_pipeline(self):
+        """Get existing pipeline or create new one (lazy, persistent)."""
+        if self._persistent_pipeline is None:
+            self._persistent_pipeline = self._create_tf_pipeline()
+        return self._persistent_pipeline
+
+    def cleanup(self):
+        """
+        Explicitly release TensorFlow resources.
+
+        Call this when you are done with the dataset and want to free memory
+        before the object is garbage collected.
+        """
+        import gc
+
+        self._persistent_pipeline = None
+        self._pipeline_iterator = None
+        self._builder = None
+        gc.collect()
+
+        # Try to clear TensorFlow caches (may not be fully effective)
+        try:
+            import tensorflow as tf
+            tf.keras.backend.clear_session()
+        except Exception:
+            pass
+
+    def __del__(self):
+        """Cleanup on deletion."""
+        try:
+            self.cleanup()
+        except Exception:
+            pass
+
     def __iter__(self) -> Iterator:
         """Iterate over frame pairs."""
         import tensorflow as tf
-        import gc
 
-        # CRITICAL: Clear TensorFlow session before creating new pipeline
-        # This prevents memory leaks from accumulated tf.Graph objects
-        # when __iter__ is called multiple times (once per epoch)
-        if self._cached_pipeline is not None:
-            # Release the old pipeline
-            del self._cached_pipeline
-            self._cached_pipeline = None
-            gc.collect()
-            # Clear TensorFlow's internal caches
-            tf.keras.backend.clear_session()
+        self._epoch_count += 1
 
-        # Create fresh pipeline for this epoch
-        tf_ds = self._create_tf_pipeline()
-        self._cached_pipeline = tf_ds  # Store reference for cleanup on next iteration
+        # Get or create the persistent pipeline
+        # The pipeline uses repeat() internally, so we just create a new iterator
+        tf_ds = self._get_or_create_pipeline()
 
         # Iterate and convert to PyTorch
         for item in tf_ds:
@@ -535,6 +565,25 @@ class MultiOXEFramePairDataset(IterableDataset):
         """Approximate total length across all datasets."""
         self._init_datasets()
         return sum(len(ds) for ds in self._datasets)
+
+    def cleanup(self):
+        """
+        Explicitly release TensorFlow resources from all underlying datasets.
+
+        Call this when you are done with the dataset and want to free memory.
+        """
+        if self._datasets is not None:
+            for ds in self._datasets:
+                ds.cleanup()
+            self._datasets = None
+            self._weights = None
+
+    def __del__(self):
+        """Cleanup on deletion."""
+        try:
+            self.cleanup()
+        except Exception:
+            pass
 
     def __iter__(self):
         """Interleave samples from all datasets based on weights."""
