@@ -1478,14 +1478,196 @@ class AllSequencesHistogramStrategy(ValidationStrategy):
             print(f"Warning: all_sequences_histogram visualization failed: {e}")
 
 
-class ActionTokenScatterStrategy(ValidationStrategy):
+class MetadataScatterStrategy(ValidationStrategy):
+    """
+    Base class for scatter plot strategies that visualize metadata (actions, states)
+    colored by codebook tokens or sequences.
+
+    Provides common functionality:
+    - Sample filtering by dataset and metadata requirements
+    - Sample limiting with random selection
+    - Matplotlib figure creation and cleanup
+    """
+
+    def __init__(
+        self,
+        name: str,
+        enabled: bool = True,
+        every_n_validations: int = 1,
+        num_samples: int = 1000,
+        min_samples: int = 10,
+        dataset_filter: Optional[str] = "language_table",
+        **kwargs,
+    ):
+        super().__init__(
+            name=name,
+            enabled=enabled,
+            every_n_validations=every_n_validations,
+            min_samples=min_samples,
+        )
+        self.num_samples = num_samples
+        self.dataset_filter = dataset_filter
+
+    def needs_caching(self) -> bool:
+        return True
+
+    def needs_codes(self) -> bool:
+        return True
+
+    def _filter_samples_with_metadata(
+        self,
+        cache: ValidationCache,
+        required_keys: List[str],
+    ) -> Tuple[List[Dict[str, Any]], List[Any], List[int]]:
+        """
+        Filter samples that have required metadata keys.
+
+        Args:
+            cache: Validation cache
+            required_keys: List of metadata keys required (e.g., ["action"])
+
+        Returns:
+            Tuple of (filtered_metadata, codes_list, valid_indices)
+        """
+        all_metadata = cache.get_all_metadata()
+        all_codes = cache.get_all_codes()
+
+        if not all_metadata or all_codes is None:
+            return [], [], []
+
+        filtered_meta = []
+        codes_list = []
+        valid_indices = []
+
+        for i, meta in enumerate(all_metadata):
+            # Dataset filter
+            if self.dataset_filter and meta.get("dataset_name") != self.dataset_filter:
+                continue
+
+            # Check all required keys exist
+            has_all = True
+            for key in required_keys:
+                val = meta.get(key)
+                if val is None:
+                    has_all = False
+                    break
+                # Need at least 2D for scatter plots
+                if isinstance(val, (list, tuple)) and len(val) < 2:
+                    has_all = False
+                    break
+
+            if has_all and i < len(all_codes):
+                filtered_meta.append(meta)
+                codes_list.append(all_codes[i])
+                valid_indices.append(i)
+
+        return filtered_meta, codes_list, valid_indices
+
+    def _limit_samples(
+        self,
+        *arrays,
+        n: Optional[int] = None,
+    ) -> Tuple:
+        """
+        Randomly limit samples to n (or self.num_samples).
+
+        Args:
+            *arrays: Variable number of lists/tensors to sample from
+            n: Number of samples (defaults to self.num_samples)
+
+        Returns:
+            Tuple of sampled arrays in same order as input
+        """
+        if not arrays or len(arrays[0]) == 0:
+            return tuple([] for _ in arrays)
+
+        n = n or self.num_samples
+        total = len(arrays[0])
+        n = min(n, total)
+
+        indices = torch.randperm(total)[:n].tolist()
+
+        result = []
+        for arr in arrays:
+            if isinstance(arr, torch.Tensor):
+                result.append(arr[indices])
+            else:
+                result.append([arr[i] for i in indices])
+
+        return tuple(result)
+
+    def _create_scatter_figure(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        colors: np.ndarray,
+        title: str,
+        xlabel: str,
+        ylabel: str,
+        colorbar_label: str = "Token ID",
+        num_colors: int = 8,
+        figsize: Tuple[int, int] = (8, 8),
+        stats_text: Optional[str] = None,
+    ) -> Optional[Image.Image]:
+        """
+        Create a scatter plot figure.
+
+        Args:
+            x, y: Coordinates for scatter points
+            colors: Values for coloring points
+            title: Plot title
+            xlabel, ylabel: Axis labels
+            colorbar_label: Label for colorbar
+            num_colors: Number of distinct colors in colormap
+            figsize: Figure size tuple
+            stats_text: Optional text to show in corner
+
+        Returns:
+            PIL Image of the figure, or None on error
+        """
+        try:
+            fig, ax = plt.subplots(figsize=figsize)
+
+            cmap = plt.cm.get_cmap('tab20', num_colors)
+            scatter = ax.scatter(
+                x, y, c=colors, cmap=cmap, alpha=0.6, s=20,
+                vmin=0, vmax=max(num_colors - 1, colors.max())
+            )
+
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
+            ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
+            ax.axvline(x=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
+            ax.set_aspect('equal', adjustable='box')
+
+            plt.colorbar(scatter, ax=ax, label=colorbar_label)
+
+            if stats_text:
+                ax.text(0.02, 0.98, stats_text,
+                       transform=ax.transAxes, ha='left', va='top',
+                       fontsize=9, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+            plt.tight_layout()
+
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            img = Image.open(buf)
+
+            plt.close(fig)
+            return img
+        except Exception as e:
+            print(f"Warning: scatter plot creation failed: {e}")
+            return None
+
+
+class ActionTokenScatterStrategy(MetadataScatterStrategy):
     """
     Scatter plot of 2D actions colored by their assigned codebook tokens.
 
     Only runs when samples have 'action' metadata with 2D values.
     This helps visualize how the codebook discretizes continuous action space.
-
-    For 3D actions, could extend to show 2D projections or use different viz.
     """
 
     def __init__(
@@ -1500,18 +1682,13 @@ class ActionTokenScatterStrategy(ValidationStrategy):
             name="action_token_scatter",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            num_samples=num_samples,
             min_samples=min_samples,
+            dataset_filter="language_table",
         )
-        self.num_samples = num_samples
-
-    def needs_caching(self) -> bool:
-        return True
-
-    def needs_codes(self) -> bool:
-        return True
 
     def required_metadata(self) -> List[str]:
-        return ["action"]  # Requires 2D action metadata
+        return ["action"]
 
     def run(
         self,
@@ -1523,120 +1700,52 @@ class ActionTokenScatterStrategy(ValidationStrategy):
         """Generate action-token scatter plot."""
         metrics = {}
 
-        all_frames = cache.get_all_frames()
-        all_metadata = cache.get_all_metadata()
-        all_codes = cache.get_all_codes()
+        # Filter samples with action metadata
+        filtered_meta, codes_list, _ = self._filter_samples_with_metadata(cache, ["action"])
 
-        if all_frames is None or not all_metadata or all_codes is None:
+        if len(filtered_meta) < self.min_samples:
             return metrics
 
-        # Check if we have action data
-        actions = []
-        codes_list = []
-
-        for i, meta in enumerate(all_metadata):
-            # Strict filtering for language_table as requested
-            if meta.get("dataset_name") != "language_table":
-                continue
-
-            if "action" not in meta:
-                continue
-            action = meta["action"]
-            # Support 2D+ actions (use first 2 dims for scatter plot)
-            if isinstance(action, (list, tuple)) and len(action) >= 2:
-                actions.append(action[:2])  # Take first 2 dims
-                # Get corresponding code (use first token if multi-token)
-                if i < len(all_codes):
-                    code = all_codes[i]
-                    if code.ndim > 0:
-                        code = code[0]  # Use first token
-                    codes_list.append(code.item())
-
-        if len(actions) < self.min_samples:
-            # Not enough action samples
-            return metrics
+        # Extract actions and first token from codes
+        actions = [meta["action"][:2] for meta in filtered_meta]
+        tokens = [c[0].item() if c.ndim > 0 else c.item() for c in codes_list]
 
         # Limit samples
-        n = min(self.num_samples, len(actions))
-        indices = torch.randperm(len(actions))[:n].tolist()
-        actions = [actions[i] for i in indices]
-        codes_list = [codes_list[i] for i in indices]
+        actions, tokens = self._limit_samples(actions, tokens)
+
+        if not actions:
+            return metrics
 
         # Create scatter plot
         wandb_logger = self._get_wandb_logger(trainer)
         if wandb_logger is not None:
-            self._create_scatter(
-                actions, codes_list, wandb_logger, trainer.global_step,
-                pl_module.model.vq.num_embeddings
+            actions_np = np.array(actions)
+            tokens_np = np.array(tokens)
+            codebook_size = pl_module.model.vq.num_embeddings
+
+            img = self._create_scatter_figure(
+                x=actions_np[:, 0],
+                y=actions_np[:, 1],
+                colors=tokens_np,
+                title=f'2D Actions Colored by Codebook Token (Step {trainer.global_step})',
+                xlabel='Action X (cumulative dx)',
+                ylabel='Action Y (cumulative dy)',
+                colorbar_label='Token ID',
+                num_colors=codebook_size,
+                stats_text=f'Samples: {len(actions)}\nUnique tokens: {len(set(tokens))}',
             )
+
+            if img:
+                wandb_logger.log_image(
+                    key="val/action_token_scatter",
+                    images=[img],
+                    caption=[f"Step {trainer.global_step}: 2D actions colored by assigned token"],
+                )
 
         return metrics
 
-    def _create_scatter(
-        self,
-        actions: List[List[float]],
-        codes: List[int],
-        wandb_logger,
-        global_step: int,
-        codebook_size: int,
-    ):
-        """Create and log scatter plot of actions colored by tokens."""
-        try:
-            import matplotlib.pyplot as plt
-            import numpy as np
-            import io
-            from PIL import Image
 
-            actions_np = np.array(actions)
-            codes_np = np.array(codes)
-
-            fig, ax = plt.subplots(figsize=(8, 8))
-
-            # Use a colormap with enough distinct colors
-            cmap = plt.cm.get_cmap('tab20', codebook_size)
-
-            scatter = ax.scatter(
-                actions_np[:, 0], actions_np[:, 1],
-                c=codes_np, cmap=cmap, alpha=0.6, s=20,
-                vmin=0, vmax=codebook_size-1
-            )
-
-            ax.set_xlabel('Action X (cumulative dx)')
-            ax.set_ylabel('Action Y (cumulative dy)')
-            ax.set_title(f'2D Actions Colored by Codebook Token (Step {global_step})')
-            ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
-            ax.axvline(x=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
-            ax.set_aspect('equal', adjustable='box')
-
-            # Add colorbar
-            cbar = plt.colorbar(scatter, ax=ax, label='Token ID')
-
-            # Add statistics
-            unique_codes = len(set(codes))
-            ax.text(0.02, 0.98, f'Samples: {len(actions)}\nUnique tokens: {unique_codes}',
-                   transform=ax.transAxes, ha='left', va='top',
-                   fontsize=9, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-            plt.tight_layout()
-
-            # Convert to image
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=100)
-            buf.seek(0)
-            img = Image.open(buf)
-
-            wandb_logger.log_image(
-                key="val/action_token_scatter",
-                images=[img],
-                caption=[f"Step {global_step}: 2D actions colored by assigned token"],
-            )
-
-            plt.close(fig)
-        except Exception as e:
-            print(f"Warning: action_token_scatter visualization failed: {e}")
-
-
-class ActionSequenceScatterStrategy(ValidationStrategy):
+class ActionSequenceScatterStrategy(MetadataScatterStrategy):
     """
     Scatter plot of 2D actions colored by their assigned FULL token sequence.
 
@@ -1656,18 +1765,13 @@ class ActionSequenceScatterStrategy(ValidationStrategy):
             name="action_sequence_scatter",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            num_samples=num_samples,
             min_samples=min_samples,
+            dataset_filter="language_table",
         )
-        self.num_samples = num_samples
-
-    def needs_caching(self) -> bool:
-        return True
-
-    def needs_codes(self) -> bool:
-        return True
 
     def required_metadata(self) -> List[str]:
-        return ["action"]  # Requires 2D action metadata
+        return ["action"]
 
     def run(
         self,
@@ -1679,58 +1783,38 @@ class ActionSequenceScatterStrategy(ValidationStrategy):
         """Generate action-sequence scatter plot."""
         metrics = {}
 
-        all_frames = cache.get_all_frames()
-        all_metadata = cache.get_all_metadata()
-        all_codes = cache.get_all_codes()
+        # Use base class filtering
+        filtered_meta, codes_list, _ = self._filter_samples_with_metadata(cache, ["action"])
 
-        if all_frames is None or not all_metadata or all_codes is None:
+        if len(filtered_meta) < self.min_samples:
             return metrics
 
-        # Check if we have action data
-        actions = []
-        seq_ids = []
-
         # Map unique sequences to IDs
-        # all_codes shape: [N, code_seq_len]
-        sequences = [tuple(c.tolist()) for c in all_codes]
+        sequences = [tuple(c.tolist()) for c in codes_list]
         unique_seqs = list(set(sequences))
         seq_to_id = {seq: i for i, seq in enumerate(unique_seqs)}
         num_unique_seqs = len(unique_seqs)
 
-        for i, meta in enumerate(all_metadata):
-            # Strict filtering for language_table as requested
-            if meta.get("dataset_name") != "language_table":
-                continue
+        # Extract actions and sequence IDs
+        actions = [meta["action"][:2] for meta in filtered_meta]
+        seq_ids = [seq_to_id[seq] for seq in sequences]
 
-            if "action" not in meta:
-                continue
-            action = meta["action"]
+        # Use base class sample limiting
+        actions, seq_ids = self._limit_samples(actions, seq_ids)
 
-            # Support 2D+ actions (use first 2 dims for scatter plot)
-            if isinstance(action, (list, tuple)) and len(action) >= 2:
-                if i < len(sequences):
-                    actions.append(action[:2])  # Take first 2 dims
-                    seq_ids.append(seq_to_id[sequences[i]])
-
-        if len(actions) < self.min_samples:
+        if not actions:
             return metrics
-
-        # Limit samples
-        n = min(self.num_samples, len(actions))
-        indices = torch.randperm(len(actions))[:n].tolist()
-        actions = [actions[i] for i in indices]
-        seq_ids = [seq_ids[i] for i in indices]
 
         # Create scatter plot
         wandb_logger = self._get_wandb_logger(trainer)
         if wandb_logger is not None:
-            self._create_scatter(
+            self._create_sequence_scatter(
                 actions, seq_ids, wandb_logger, trainer.global_step, num_unique_seqs
             )
 
         return metrics
 
-    def _create_scatter(
+    def _create_sequence_scatter(
         self,
         actions: List[List[float]],
         seq_ids: List[int],
@@ -1748,26 +1832,16 @@ class ActionSequenceScatterStrategy(ValidationStrategy):
 
             fig, ax = plt.subplots(figsize=(10, 8))
 
-            # Use nipy_spectral for high number of classes
             cmap = plt.cm.get_cmap('nipy_spectral', num_unique)
             markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h', 'H', '+', 'x']
 
-            # Plot each sequence ID with a unique marker and color
-            unique_ids = np.unique(ids_np)
-            for uid in unique_ids:
+            # Plot each sequence ID with unique marker and color
+            for uid in np.unique(ids_np):
                 mask = ids_np == uid
                 marker = markers[uid % len(markers)]
-                # Get color from colormap (0-1 range)
                 color = cmap(uid / max(1, num_unique - 1))
-                
-                ax.scatter(
-                    actions_np[mask, 0], 
-                    actions_np[mask, 1],
-                    color=color,
-                    marker=marker,
-                    alpha=0.6, 
-                    s=30
-                )
+                ax.scatter(actions_np[mask, 0], actions_np[mask, 1],
+                          color=color, marker=marker, alpha=0.6, s=30)
 
             ax.set_xlabel('Action X (cumulative dx)')
             ax.set_ylabel('Action Y (cumulative dy)')
@@ -1776,20 +1850,17 @@ class ActionSequenceScatterStrategy(ValidationStrategy):
             ax.axvline(x=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
             ax.set_aspect('equal', adjustable='box')
 
-            # Add colorbar
             norm = plt.Normalize(vmin=0, vmax=num_unique-1)
             sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
             sm.set_array([])
-            cbar = plt.colorbar(sm, ax=ax, label='Sequence ID')
+            plt.colorbar(sm, ax=ax, label='Sequence ID')
 
-            # Add statistics
             ax.text(0.02, 0.98, f'Samples: {len(actions)}\nUnique Seqs: {num_unique}',
                    transform=ax.transAxes, ha='left', va='top',
                    fontsize=9, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
             plt.tight_layout()
 
-            # Convert to image
             buf = io.BytesIO()
             plt.savefig(buf, format='png', dpi=100)
             buf.seek(0)
@@ -1806,7 +1877,7 @@ class ActionSequenceScatterStrategy(ValidationStrategy):
             print(f"Warning: action_sequence_scatter visualization failed: {e}")
 
 
-class TopSequencesScatterStrategy(ValidationStrategy):
+class TopSequencesScatterStrategy(MetadataScatterStrategy):
     """
     Scatter plot highlighting ONLY the top N most frequent latent sequences.
 
@@ -1829,19 +1900,14 @@ class TopSequencesScatterStrategy(ValidationStrategy):
             name="top_sequences_scatter",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            num_samples=num_samples,
             min_samples=min_samples,
+            dataset_filter="language_table",
         )
-        self.num_samples = num_samples
         self.num_top_sequences = num_top_sequences
 
-    def needs_caching(self) -> bool:
-        return True
-
-    def needs_codes(self) -> bool:
-        return True
-
     def required_metadata(self) -> List[str]:
-        return ["action"]  # Requires 2D action metadata
+        return ["action"]
 
     def run(
         self,
@@ -1853,75 +1919,39 @@ class TopSequencesScatterStrategy(ValidationStrategy):
         """Generate top sequences scatter plot."""
         metrics = {}
 
-        all_frames = cache.get_all_frames()
-        all_metadata = cache.get_all_metadata()
-        all_codes = cache.get_all_codes()
+        # Use base class filtering
+        filtered_meta, codes_list, _ = self._filter_samples_with_metadata(cache, ["action"])
 
-        if all_frames is None or not all_metadata or all_codes is None:
+        if len(filtered_meta) < self.min_samples:
             return metrics
 
-        # Collect actions and sequences
-        actions = []
-        sequences = []
+        # Extract actions and sequences
+        actions = [meta["action"][:2] for meta in filtered_meta]
+        sequences = [tuple(c.tolist()) for c in codes_list]
 
-        # all_codes shape: [N, code_seq_len]
-        all_seqs_list = [tuple(c.tolist()) for c in all_codes]
-
-        for i, meta in enumerate(all_metadata):
-            # Strict filtering for language_table as requested
-            if meta.get("dataset_name") != "language_table":
-                continue
-
-            if "action" not in meta:
-                continue
-            action = meta["action"]
-            # Support 2D+ actions (use first 2 dims for scatter plot)
-            if isinstance(action, (list, tuple)) and len(action) >= 2:
-                if i < len(all_seqs_list):
-                    actions.append(action[:2])  # Take first 2 dims
-                    sequences.append(all_seqs_list[i])
-
-        if len(actions) < self.min_samples:
-            return metrics
-
-        # Find top N sequences from the full set (or sampled set)
-        from collections import Counter
+        # Find top N sequences
         counter = Counter(sequences)
         top_seqs_counts = counter.most_common(self.num_top_sequences)
-        top_seqs = {seq for seq, count in top_seqs_counts}
-        
-        # Map sequences to color categories: 0-(N-1) for top, -1 for others
-        # Create explicit color list for legend
+        top_seqs = {seq for seq, _ in top_seqs_counts}
         seq_to_cat = {seq: i for i, (seq, _) in enumerate(top_seqs_counts)}
-        
-        categories = []
-        for seq in sequences:
-            if seq in top_seqs:
-                categories.append(seq_to_cat[seq])
-            else:
-                categories.append(-1) # Grey
 
-        # Limit samples for plotting
-        n = min(self.num_samples, len(actions))
-        indices = torch.randperm(len(actions))[:n].tolist()
-        
-        actions_sampled = [actions[i] for i in indices]
-        categories_sampled = [categories[i] for i in indices]
+        # Map to categories: 0..N-1 for top, -1 for others
+        categories = [seq_to_cat.get(seq, -1) for seq in sequences]
 
-        # Visualize
+        # Use base class sample limiting
+        actions, categories = self._limit_samples(actions, categories)
+
+        if not actions:
+            return metrics
+
         wandb_logger = self._get_wandb_logger(trainer)
         if wandb_logger is not None:
-            self._create_scatter(
-                actions_sampled, 
-                categories_sampled, 
-                top_seqs_counts, 
-                wandb_logger, 
-                trainer.global_step
-            )
+            self._create_top_scatter(actions, categories, top_seqs_counts,
+                                     wandb_logger, trainer.global_step)
 
         return metrics
 
-    def _create_scatter(
+    def _create_top_scatter(
         self,
         actions: List[List[float]],
         categories: List[int],
@@ -1939,35 +1969,18 @@ class TopSequencesScatterStrategy(ValidationStrategy):
             # Plot "Other" (Grey) first
             mask_other = cats_np == -1
             if np.any(mask_other):
-                ax.scatter(
-                    actions_np[mask_other, 0], 
-                    actions_np[mask_other, 1],
-                    c='lightgrey', 
-                    alpha=0.5, 
-                    s=15, 
-                    label=f'Others ({np.sum(mask_other)})',
-                    zorder=1
-                )
+                ax.scatter(actions_np[mask_other, 0], actions_np[mask_other, 1],
+                          c='lightgrey', alpha=0.5, s=15,
+                          label=f'Others ({np.sum(mask_other)})', zorder=1)
 
-            # Plot Top N
-            # distinct colors
-            colors = plt.cm.tab10.colors 
-            
+            # Plot Top N with distinct colors
+            colors = plt.cm.tab10.colors
             for i, (seq, count) in enumerate(top_seqs_counts):
                 mask = cats_np == i
                 if np.any(mask):
-                    color = colors[i % len(colors)]
-                    # Format seq string
-                    seq_str = str(seq) # e.g. "(1, 5, 2)"
-                    ax.scatter(
-                        actions_np[mask, 0], 
-                        actions_np[mask, 1],
-                        c=[color], 
-                        alpha=0.9, 
-                        s=30, 
-                        label=f'{seq_str}: {count}',
-                        zorder=2
-                    )
+                    ax.scatter(actions_np[mask, 0], actions_np[mask, 1],
+                              c=[colors[i % len(colors)]], alpha=0.9, s=30,
+                              label=f'{seq}: {count}', zorder=2)
 
             ax.set_xlabel('Action X (cumulative dx)')
             ax.set_ylabel('Action Y (cumulative dy)')
@@ -1975,13 +1988,10 @@ class TopSequencesScatterStrategy(ValidationStrategy):
             ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
             ax.axvline(x=0, color='k', linestyle='-', linewidth=0.5, alpha=0.3)
             ax.set_aspect('equal', adjustable='box')
-
-            # Add legend
             ax.legend(loc='upper right', fontsize=8, framealpha=0.9)
 
             plt.tight_layout()
 
-            # Convert to image
             buf = io.BytesIO()
             plt.savefig(buf, format='png', dpi=100)
             buf.seek(0)
@@ -1998,7 +2008,7 @@ class TopSequencesScatterStrategy(ValidationStrategy):
             print(f"Warning: top_sequences_scatter visualization failed: {e}")
 
 
-class StateSequenceScatterStrategy(ValidationStrategy):
+class StateSequenceScatterStrategy(MetadataScatterStrategy):
     """
     Scatter plot of ROBOT STATE (x, y) colored by assigned token sequence.
 
@@ -2020,19 +2030,14 @@ class StateSequenceScatterStrategy(ValidationStrategy):
             name="state_sequence_scatter",
             enabled=enabled,
             every_n_validations=every_n_validations,
+            num_samples=num_samples,
             min_samples=min_samples,
+            dataset_filter="language_table",
         )
-        self.num_samples = num_samples
         self.num_top_sequences = num_top_sequences
 
-    def needs_caching(self) -> bool:
-        return True
-
-    def needs_codes(self) -> bool:
-        return True
-
     def required_metadata(self) -> List[str]:
-        return ["initial_state"]  # Requires robot state metadata
+        return ["initial_state"]
 
     def run(
         self,
@@ -2044,72 +2049,38 @@ class StateSequenceScatterStrategy(ValidationStrategy):
         """Generate state-sequence scatter plot."""
         metrics = {}
 
-        all_frames = cache.get_all_frames()
-        all_metadata = cache.get_all_metadata()
-        all_codes = cache.get_all_codes()
+        # Use base class filtering
+        filtered_meta, codes_list, _ = self._filter_samples_with_metadata(cache, ["initial_state"])
 
-        if all_frames is None or not all_metadata or all_codes is None:
+        if len(filtered_meta) < self.min_samples:
             return metrics
 
-        # Collect states and sequences
-        states = []
-        sequences = []
+        # Extract states and sequences
+        states = [meta["initial_state"][:2] for meta in filtered_meta]
+        sequences = [tuple(c.tolist()) for c in codes_list]
 
-        # Map all codes to sequence tuples first
-        all_seqs_list = [tuple(c.tolist()) for c in all_codes]
-
-        for i, meta in enumerate(all_metadata):
-            # Strict filtering for language_table as requested
-            if meta.get("dataset_name") != "language_table":
-                continue
-
-            if "initial_state" not in meta:
-                continue
-            state = meta["initial_state"]
-            if isinstance(state, (list, tuple)) and len(state) >= 2:
-                if i < len(all_seqs_list):
-                    states.append(state[:2])
-                    sequences.append(all_seqs_list[i])
-
-        if len(states) < self.min_samples:
-            return metrics
-
-        # Identify Top N sequences
-        from collections import Counter
+        # Find top N sequences
         counter = Counter(sequences)
         top_seqs_counts = counter.most_common(self.num_top_sequences)
-        top_seqs = {seq for seq, count in top_seqs_counts}
-        
-        # Map to categories: 0..N-1 for top, -1 for others
         seq_to_cat = {seq: i for i, (seq, _) in enumerate(top_seqs_counts)}
-        categories = []
-        
-        for seq in sequences:
-            if seq in top_seqs:
-                categories.append(seq_to_cat[seq])
-            else:
-                categories.append(-1)
 
-        # Limit samples
-        n = min(self.num_samples, len(states))
-        indices = torch.randperm(len(states))[:n].tolist()
-        states_sampled = [states[i] for i in indices]
-        categories_sampled = [categories[i] for i in indices]
+        # Map to categories: 0..N-1 for top, -1 for others
+        categories = [seq_to_cat.get(seq, -1) for seq in sequences]
 
-        # Visualize
+        # Use base class sample limiting
+        states, categories = self._limit_samples(states, categories)
+
+        if not states:
+            return metrics
+
         wandb_logger = self._get_wandb_logger(trainer)
         if wandb_logger is not None:
-            self._create_scatter(
-                states_sampled, 
-                categories_sampled, 
-                top_seqs_counts, 
-                wandb_logger, 
-                trainer.global_step
-            )
+            self._create_state_scatter(states, categories, top_seqs_counts,
+                                       wandb_logger, trainer.global_step)
 
         return metrics
 
-    def _create_scatter(
+    def _create_state_scatter(
         self,
         states: List[List[float]],
         categories: List[int],
@@ -2123,62 +2094,36 @@ class StateSequenceScatterStrategy(ValidationStrategy):
             # Add jitter to reveal overlaps
             jitter = np.random.normal(0, 0.005, size=states_np.shape)
             states_np = states_np + jitter
-            
             cats_np = np.array(categories)
 
             fig, ax = plt.subplots(figsize=(10, 8))
 
-            # Use nipy_spectral or tab20 for top sequences
-            # Since N=20, tab20 is perfect
             cmap = plt.cm.get_cmap('tab20', self.num_top_sequences)
             markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h', 'H', '+', 'x']
 
             # Plot "Other" (Grey) first
             mask_other = cats_np == -1
             if np.any(mask_other):
-                ax.scatter(
-                    states_np[mask_other, 0], 
-                    states_np[mask_other, 1],
-                    c='lightgrey', 
-                    marker='.',
-                    alpha=0.3, 
-                    s=15, 
-                    label=f'Others ({np.sum(mask_other)})',
-                    zorder=1
-                )
+                ax.scatter(states_np[mask_other, 0], states_np[mask_other, 1],
+                          c='lightgrey', marker='.', alpha=0.3, s=15,
+                          label=f'Others ({np.sum(mask_other)})', zorder=1)
 
-            # Plot Top N loop
+            # Plot Top N with markers
             for i, (seq, count) in enumerate(top_seqs_counts):
                 mask = cats_np == i
                 if np.any(mask):
-                    marker = markers[i % len(markers)]
-                    color = cmap(i)
-                    
-                    # Convert seq tuple to short string
-                    seq_str = str(seq)
-                    
-                    ax.scatter(
-                        states_np[mask, 0], 
-                        states_np[mask, 1],
-                        color=color,
-                        marker=marker,
-                        alpha=0.8, 
-                        s=40,
-                        label=f'{seq_str}: {count}',
-                        zorder=2
-                    )
+                    ax.scatter(states_np[mask, 0], states_np[mask, 1],
+                              color=cmap(i), marker=markers[i % len(markers)],
+                              alpha=0.8, s=40, label=f'{seq}: {count}', zorder=2)
 
             ax.set_xlabel('State X')
             ax.set_ylabel('State Y')
             ax.set_title(f'State vs Top {self.num_top_sequences} Sequences (Step {global_step})')
             ax.grid(True, alpha=0.3)
-
-            # Legend outside if too many
             ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
 
             plt.tight_layout()
 
-            # Convert to image
             buf = io.BytesIO()
             plt.savefig(buf, format='png', dpi=100)
             buf.seek(0)

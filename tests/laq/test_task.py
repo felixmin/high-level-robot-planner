@@ -147,7 +147,7 @@ class TestLAQTaskForward:
         batch = synthetic_batch.to(device)
 
         # Forward pass
-        loss, num_unique, _ = task(batch, step=0)
+        loss, num_unique, _, _ = task(batch, step=0)
 
         assert isinstance(loss, torch.Tensor)
         assert loss.ndim == 0  # Scalar

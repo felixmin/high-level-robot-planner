@@ -72,7 +72,7 @@ class TestLAQForward:
         video = torch.randn(batch_size, 3, 2, 256, 256, device=device)
 
         # Forward pass (training mode)
-        loss, num_unique_indices, _ = laq_model(video, step=0)
+        loss, num_unique_indices, _, _ = laq_model(video, step=0)
 
         # Check outputs
         assert isinstance(loss.item(), float)
@@ -164,7 +164,7 @@ class TestLAQGradients:
         )
 
         # Forward pass
-        loss, num_unique, _ = laq_model(video, step=0)
+        loss, num_unique, _, _ = laq_model(video, step=0)
 
         # Backward pass
         loss.backward()
@@ -197,7 +197,7 @@ class TestLAQShapes:
 
         for batch_size in [1, 2, 4]:
             video = torch.randn(batch_size, 3, 2, 256, 256, device=device)
-            loss, num_unique, _ = model(video, step=0)
+            loss, num_unique, _, _ = model(video, step=0)
 
             assert loss.item() >= 0
             print(f"✓ Batch size {batch_size} works")
@@ -210,7 +210,7 @@ class TestLAQShapes:
         video = torch.randn(batch_size, 3, 2, 256, 256, device=device)
 
         # This should work fine
-        loss, num_unique, _ = laq_model(video, step=0)
+        loss, num_unique, _, _ = laq_model(video, step=0)
 
         assert loss.item() >= 0
         print(f"✓ Video input (2 frames) works")
@@ -224,7 +224,7 @@ class TestLAQCodebookManagement:
         # Run multiple forward passes
         for _ in range(5):
             video = torch.randn(2, 3, 2, 256, 256, device=device)
-            loss, num_unique, _ = laq_model(video, step=999)  # step=999 won't trigger replacement
+            loss, num_unique, _, _ = laq_model(video, step=999)  # step=999 won't trigger replacement
 
         # Check codebook usage
         codebook_used = laq_model.vq.codebooks_used
@@ -243,7 +243,7 @@ class TestLAQCodebookManagement:
         video = torch.randn(2, 3, 2, 256, 256, device=device)
 
         # This should print "update codebook 10"
-        loss, num_unique, _ = laq_model(video, step=10)
+        loss, num_unique, _, _ = laq_model(video, step=10)
 
         print(f"✓ Codebook replacement triggered at step 10")
 

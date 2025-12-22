@@ -22,6 +22,15 @@ def pair(val):
 
 
 class LatentActionQuantization(nn.Module):
+    # Codebook replacement schedule: Replace unused codebook entries at diminishing frequency
+    # This helps codebook utilization early in training without overhead later
+    # Format: (interval, until_step) - replace every `interval` steps until `until_step`
+    CODEBOOK_REPLACE_SCHEDULE = [
+        (10, 100),    # Every 10 steps for first 100 steps
+        (100, 1000),  # Every 100 steps for steps 100-1000
+        (500, 5000),  # Every 500 steps for steps 1000-5000
+    ]
+
     def __init__(
         self,
         *,
@@ -175,6 +184,19 @@ class LatentActionQuantization(nn.Module):
 
     def load_state_dict(self, *args, **kwargs):
         return super().load_state_dict(*args, **kwargs, strict = False)
+
+    def _should_replace_codebook(self, step: int) -> bool:
+        """
+        Check if unused codebook entries should be replaced at this step.
+
+        Uses CODEBOOK_REPLACE_SCHEDULE for diminishing frequency replacement:
+        - More frequent early in training to ensure good codebook utilization
+        - Less frequent later to reduce overhead
+        """
+        for interval, until_step in self.CODEBOOK_REPLACE_SCHEDULE:
+            if step < until_step and step % interval == 0:
+                return True
+        return False
 
     def load(self, path):
         path = Path(path)
@@ -341,7 +363,7 @@ class LatentActionQuantization(nn.Module):
         
 
         
-        if ((step % 10 == 0 and step < 100)  or (step % 100 == 0 and step < 1000) or (step % 500 == 0 and step < 5000)) and step != 0:
+        if step != 0 and self._should_replace_codebook(step):
             print(f"update codebook {step}")
             self.vq.replace_unused_codebooks(tokens.shape[0])
 
