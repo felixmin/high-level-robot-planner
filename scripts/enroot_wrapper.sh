@@ -20,8 +20,8 @@ set -euo pipefail
 # ============================================================================
 
 # Container image location (override via HLRP_CONTAINER_IMAGE)
-# Default: user's workspace container
-CONTAINER_IMAGE="${HLRP_CONTAINER_IMAGE:-/dss/dsshome1/00/go98qik2/workspace/containers/lam.sqsh}"
+# Default: user's workspace container (PyTorch 25.06)
+CONTAINER_IMAGE="${HLRP_CONTAINER_IMAGE:-/dss/dsshome1/00/go98qik2/workspace/containers/nvidia+pytorch+25.06-py3.sqsh}"
 
 # Detect workspace root from script location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -79,11 +79,16 @@ if [ -d "$DSS_MCML_ROOT" ]; then
     MOUNT_ARGS="$MOUNT_ARGS --mount ${DSS_MCML_ROOT}:${DSS_MCML_ROOT}"
 fi
 
+# Set PYTHONPATH to include project packages
+# This allows the container to find project modules without installing them
+export PYTHONPATH="${WORKSPACE_ROOT}/packages:${PYTHONPATH:-}"
+
 # Launch inside container
 # --rw: Allow writes (for outputs, checkpoints)
 # Mirror mounts ensure paths match between host and container
 exec enroot start \
     $MOUNT_ARGS \
     --rw \
+    --env PYTHONPATH="${PYTHONPATH}" \
     "$CONTAINER_IMAGE" \
     "$@"
