@@ -83,10 +83,10 @@ export NCCL_SOCKET_IFNAME=ib0
 export NCCL_DEBUG=WARN
 {f'''
 # Install missing dependencies (--pip-install flag)
-echo "Installing dependencies..."
-pip install --user --quiet pytorch-lightning hydra-core omegaconf transformers timm wandb einops webdataset accelerate tensorflow tensorflow-datasets
-export PATH=$HOME/.local/bin:$PATH
-export PYTHONPATH=$HOME/.local/lib/python3.10/site-packages:$PYTHONPATH
+echo "Installing dependencies to {PROJECT_ROOT}/.pip-cache..."
+export PIP_TARGET={PROJECT_ROOT}/.pip-cache
+export PYTHONPATH={PROJECT_ROOT}/.pip-cache:$PYTHONPATH
+pip install --quiet --target $PIP_TARGET pytorch-lightning hydra-core omegaconf transformers timm wandb einops webdataset accelerate tensorflow tensorflow-datasets
 echo "Verifying installation..."
 python -c "import lightning; print(f'Lightning version: {{lightning.__version__}}')"
 ''' if pip_install else ''}
