@@ -1,66 +1,102 @@
 #!/usr/bin/env python3
 """
-Submit training jobs to Slurm via submitit.
+Submit training jobs to Slurm by generating sbatch scripts.
 
-This script runs on the login node (no torch required) and submits jobs
-that execute inside Enroot containers on compute nodes.
+This script runs on the login node (no torch required) and generates
+sbatch scripts that run inside Enroot containers on compute nodes.
 
 Usage:
     # Submit single job
     python scripts/submit_job.py experiment=laq_oxe_debug
 
-    # With cluster profile
-    python scripts/submit_job.py experiment=laq_oxe_debug cluster=lrz_h100
-
     # Override parameters
     python scripts/submit_job.py experiment=laq_oxe_debug training.epochs=10
 
-    # Dry run (print config, don't submit)
+    # Dry run (print script, don't submit)
     python scripts/submit_job.py --dry-run experiment=laq_oxe_debug
+
+    # Custom resources
+    python scripts/submit_job.py --time 01:00:00 --gpus 2 experiment=laq_full
 """
 
 import argparse
 import os
 import subprocess
-import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
-import submitit
 
 
 # Project root (resolved at import time on login node)
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-PROJECT_ROOT_STR = str(PROJECT_ROOT)  # Serialize as string for pickle
 
 
-def run_training(script: str, overrides: list, project_root: str) -> int:
-    """
-    Training function that runs on the compute node inside the container.
-    Executes the actual training script via subprocess.
-    """
-    from pathlib import Path
+def generate_sbatch_script(
+    script: str,
+    overrides: list,
+    partition: str,
+    gpus: int,
+    time: str,
+    mem: str,
+    cpus: int,
+    container_image: str,
+    job_name: str,
+) -> str:
+    """Generate sbatch script content."""
 
-    project_path = Path(project_root)
-    script_path = project_path / "scripts" / f"{script}.py"
+    # Build the python command with overrides
+    override_str = " ".join(overrides) if overrides else ""
+    python_cmd = f"python scripts/{script}.py {override_str}".strip()
 
-    # Build command
-    cmd = [sys.executable, str(script_path)] + overrides
+    # Output directory
+    logs_dir = PROJECT_ROOT / "outputs" / "logs"
 
-    print("=" * 80)
-    print(f"Running: {' '.join(cmd)}")
-    print(f"Working directory: {project_root}")
-    print("=" * 80)
+    script_content = f"""#!/bin/bash
+#SBATCH --job-name={job_name}
+#SBATCH --partition={partition}
+#SBATCH --qos=mcml
+#SBATCH --gres=gpu:{gpus}
+#SBATCH --cpus-per-task={cpus}
+#SBATCH --mem={mem}
+#SBATCH --time={time}
+#SBATCH --output={logs_dir}/%j.out
+#SBATCH --error={logs_dir}/%j.err
+#SBATCH --container-image={container_image}
+#SBATCH --container-mounts={PROJECT_ROOT}:{PROJECT_ROOT}
+#SBATCH --container-workdir={PROJECT_ROOT}
 
-    # Execute training script from project root
-    result = subprocess.run(cmd, cwd=project_root)
-    return result.returncode
+echo "========================================"
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node: $SLURM_NODELIST"
+echo "Partition: $SLURM_JOB_PARTITION"
+echo "Start time: $(date)"
+echo "Working directory: $(pwd)"
+echo "========================================"
+
+# Environment setup
+export PYTHONPATH={PROJECT_ROOT}/packages:$PYTHONPATH
+export NCCL_SOCKET_IFNAME=ib0
+export NCCL_DEBUG=WARN
+
+# Show GPU info
+nvidia-smi
+
+# Run training
+{python_cmd}
+
+echo "========================================"
+echo "Job finished at $(date)"
+echo "========================================"
+"""
+    return script_content
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Submit training jobs via submitit",
+        description="Submit training jobs to Slurm",
         epilog="Additional arguments are passed as Hydra overrides"
     )
     parser.add_argument(
@@ -71,7 +107,7 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print config and submission command, don't submit"
+        help="Print sbatch script, don't submit"
     )
     parser.add_argument(
         "--partition", "-p",
@@ -100,17 +136,31 @@ def main():
         default=8,
         help="CPUs per task"
     )
+    parser.add_argument(
+        "--container",
+        default=None,
+        help="Container image path (default: from HLRP_CONTAINER_IMAGE or built-in)"
+    )
 
     args, overrides = parser.parse_known_args()
 
-    # Load config to show experiment info
+    # Load config to show experiment info and get job name
     config_dir = str(PROJECT_ROOT / "config")
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name="config", overrides=overrides)
 
-    print("=" * 80)
+    # Container image
+    container_image = args.container or os.environ.get(
+        "HLRP_CONTAINER_IMAGE",
+        "/dss/dsshome1/00/go98qik2/workspace/containers/nvidia+pytorch+25.06-py3.sqsh"
+    )
+
+    # Job name from experiment
+    job_name = f"hlrp_{cfg.experiment.name}"
+
+    print("=" * 60)
     print("HLRP Job Submission")
-    print("=" * 80)
+    print("=" * 60)
     print(f"\nScript: {args.script}.py")
     print(f"Experiment: {cfg.experiment.name}")
     print(f"Description: {cfg.experiment.description}")
@@ -120,61 +170,61 @@ def main():
     print(f"  Time: {args.time}")
     print(f"  Memory: {args.mem}")
     print(f"  CPUs: {args.cpus}")
+    print(f"  Container: {container_image}")
+
+    # Generate sbatch script
+    sbatch_content = generate_sbatch_script(
+        script=args.script,
+        overrides=overrides,
+        partition=args.partition,
+        gpus=args.gpus,
+        time=args.time,
+        mem=args.mem,
+        cpus=args.cpus,
+        container_image=container_image,
+        job_name=job_name,
+    )
 
     if args.dry_run:
-        print("\n[DRY RUN] Would submit with overrides:")
-        for o in overrides:
-            print(f"  {o}")
-        print("\nFull config:")
-        print(OmegaConf.to_yaml(cfg))
+        print("\n[DRY RUN] Generated sbatch script:")
+        print("-" * 60)
+        print(sbatch_content)
+        print("-" * 60)
         return
 
-    # Setup submitit executor
-    wrapper_script = PROJECT_ROOT / "scripts" / "enroot_wrapper.sh"
-    outputs_dir = PROJECT_ROOT / "outputs"
-    outputs_dir.mkdir(exist_ok=True)
+    # Create logs directory
+    logs_dir = PROJECT_ROOT / "outputs" / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Container settings
-    container_image = os.environ.get(
-        "HLRP_CONTAINER_IMAGE",
-        "/dss/dsshome1/00/go98qik2/workspace/containers/nvidia+pytorch+25.06-py3.sqsh"
-    )
-    container_mounts = f"{PROJECT_ROOT}:{PROJECT_ROOT}"
+    # Write and submit sbatch script
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.sbatch', delete=False) as f:
+        f.write(sbatch_content)
+        sbatch_file = f.name
 
-    executor = submitit.SlurmExecutor(folder=str(outputs_dir / "%j"))
-    executor.update_parameters(
-        partition=args.partition,
-        qos="mcml",
-        gpus_per_node=args.gpus,
-        cpus_per_task=args.cpus,
-        mem=args.mem,
-        time=int(sum(x * y for x, y in zip(map(int, args.time.split(":")), [60, 1, 1/60]))),  # Convert HH:MM:SS to minutes
-        setup=[
-            "export NCCL_SOCKET_IFNAME=ib0",
-            "export NCCL_DEBUG=WARN",
-            f"export PYTHONPATH={PROJECT_ROOT}/packages:$PYTHONPATH",
-        ],
-        additional_parameters={
-            "chdir": str(PROJECT_ROOT),
-        },
-        # Run inside Enroot container via srun
-        srun_args=[
-            f"--container-image={container_image}",
-            f"--container-mounts={container_mounts}",
-            f"--container-workdir={PROJECT_ROOT}",
-        ],
-    )
+    try:
+        print("\nSubmitting job...")
+        result = subprocess.run(
+            ["sbatch", sbatch_file],
+            capture_output=True,
+            text=True,
+            check=True
+        )
 
-    # Submit job (pass project root as string for pickle compatibility)
-    print("\nSubmitting job...")
-    job = executor.submit(run_training, args.script, overrides, PROJECT_ROOT_STR)
+        # Parse job ID from output like "Submitted batch job 12345"
+        output = result.stdout.strip()
+        job_id = output.split()[-1] if output else "unknown"
 
-    print(f"\nJob submitted!")
-    print(f"  Job ID: {job.job_id}")
-    print(f"  Output: {PROJECT_ROOT}/outputs/{job.job_id}/")
-    print(f"\nMonitor with:")
-    print(f"  squeue --me")
-    print(f"  tail -f {PROJECT_ROOT}/outputs/{job.job_id}/*_log.out")
+        print(f"\n{output}")
+        print(f"\nMonitor with:")
+        print(f"  squeue --me")
+        print(f"  tail -f {logs_dir}/{job_id}.out")
+
+    except subprocess.CalledProcessError as e:
+        print(f"\nError submitting job: {e.stderr}")
+        raise
+    finally:
+        # Clean up temp file
+        os.unlink(sbatch_file)
 
 
 if __name__ == "__main__":
