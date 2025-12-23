@@ -33,6 +33,8 @@ dependencies:
     
     # Configuration management
     - hydra-core>=1.3.2
+    - hydra-submitit-launcher>=1.2.0
+    - submitit>=1.5.0
     - omegaconf>=2.3.0
     
     # Data loading
