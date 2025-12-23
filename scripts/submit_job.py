@@ -44,6 +44,7 @@ def generate_sbatch_script(
     cpus: int,
     container_image: str,
     job_name: str,
+    pip_install: bool = False,
 ) -> str:
     """Generate sbatch script content."""
 
@@ -80,7 +81,11 @@ echo "========================================"
 export PYTHONPATH={PROJECT_ROOT}/packages:$PYTHONPATH
 export NCCL_SOCKET_IFNAME=ib0
 export NCCL_DEBUG=WARN
-
+{f'''
+# Install missing dependencies (--pip-install flag)
+echo "Installing dependencies..."
+pip install --quiet pytorch-lightning hydra-core omegaconf transformers timm wandb einops webdataset accelerate tensorflow tensorflow-datasets
+''' if pip_install else ''}
 # Show GPU info
 nvidia-smi
 
@@ -141,6 +146,11 @@ def main():
         default=None,
         help="Container image path (default: from HLRP_CONTAINER_IMAGE or built-in)"
     )
+    parser.add_argument(
+        "--pip-install",
+        action="store_true",
+        help="Install missing dependencies via pip at job start (slower but ensures deps)"
+    )
 
     args, overrides = parser.parse_known_args()
 
@@ -183,6 +193,7 @@ def main():
         cpus=args.cpus,
         container_image=container_image,
         job_name=job_name,
+        pip_install=args.pip_install,
     )
 
     if args.dry_run:
