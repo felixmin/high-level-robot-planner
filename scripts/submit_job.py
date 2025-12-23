@@ -133,6 +133,13 @@ def main():
     outputs_dir = PROJECT_ROOT / "outputs"
     outputs_dir.mkdir(exist_ok=True)
 
+    # Container settings
+    container_image = os.environ.get(
+        "HLRP_CONTAINER_IMAGE",
+        "/dss/dsshome1/00/go98qik2/workspace/containers/nvidia+pytorch+25.06-py3.sqsh"
+    )
+    container_mounts = f"{PROJECT_ROOT}:{PROJECT_ROOT}"
+
     executor = submitit.SlurmExecutor(folder=str(outputs_dir / "%j"))
     executor.update_parameters(
         partition=args.partition,
@@ -142,13 +149,19 @@ def main():
         mem=args.mem,
         time=int(sum(x * y for x, y in zip(map(int, args.time.split(":")), [60, 1, 1/60]))),  # Convert HH:MM:SS to minutes
         setup=[
-            f"chmod +x {wrapper_script}",
             "export NCCL_SOCKET_IFNAME=ib0",
             "export NCCL_DEBUG=WARN",
+            f"export PYTHONPATH={PROJECT_ROOT}/packages:$PYTHONPATH",
         ],
         additional_parameters={
             "chdir": str(PROJECT_ROOT),
         },
+        # Run inside Enroot container via srun
+        srun_args=[
+            f"--container-image={container_image}",
+            f"--container-mounts={container_mounts}",
+            f"--container-workdir={PROJECT_ROOT}",
+        ],
     )
 
     # Submit job (pass project root as string for pickle compatibility)
