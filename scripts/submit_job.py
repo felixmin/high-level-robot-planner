@@ -135,22 +135,20 @@ def main():
 
     executor = submitit.SlurmExecutor(folder=str(outputs_dir / "%j"))
     executor.update_parameters(
-        slurm_partition=args.partition,
-        slurm_qos="mcml",
-        slurm_gpus_per_node=args.gpus,
-        slurm_cpus_per_task=args.cpus,
-        slurm_mem=args.mem,
-        slurm_time=args.time,
-        slurm_setup=[
+        partition=args.partition,
+        qos="mcml",
+        gpus_per_node=args.gpus,
+        cpus_per_task=args.cpus,
+        mem=args.mem,
+        time=int(sum(x * y for x, y in zip(map(int, args.time.split(":")), [60, 1, 1/60]))),  # Convert HH:MM:SS to minutes
+        setup=[
             f"chmod +x {wrapper_script}",
             "export NCCL_SOCKET_IFNAME=ib0",
             "export NCCL_DEBUG=WARN",
         ],
-        slurm_additional_parameters={
+        additional_parameters={
             "chdir": str(PROJECT_ROOT),
         },
-        # Use wrapper script as Python interpreter (runs inside container)
-        python=str(wrapper_script),
     )
 
     # Submit job (pass project root as string for pickle compatibility)
