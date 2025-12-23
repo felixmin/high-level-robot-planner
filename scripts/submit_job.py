@@ -84,7 +84,11 @@ export NCCL_DEBUG=WARN
 {f'''
 # Install missing dependencies (--pip-install flag)
 echo "Installing dependencies..."
-pip install --quiet pytorch-lightning hydra-core omegaconf transformers timm wandb einops webdataset accelerate tensorflow tensorflow-datasets
+pip install --user --quiet pytorch-lightning hydra-core omegaconf transformers timm wandb einops webdataset accelerate tensorflow tensorflow-datasets
+export PATH=$HOME/.local/bin:$PATH
+export PYTHONPATH=$HOME/.local/lib/python3.10/site-packages:$PYTHONPATH
+echo "Verifying installation..."
+python -c "import lightning; print(f'Lightning version: {{lightning.__version__}}')"
 ''' if pip_install else ''}
 # Show GPU info
 nvidia-smi
