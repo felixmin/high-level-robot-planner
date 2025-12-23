@@ -146,15 +146,16 @@ class TestLAQTaskForward:
 
         batch = synthetic_batch.to(device)
 
-        # Forward pass
-        loss, num_unique, _, _ = task(batch, step=0)
+        # Forward pass - returns (loss, metrics_dict)
+        loss, metrics = task(batch, step=0)
 
         assert isinstance(loss, torch.Tensor)
         assert loss.ndim == 0  # Scalar
         assert loss.item() >= 0
-        assert num_unique > 0
+        assert isinstance(metrics, dict)
+        assert metrics["num_unique_codes"] > 0
 
-        print(f"✓ Forward pass: loss={loss.item():.4f}, num_unique={num_unique}")
+        print(f"✓ Forward pass: loss={loss.item():.4f}, num_unique={metrics['num_unique_codes']}")
 
     def test_forward_with_recons_only(self, model_config, training_config, synthetic_batch, device):
         """Test forward pass returning reconstructions only."""

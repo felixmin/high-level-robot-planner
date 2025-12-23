@@ -12,14 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.optim import AdamW, Optimizer
-from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
 import lightning.pytorch as pl
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from laq.models.latent_action_quantization import LatentActionQuantization
-from laq.models.dino import DINOFeatureExtractor
 
 
 def separate_weight_decayable_params(
@@ -82,6 +80,13 @@ class LAQTask(pl.LightningModule):
         self.training_config = training_config
         self.use_ema = use_ema
 
+        # Convert perceptual_loss config to dict for model (handles OmegaConf)
+        perceptual_loss_config = training_config.get("perceptual_loss", None)
+        if perceptual_loss_config is not None:
+            perceptual_loss_config = OmegaConf.to_container(
+                perceptual_loss_config, resolve=True
+            )
+
         # Initialize LAQ model
         self.model = LatentActionQuantization(
             dim=model_config.dim,
@@ -100,27 +105,8 @@ class LAQTask(pl.LightningModule):
             use_dinov3_encoder=model_config.get("use_dinov3_encoder", False),
             dinov3_model_name=model_config.get("dinov3_model_name", "facebook/dinov3-vits16-pretrain-lvd1689m"),
             dinov3_pool_to_grid=model_config.get("dinov3_pool_to_grid", None),
+            perceptual_loss_config=perceptual_loss_config,
         )
-        
-        # Perceptual Loss Setup
-        self.perceptual_loss_config = training_config.get("perceptual_loss", {})
-        self.use_perceptual_loss = self.perceptual_loss_config.get("enabled", False)
-        
-        if self.use_perceptual_loss:
-            model_name = self.perceptual_loss_config.get("model_name", "facebook/dinov3-vits16-pretrain-lvd1689m")
-            print(f"Initializing DINO Perceptual Loss with {model_name}")
-            # Handle both int and tuple image_size
-            img_size = model_config.image_size
-            target_size = img_size[0] if isinstance(img_size, (list, tuple)) else img_size
-            self.perceptual_loss_net = DINOFeatureExtractor(
-                model_name=model_name,
-                freeze=True,
-                target_size=target_size
-            )
-            # Ensure it's in eval mode and frozen (handled by init but good to be safe)
-            self.perceptual_loss_net.eval()
-            for p in self.perceptual_loss_net.parameters():
-                p.requires_grad = False
 
         # Storage for validation and training batches (for visualization)
         self.validation_batch = None
@@ -133,12 +119,19 @@ class LAQTask(pl.LightningModule):
         return_recons_only: bool = False,
         return_only_codebook_ids: bool = False,
     ) -> Any:
-        """Forward pass through LAQ model."""
+        """
+        Forward pass through LAQ model.
+
+        Returns:
+            If return_recons_only: reconstructed frames [B, C, H, W]
+            If return_only_codebook_ids: codebook indices [B, code_seq_len]
+            Otherwise: (loss, metrics_dict)
+        """
         return self.model(
-            video, 
-            step=step, 
+            video,
+            step=step,
             return_recons_only=return_recons_only,
-            return_only_codebook_ids=return_only_codebook_ids
+            return_only_codebook_ids=return_only_codebook_ids,
         )
 
     def training_step(
@@ -162,67 +155,23 @@ class LAQTask(pl.LightningModule):
         else:
             frames = batch
 
-        # Forward pass
-        # model.forward returns (total_decoder_loss, num_unique, recon_video, aux_pixel_loss)
-        combined_decoder_loss, num_unique, recon_video, aux_pixel_loss = self.model(frames, step=self.global_step)
-        
-        total_loss = combined_decoder_loss
-
-        # Add Perceptual Loss
-        if self.use_perceptual_loss:
-            # Target is the second frame (index 1)
-            # frames: [B, C, 2, H, W] -> target: [B, C, H, W]
-            target_frame = frames[:, :, 1]
-            
-            # Extract features for target and recon
-            layers = self.perceptual_loss_config.get("layers", [6, 11]) # Default for small
-            
-            # Using torch.no_grad() for target features
-            with torch.no_grad():
-                target_feats = self.perceptual_loss_net(
-                    target_frame, 
-                    output_hidden_states=True, 
-                    layer_indices=layers
-                )
-            
-            # Recon features (keep grad)
-            # Clamp reconstruction to [0, 1] before passing to DINO (which expects valid images)
-            # This is critical because DINO normalization (mean/std) assumes [0, 1] inputs.
-            # Unbounded reconstruction can lead to exploded features/gradients.
-            recon_video_clamped = torch.clamp(recon_video, 0.0, 1.0)
-            
-            recon_feats = self.perceptual_loss_net(
-                recon_video_clamped, 
-                output_hidden_states=True, 
-                layer_indices=layers
-            )
-            
-            # Compute L1 loss between features
-            p_loss = 0.0
-            for r_f, t_f in zip(recon_feats, target_feats):
-                p_loss += F.l1_loss(r_f, t_f)
-            
-            weight = self.perceptual_loss_config.get("weight", 1.0)
-            total_loss = total_loss + (weight * p_loss)
-            
-            if self._trainer is not None:
-                self.log("train/perceptual_loss", p_loss, prog_bar=True, sync_dist=True)
+        # Forward pass - model returns (loss, metrics_dict)
+        loss, metrics = self.model(frames, step=self.global_step)
 
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
-            self.log("train/loss", total_loss, prog_bar=True, sync_dist=True)
-            self.log("train/combined_decoder_loss", combined_decoder_loss, prog_bar=True, sync_dist=True)
-            self.log("train/aux_pixel_loss", aux_pixel_loss, prog_bar=True, sync_dist=True)
-            # Main DINO loss is the remainder
-            self.log("train/main_dino_loss", combined_decoder_loss - aux_pixel_loss, prog_bar=True, sync_dist=True)
-            self.log("train/num_unique_codes", num_unique, prog_bar=True, sync_dist=True)
+            self.log("train/loss", loss, prog_bar=True, sync_dist=True)
+            self.log("train/main_dino_loss", metrics["main_dino_loss"], sync_dist=True)
+            self.log("train/aux_pixel_loss", metrics["aux_pixel_loss"], sync_dist=True)
+            self.log("train/perceptual_loss", metrics["perceptual_loss"], sync_dist=True)
+            self.log("train/num_unique_codes", metrics["num_unique_codes"], prog_bar=True, sync_dist=True)
             self.log("train/lr", self.optimizers().param_groups[0]["lr"], prog_bar=True)
 
         # Store first batch for visualization
         if batch_idx == 0 and self.training_batch is None:
-            self.training_batch = frames[:8].detach().cpu()  # Store up to 8 samples
+            self.training_batch = frames[:8].detach().cpu()
 
-        return total_loss
+        return loss
 
     def validation_step(
         self,
@@ -246,50 +195,21 @@ class LAQTask(pl.LightningModule):
             frames = batch
 
         # Forward pass - use step=0 to avoid codebook replacement during validation
-        # (LAPA behavior: codebook replacement only during training via step != 0 check)
-        combined_decoder_loss, num_unique, recon_video, aux_pixel_loss = self.model(frames, step=0)
-        
-        total_loss = combined_decoder_loss
-        
-        if self.use_perceptual_loss:
-            target_frame = frames[:, :, 1]
-            layers = self.perceptual_loss_config.get("layers", [6, 11])
-            
-            # No grad for validation
-            with torch.no_grad():
-                target_feats = self.perceptual_loss_net(
-                    target_frame, output_hidden_states=True, layer_indices=layers
-                )
-                
-                # Clamp for consistency with training
-                recon_video_clamped = torch.clamp(recon_video, 0.0, 1.0)
-                recon_feats = self.perceptual_loss_net(
-                    recon_video_clamped, output_hidden_states=True, layer_indices=layers
-                )
-                
-                p_loss = 0.0
-                for r_f, t_f in zip(recon_feats, target_feats):
-                    p_loss += F.l1_loss(r_f, t_f)
-                
-            weight = self.perceptual_loss_config.get("weight", 1.0)
-            total_loss = total_loss + (weight * p_loss)
-            
-            if self._trainer is not None:
-                self.log("val/perceptual_loss", p_loss, sync_dist=True)
+        loss, metrics = self.model(frames, step=0)
 
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
-            self.log("val/loss", total_loss, prog_bar=True, sync_dist=True)
-            self.log("val/combined_decoder_loss", combined_decoder_loss, sync_dist=True)
-            self.log("val/aux_pixel_loss", aux_pixel_loss, sync_dist=True)
-            self.log("val/main_dino_loss", combined_decoder_loss - aux_pixel_loss, sync_dist=True)
-            self.log("val/num_unique_codes", num_unique, sync_dist=True)
+            self.log("val/loss", loss, prog_bar=True, sync_dist=True)
+            self.log("val/main_dino_loss", metrics["main_dino_loss"], sync_dist=True)
+            self.log("val/aux_pixel_loss", metrics["aux_pixel_loss"], sync_dist=True)
+            self.log("val/perceptual_loss", metrics["perceptual_loss"], sync_dist=True)
+            self.log("val/num_unique_codes", metrics["num_unique_codes"], sync_dist=True)
 
         # Store first batch for visualization
         if batch_idx == 0 and self.validation_batch is None:
-            self.validation_batch = frames[:8].detach().cpu()  # Store up to 8 samples
+            self.validation_batch = frames[:8].detach().cpu()
 
-        return total_loss
+        return loss
 
     def on_train_epoch_end(self) -> None:
         """Called at the end of training epoch."""

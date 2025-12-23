@@ -170,16 +170,16 @@ class TestDataIntegrationWithModel:
         batch = batch.to(device)
 
         with torch.no_grad():
-            loss, num_unique, recon, aux_loss = model(batch, step=0)
+            loss, metrics = model(batch, step=0)
 
         assert isinstance(loss.item(), float)
         assert loss.item() >= 0
-        assert num_unique > 0
+        assert metrics["num_unique_codes"] > 0
 
         print(f"✓ Real data → model forward pass successful")
         print(f"  - Batch shape: {batch.shape}")
         print(f"  - Loss: {loss.item():.6f}")
-        print(f"  - Unique codes: {num_unique}")
+        print(f"  - Unique codes: {metrics['num_unique_codes']}")
 
 
 # ====================

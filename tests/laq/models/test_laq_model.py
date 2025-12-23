@@ -40,12 +40,12 @@ class TestLAQInitialization:
 
     def test_laq_model_creation(self, laq_model):
         """Test LAQ model initializes correctly."""
-        assert hasattr(laq_model, 'to_patch_emb_first_frame')
+        assert hasattr(laq_model, 'encoder_projection')
         assert hasattr(laq_model, 'enc_spatial_transformer')
         assert hasattr(laq_model, 'enc_temporal_transformer')
         assert hasattr(laq_model, 'vq')
         assert hasattr(laq_model, 'dec_spatial_transformer')
-        assert hasattr(laq_model, 'to_pixels_first_frame')
+        assert hasattr(laq_model, 'aux_to_pixels')
 
         print(f"✓ LAQ model initialized successfully")
 
@@ -71,18 +71,19 @@ class TestLAQForward:
         # Input: [B, C, T, H, W] where T=2 (frame_t, frame_t+1)
         video = torch.randn(batch_size, 3, 2, 256, 256, device=device)
 
-        # Forward pass (training mode)
-        loss, num_unique_indices, _, _ = laq_model(video, step=0)
+        # Forward pass (training mode) - returns (loss, metrics_dict)
+        loss, metrics = laq_model(video, step=0)
 
         # Check outputs
         assert isinstance(loss.item(), float)
         assert loss.item() >= 0
-        assert isinstance(num_unique_indices, int)
-        assert num_unique_indices > 0
+        assert isinstance(metrics, dict)
+        assert "num_unique_codes" in metrics
+        assert metrics["num_unique_codes"] > 0
 
         print(f"✓ Forward pass successful")
         print(f"  - Loss: {loss.item():.6f}")
-        print(f"  - Unique codes used: {num_unique_indices}")
+        print(f"  - Unique codes used: {metrics['num_unique_codes']}")
 
     def test_forward_returns_reconstruction_only(self, laq_model, device):
         """Test forward pass with return_recons_only=True."""
@@ -163,8 +164,8 @@ class TestLAQGradients:
             requires_grad=True
         )
 
-        # Forward pass
-        loss, num_unique, _, _ = laq_model(video, step=0)
+        # Forward pass - returns (loss, metrics_dict)
+        loss, metrics = laq_model(video, step=0)
 
         # Backward pass
         loss.backward()
@@ -197,7 +198,7 @@ class TestLAQShapes:
 
         for batch_size in [1, 2, 4]:
             video = torch.randn(batch_size, 3, 2, 256, 256, device=device)
-            loss, num_unique, _, _ = model(video, step=0)
+            loss, metrics = model(video, step=0)
 
             assert loss.item() >= 0
             print(f"✓ Batch size {batch_size} works")
@@ -210,7 +211,7 @@ class TestLAQShapes:
         video = torch.randn(batch_size, 3, 2, 256, 256, device=device)
 
         # This should work fine
-        loss, num_unique, _, _ = laq_model(video, step=0)
+        loss, metrics = laq_model(video, step=0)
 
         assert loss.item() >= 0
         print(f"✓ Video input (2 frames) works")
@@ -224,7 +225,7 @@ class TestLAQCodebookManagement:
         # Run multiple forward passes
         for _ in range(5):
             video = torch.randn(2, 3, 2, 256, 256, device=device)
-            loss, num_unique, _, _ = laq_model(video, step=999)  # step=999 won't trigger replacement
+            loss, metrics = laq_model(video, step=999)  # step=999 won't trigger replacement
 
         # Check codebook usage
         codebook_used = laq_model.vq.codebooks_used
@@ -243,7 +244,7 @@ class TestLAQCodebookManagement:
         video = torch.randn(2, 3, 2, 256, 256, device=device)
 
         # This should print "update codebook 10"
-        loss, num_unique, _, _ = laq_model(video, step=10)
+        loss, metrics = laq_model(video, step=10)
 
         print(f"✓ Codebook replacement triggered at step 10")
 

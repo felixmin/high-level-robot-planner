@@ -22,6 +22,22 @@ def pair(val):
 
 
 class LatentActionQuantization(nn.Module):
+    """
+    Latent Action Quantization (LAQ) model.
+
+    Encodes frame pairs into discrete latent action codes using VQ-VAE style
+    quantization. Uses transformer-based encoder/decoder with optional DINO
+    features for improved representations.
+
+    Training architecture:
+    - Encoder: Processes frame pairs through spatial/temporal transformers
+    - VQ (NSVQ): Quantizes latent representations to discrete codes
+    - Main Decoder: Predicts next frame's DINO tokens (main learning objective)
+    - Aux Decoder: Predicts next frame's pixels (for visualization, detached gradients)
+
+    Returns:
+        (loss, metrics_dict) where metrics_dict contains diagnostic values
+    """
     # Codebook replacement schedule: Replace unused codebook entries at diminishing frequency
     # This helps codebook utilization early in training without overhead later
     # Format: (interval, until_step) - replace every `interval` steps until `until_step`
@@ -50,6 +66,7 @@ class LatentActionQuantization(nn.Module):
         use_dinov3_encoder = False,
         dinov3_model_name = "facebook/dinov3-vits16-pretrain-lvd1689m",
         dinov3_pool_to_grid = None,  # Pool DINO features to this grid size (e.g., 8 for 8x8)
+        perceptual_loss_config = None,  # Dict with enabled, weight, layers, model_name
     ):
         """
         einstein notations:
@@ -111,12 +128,9 @@ class LatentActionQuantization(nn.Module):
         )
         
         self.decoder_context_projection = self.pixel_projection
-        
+
         if self.encoder_projection is None:
-             self.encoder_projection = self.pixel_projection
-             
-        # Backwards compatibility / Legacy name mapping
-        self.to_patch_emb_first_frame = self.encoder_projection
+            self.encoder_projection = self.pixel_projection
 
 
         transformer_kwargs = dict(
@@ -173,17 +187,30 @@ class LatentActionQuantization(nn.Module):
             nn.Linear(dim, channels * eff_patch_h * eff_patch_w),
             Rearrange('b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)', p1 = eff_patch_h, p2 = eff_patch_w)
         )
-        
-        # Keep this for compatibility if anything external references it, 
-        # but internal logic will use aux_to_pixels
-        self.to_pixels_first_frame = self.aux_to_pixels
 
+        # Perceptual Loss Setup (optional DINO-based loss on reconstructions)
+        self.perceptual_loss_config = perceptual_loss_config
+        self.use_perceptual_loss = (
+            perceptual_loss_config is not None
+            and perceptual_loss_config.get("enabled", False)
+        )
 
-    def state_dict(self, *args, **kwargs):
-        return super().state_dict(*args, **kwargs)
+        if self.use_perceptual_loss:
+            # Strict validation - all required params must be present
+            required_keys = ["model_name", "weight", "layers"]
+            missing = [k for k in required_keys if k not in perceptual_loss_config]
+            if missing:
+                raise ValueError(f"perceptual_loss_config missing required keys: {missing}")
 
-    def load_state_dict(self, *args, **kwargs):
-        return super().load_state_dict(*args, **kwargs, strict = False)
+            print(f"Initializing DINO Perceptual Loss with {perceptual_loss_config['model_name']}")
+            self.perceptual_loss_net = DINOFeatureExtractor(
+                model_name=perceptual_loss_config["model_name"],
+                freeze=True,
+                target_size=image_height
+            )
+            self.perceptual_loss_net.eval()
+            for p in self.perceptual_loss_net.parameters():
+                p.requires_grad = False
 
     def _should_replace_codebook(self, step: int) -> bool:
         """
@@ -438,16 +465,47 @@ class LatentActionQuantization(nn.Module):
 
         if exists(mask):
             # variable lengthed video / images training
-            aux_loss = F.mse_loss(video, recon_video, reduction = 'none')
-            aux_loss = aux_loss[repeat(mask, 'b t -> b c t', c = c)]
+            aux_loss = F.mse_loss(video, recon_video, reduction='none')
+            aux_loss = aux_loss[repeat(mask, 'b t -> b c t', c=c)]
             aux_loss = aux_loss.mean()
         else:
             aux_loss = F.mse_loss(video, recon_video)
-            
-        # Combine losses (Aux loss is just for the Aux decoder)
-        total_loss = main_loss + aux_loss
 
-        return total_loss, num_unique_indices, returned_recon, aux_loss
+        # Perceptual loss (optional)
+        perceptual_loss = torch.tensor(0.0, device=video.device)
+        if self.use_perceptual_loss:
+            target_frame = rest_frames.squeeze(2)  # [B, C, 1, H, W] -> [B, C, H, W]
+            layers = self.perceptual_loss_config["layers"]
+
+            with torch.no_grad():
+                target_feats = self.perceptual_loss_net(
+                    target_frame, output_hidden_states=True, layer_indices=layers
+                )
+
+            # Clamp reconstruction to [0, 1] - DINO normalization assumes valid images
+            recon_clamped = torch.clamp(returned_recon, 0.0, 1.0)
+            recon_feats = self.perceptual_loss_net(
+                recon_clamped, output_hidden_states=True, layer_indices=layers
+            )
+
+            perceptual_loss = sum(
+                F.l1_loss(r_f, t_f) for r_f, t_f in zip(recon_feats, target_feats)
+            )
+
+        # Combine losses
+        perceptual_weight = (
+            self.perceptual_loss_config["weight"] if self.use_perceptual_loss else 0.0
+        )
+        total_loss = main_loss + aux_loss + perceptual_weight * perceptual_loss
+
+        metrics = {
+            "num_unique_codes": num_unique_indices,
+            "main_dino_loss": main_loss.detach(),
+            "aux_pixel_loss": aux_loss.detach(),
+            "perceptual_loss": perceptual_loss.detach(),
+        }
+
+        return total_loss, metrics
         
 
     def inference(
