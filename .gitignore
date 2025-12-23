@@ -61,6 +61,7 @@ mlruns/
 lightning_logs/
 *.log
 profiles/
+nohup.out
 
 # Data (large files should not be committed)
 

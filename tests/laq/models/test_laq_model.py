@@ -127,7 +127,7 @@ class TestLAQInference:
         video = torch.randn(batch_size, 3, 2, 256, 256, device=device)
 
         with torch.no_grad():
-            recon = laq_model.inference(video, step=0)
+            recon = laq_model.inference(video)
 
         # Check reconstruction shape
         assert recon.shape == (batch_size, 3, 256, 256)
@@ -140,11 +140,7 @@ class TestLAQInference:
         video = torch.randn(batch_size, 3, 2, 256, 256, device=device)
 
         with torch.no_grad():
-            indices = laq_model.inference(
-                video,
-                step=0,
-                return_only_codebook_ids=True
-            )
+            indices = laq_model.inference(video, return_only_codebook_ids=True)
 
         assert indices.shape == (batch_size, 4)
         assert indices.dtype == torch.long

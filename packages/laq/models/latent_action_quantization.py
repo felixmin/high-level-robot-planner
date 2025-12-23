@@ -1,15 +1,19 @@
-from pathlib import Path
+import logging
 import math
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from torch import nn
-from einops import rearrange, pack, repeat
+from einops import rearrange, pack
 from einops.layers.torch import Rearrange
+from torch import nn
 
-from laq.models.attention import Transformer, ContinuousPositionBias
+from laq.models.attention import ContinuousPositionBias, Transformer
+from laq.models.dino import DINOEncoder, DINOFeatureExtractor, DINOWrapper
 from laq.models.nsvq import NSVQ
-from laq.models.dino import DINOFeatureExtractor, DINOEncoder, DINOWrapper
+
+logger = logging.getLogger(__name__)
+
 
 def exists(val):
     return val is not None
@@ -17,7 +21,8 @@ def exists(val):
 
 def pair(val):
     ret = (val, val) if not isinstance(val, tuple) else val
-    assert len(ret) == 2
+    if len(ret) != 2:
+        raise ValueError(f"Expected pair, got {ret}")
     return ret
 
 
@@ -91,25 +96,25 @@ class LatentActionQuantization(nn.Module):
         assert (image_height % patch_height) == 0 and (image_width % patch_width) == 0
 
         if use_dinov3_encoder:
-            print(f"Using DINOv3 Encoder: {dinov3_model_name}")
+            logger.info(f"Using DINOv3 Encoder: {dinov3_model_name}")
             self.dino_feature_extractor = DINOFeatureExtractor(
                 model_name=dinov3_model_name,
-                target_size=self.image_size[0] # Assuming square
+                target_size=self.image_size[0],  # Assuming square
             )
             # DINOEncoder returns [B, 1, h, w, d]
             # Pool to match original grid size if specified (reduces memory 16x for attention)
             self.dino_encoder = DINOEncoder(
-                self.dino_feature_extractor, 
+                self.dino_feature_extractor,
                 dim,
-                pool_to_grid=dinov3_pool_to_grid
+                pool_to_grid=dinov3_pool_to_grid,
             )
-            
+
             self.encoder_projection = DINOWrapper(self.dino_encoder)
-            
+
             # Use encoder's output grid size (accounts for pooling)
             output_grid = self.dino_encoder.output_grid_size
             self._effective_grid_size = (output_grid, output_grid)
-            print(f"  - Effective grid size: {self._effective_grid_size}")
+            logger.info(f"  - Effective grid size: {self._effective_grid_size}")
         else:
             self._effective_grid_size = (image_height // patch_height, image_width // patch_width)
             self.encoder_projection = None
@@ -202,15 +207,25 @@ class LatentActionQuantization(nn.Module):
             if missing:
                 raise ValueError(f"perceptual_loss_config missing required keys: {missing}")
 
-            print(f"Initializing DINO Perceptual Loss with {perceptual_loss_config['model_name']}")
+            logger.info(f"Initializing DINO Perceptual Loss with {perceptual_loss_config['model_name']}")
             self.perceptual_loss_net = DINOFeatureExtractor(
                 model_name=perceptual_loss_config["model_name"],
                 freeze=True,
-                target_size=image_height
+                target_size=image_height,
             )
             self.perceptual_loss_net.eval()
             for p in self.perceptual_loss_net.parameters():
                 p.requires_grad = False
+
+        # Pre-compute action shape from code_seq_len (used in forward/inference)
+        if math.sqrt(code_seq_len) % 1 == 0:
+            self._action_shape = (int(math.sqrt(code_seq_len)), int(math.sqrt(code_seq_len)))
+        elif code_seq_len == 2:
+            self._action_shape = (2, 1)
+        else:
+            raise ValueError(
+                f"code_seq_len must be a square number or 2, got {code_seq_len}"
+            )
 
     def _should_replace_codebook(self, step: int) -> bool:
         """
@@ -227,19 +242,45 @@ class LatentActionQuantization(nn.Module):
 
     def load(self, path):
         path = Path(path)
-        assert path.exists()
-        pt = torch.load(str(path))
-        pt = {k.replace('module.', '') if 'module.' in k else k: v for k, v in pt.items()}
-        self.load_state_dict(pt)
-
-    def decode_from_codebook_indices(self, indices):
-        codes = self.vq.codebooks[indices]
-
-        return self.decode(codes)
+        if not path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {path}")
+        pt = torch.load(str(path), weights_only=False)
+        pt = {k.replace('module.', ''): v for k, v in pt.items()}
+        self.load_state_dict(pt, strict=False)
 
     @property
     def patch_height_width(self):
         return self._effective_grid_size
+
+    @property
+    def action_shape(self):
+        """Returns (action_h, action_w) for reshaping latent codes."""
+        return self._action_shape
+
+    def _encode_frames(self, first_frame, rest_frames):
+        """
+        Encode frame pair through encoder projection and temporal transformer.
+
+        Args:
+            first_frame: First frame [B, C, 1, H, W]
+            rest_frames: Second frame [B, C, 1, H, W]
+
+        Returns:
+            enc_first_frame_tokens: Encoded first frame tokens [B, 1, h, w, d]
+            enc_rest_frames_tokens: Encoded second frame tokens [B, 1, h, w, d]
+            first_tokens_packed: Packed first frame latents [B, h*w, d]
+            last_tokens_packed: Packed second frame latents [B, h*w, d]
+        """
+        enc_first_frame_tokens = self.encoder_projection(first_frame)
+        enc_rest_frames_tokens = self.encoder_projection(rest_frames)
+        enc_tokens = torch.cat((enc_first_frame_tokens, enc_rest_frames_tokens), dim=1)
+
+        first_tokens, last_tokens = self.encode(enc_tokens)
+
+        first_tokens_packed, _ = pack([first_tokens], 'b * d')
+        last_tokens_packed, _ = pack([last_tokens], 'b * d')
+
+        return enc_first_frame_tokens, enc_rest_frames_tokens, first_tokens_packed, last_tokens_packed
 
     def encode(
         self,
@@ -334,81 +375,56 @@ class LatentActionQuantization(nn.Module):
     def forward(
         self,
         video,
-        step = 0,
-        mask = None,
-        return_recons_only = False,
-        return_only_codebook_ids = False,
+        step=0,
+        return_recons_only=False,
+        return_only_codebook_ids=False,
     ):
         """
         Forward pass for training.
 
-        Flow:
-        1. Preprocess: Image -> Patch Embeddings (Continuous 'tokens')
-        2. Encode: Patches -> Latent Features
-        3. VQ (NSVQ): Latent Features -> Quantized Vectors (with noise injection for grad flow)
-        4. Decode: Quantized Vectors + First Frame -> Reconstructed Next Frame
+        Args:
+            video: Input frame pairs [B, C, 2, H, W] or [B, C, H, W] for single frame
+            step: Training step (for codebook replacement scheduling)
+            return_recons_only: If True, return only reconstructed frames
+            return_only_codebook_ids: If True, return only codebook indices
+
+        Returns:
+            If return_recons_only: reconstructed frames [B, C, H, W]
+            If return_only_codebook_ids: codebook indices [B, code_seq_len]
+            Otherwise: (loss, metrics_dict)
         """
-        assert video.ndim in {4, 5}
+        if video.ndim not in {4, 5}:
+            raise ValueError(f"Expected 4D or 5D input, got {video.ndim}D")
 
-        is_image = video.ndim == 4
-
-        if is_image:
+        if video.ndim == 4:
             video = rearrange(video, 'b c h w -> b c 1 h w')
-            assert not exists(mask)
 
-        b, c, f, *image_dims, device = *video.shape, video.device
+        b, c, f, *image_dims = video.shape
+        device = video.device
 
-        assert tuple(image_dims) == self.image_size
-        assert not exists(mask) or mask.shape[-1] == f
+        if tuple(image_dims) != self.image_size:
+            raise ValueError(f"Expected image size {self.image_size}, got {tuple(image_dims)}")
 
         first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
 
+        # Encode both frames
+        enc_first_frame_tokens, enc_rest_frames_tokens, first_tokens, last_tokens = (
+            self._encode_frames(first_frame, rest_frames)
+        )
 
-        enc_first_frame_tokens = self.encoder_projection(first_frame)
-        enc_rest_frames_tokens = self.encoder_projection(rest_frames)
-        enc_tokens = torch.cat((enc_first_frame_tokens, enc_rest_frames_tokens), dim = 1)
+        tokens, _, _, indices = self.vq(first_tokens, last_tokens, codebook_training_only=False)
 
-        shape = enc_tokens.shape
-        *_, h, w, _ = shape
-
-        first_tokens, last_tokens = self.encode(enc_tokens)
-
-        first_tokens, first_packed_fhw_shape = pack([first_tokens], 'b * d')
-        last_tokens, last_packed_fhw_shape = pack([last_tokens], 'b * d')
-        
-
-        vq_mask = None
-        if exists(mask):
-            vq_mask = self.calculate_video_token_mask(video, mask)
-        self.lookup_free_quantization = False
-        vq_kwargs = dict(mask = vq_mask) if not self.lookup_free_quantization else dict()
-
-        
-        tokens, perplexity, codebook_usage, indices = self.vq(first_tokens, last_tokens, codebook_training_only = False)
-        
         num_unique_indices = indices.unique().size(0)
-        
 
-        
         if step != 0 and self._should_replace_codebook(step):
-            print(f"update codebook {step}")
+            logger.debug(f"Replacing unused codebook entries at step {step}")
             self.vq.replace_unused_codebooks(tokens.shape[0])
 
         if return_only_codebook_ids:
             return indices
-        
-        if math.sqrt(self.code_seq_len) % 1 == 0: # "code_seq_len should be square number"
-            action_h = int(math.sqrt(self.code_seq_len))
-            action_w = int(math.sqrt(self.code_seq_len))
-        elif self.code_seq_len == 2:
-            action_h = 2
-            action_w = 1
-        else:
-            ## error
-            print("code_seq_len should be square number or defined as 2")
-            return
-        
-        tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = action_h, w = action_w)
+
+        action_h, action_w = self.action_shape
+        tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h=action_h, w=action_w)
         
         # --- 1. Main Path: DINO Decoding (Learning) ---
         # Predict DINO tokens of next frame from DINO context of first frame + Action
@@ -457,22 +473,15 @@ class LatentActionQuantization(nn.Module):
         # Run Aux Decoder (via self.decode which is now mapped to Aux)
         recon_video = self.decode(dec_first_frame_tokens, aux_actions)
 
-        returned_recon = rearrange(recon_video, 'b c 1 h w -> b c h w')
-        video = rest_frames 
+        recon_frames = rearrange(recon_video, 'b c 1 h w -> b c h w')
 
         if return_recons_only:
-            return returned_recon
+            return recon_frames
 
-        if exists(mask):
-            # variable lengthed video / images training
-            aux_loss = F.mse_loss(video, recon_video, reduction='none')
-            aux_loss = aux_loss[repeat(mask, 'b t -> b c t', c=c)]
-            aux_loss = aux_loss.mean()
-        else:
-            aux_loss = F.mse_loss(video, recon_video)
+        # Aux loss: pixel reconstruction (gradients don't flow to encoder/VQ)
+        aux_loss = F.mse_loss(rest_frames, recon_video)
 
         # Perceptual loss (optional)
-        perceptual_loss = torch.tensor(0.0, device=video.device)
         if self.use_perceptual_loss:
             target_frame = rest_frames.squeeze(2)  # [B, C, 1, H, W] -> [B, C, H, W]
             layers = self.perceptual_loss_config["layers"]
@@ -483,7 +492,7 @@ class LatentActionQuantization(nn.Module):
                 )
 
             # Clamp reconstruction to [0, 1] - DINO normalization assumes valid images
-            recon_clamped = torch.clamp(returned_recon, 0.0, 1.0)
+            recon_clamped = torch.clamp(recon_frames, 0.0, 1.0)
             recon_feats = self.perceptual_loss_net(
                 recon_clamped, output_hidden_states=True, layer_indices=layers
             )
@@ -491,11 +500,11 @@ class LatentActionQuantization(nn.Module):
             perceptual_loss = sum(
                 F.l1_loss(r_f, t_f) for r_f, t_f in zip(recon_feats, target_feats)
             )
+            perceptual_weight = self.perceptual_loss_config["weight"]
+        else:
+            perceptual_loss = torch.zeros(1, device=device).squeeze()
+            perceptual_weight = 0.0
 
-        # Combine losses
-        perceptual_weight = (
-            self.perceptual_loss_config["weight"] if self.use_perceptual_loss else 0.0
-        )
         total_loss = main_loss + aux_loss + perceptual_weight * perceptual_loss
 
         metrics = {
@@ -511,70 +520,53 @@ class LatentActionQuantization(nn.Module):
     def inference(
         self,
         video,
-        step = 0,
-        mask = None,
         return_only_codebook_ids=False,
-        user_action_token_num=None
+        user_action_token_num=None,
     ):
-        
-        assert video.ndim in {4, 5}
+        """
+        Inference pass (no loss computation).
 
-        is_image = video.ndim == 4
+        Args:
+            video: Input frame pairs [B, C, 2, H, W] or [B, C, H, W]
+            return_only_codebook_ids: If True, return only codebook indices
+            user_action_token_num: Optional override for action token selection
 
-        if is_image:
+        Returns:
+            If return_only_codebook_ids: codebook indices [B, code_seq_len]
+            Otherwise: reconstructed frames [B, C, H, W]
+        """
+        if video.ndim not in {4, 5}:
+            raise ValueError(f"Expected 4D or 5D input, got {video.ndim}D")
+
+        if video.ndim == 4:
             video = rearrange(video, 'b c h w -> b c 1 h w')
-            assert not exists(mask)
 
-        b, c, f, *image_dims, device = *video.shape, video.device
-
-        assert tuple(image_dims) == self.image_size
-        assert not exists(mask) or mask.shape[-1] == f
+        if tuple(video.shape[3:]) != self.image_size:
+            raise ValueError(f"Expected image size {self.image_size}, got {tuple(video.shape[3:])}")
 
         first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
 
-        enc_first_frame_tokens = self.encoder_projection(first_frame)
-        enc_rest_frames_tokens = self.encoder_projection(rest_frames)
-        enc_tokens = torch.cat((enc_first_frame_tokens, enc_rest_frames_tokens), dim = 1)
-
-
-        shape = enc_tokens.shape
-        *_, h, w, _ = shape
-
-        first_tokens, last_tokens = self.encode(enc_tokens)
-
-        # quantize
-        first_tokens, first_packed_fhw_shape = pack([first_tokens], 'b * d')
-        last_tokens, last_packed_fhw_shape = pack([last_tokens], 'b * d')
+        # Encode both frames (enc tokens not needed for inference)
+        _, _, first_tokens, last_tokens = self._encode_frames(first_frame, rest_frames)
 
         if user_action_token_num is not None:
-            tokens, indices = self.vq.inference(first_tokens, last_tokens, user_action_token_num=user_action_token_num)
+            tokens, indices = self.vq.inference(
+                first_tokens, last_tokens, user_action_token_num=user_action_token_num
+            )
         else:
             tokens, indices = self.vq.inference(first_tokens, last_tokens)
 
-        
-    
         if return_only_codebook_ids:
             return indices
 
-        if math.sqrt(self.code_seq_len) % 1 == 0: # "code_seq_len should be square number"
-            action_h = int(math.sqrt(self.code_seq_len))
-            action_w = int(math.sqrt(self.code_seq_len))
-        elif self.code_seq_len == 2:
-            action_h = 2
-            action_w = 1
-        else:
-            print("code_seq_len should be square number or defined as 2")
-            return
-        
+        action_h, action_w = self.action_shape
+        tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h=action_h, w=action_w)
 
-        tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = action_h, w = action_w)
-        
         # Decoder uses pixel projection context
         dec_first_frame_tokens = self.decoder_context_projection(first_frame)
-        
+
         recon_video = self.decode(dec_first_frame_tokens, actions=tokens)
-        returned_recon = rearrange(recon_video, 'b c 1 h w -> b c h w')
-        video = rest_frames 
-        
-        return returned_recon
+        recon_frames = rearrange(recon_video, 'b c 1 h w -> b c h w')
+
+        return recon_frames
 
