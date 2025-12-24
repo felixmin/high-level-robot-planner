@@ -23,7 +23,6 @@ import argparse
 import os
 import subprocess
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
@@ -44,7 +43,6 @@ def generate_sbatch_script(
     cpus: int,
     container_image: str,
     job_name: str,
-    pip_install: bool = False,
 ) -> str:
     """Generate sbatch script content."""
 
@@ -81,15 +79,7 @@ echo "========================================"
 export PYTHONPATH={PROJECT_ROOT}/packages:$PYTHONPATH
 export NCCL_SOCKET_IFNAME=ib0
 export NCCL_DEBUG=WARN
-{f'''
-# Install missing dependencies (--pip-install flag)
-echo "Installing dependencies to {PROJECT_ROOT}/.pip-cache..."
-export PIP_TARGET={PROJECT_ROOT}/.pip-cache
-export PYTHONPATH={PROJECT_ROOT}/.pip-cache:$PYTHONPATH
-pip install --quiet --target $PIP_TARGET pytorch-lightning hydra-core omegaconf transformers timm wandb einops webdataset accelerate tensorflow tensorflow-datasets
-echo "Verifying installation..."
-python -c "import lightning; print(f'Lightning version: {{lightning.__version__}}')"
-''' if pip_install else ''}
+
 # Show GPU info
 nvidia-smi
 
@@ -148,12 +138,7 @@ def main():
     parser.add_argument(
         "--container",
         default=None,
-        help="Container image path (default: from HLRP_CONTAINER_IMAGE or built-in)"
-    )
-    parser.add_argument(
-        "--pip-install",
-        action="store_true",
-        help="Install missing dependencies via pip at job start (slower but ensures deps)"
+        help="Container image path (default: from HLRP_CONTAINER_IMAGE or lam.sqsh)"
     )
 
     args, overrides = parser.parse_known_args()
@@ -163,10 +148,10 @@ def main():
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name="config", overrides=overrides)
 
-    # Container image
+    # Container image (lam.sqsh has all dependencies pre-installed)
     container_image = args.container or os.environ.get(
         "HLRP_CONTAINER_IMAGE",
-        "/dss/dsshome1/00/go98qik2/workspace/containers/nvidia+pytorch+25.06-py3.sqsh"
+        "/dss/dsshome1/00/go98qik2/workspace/containers/lam.sqsh"
     )
 
     # Job name from experiment
@@ -197,7 +182,6 @@ def main():
         cpus=args.cpus,
         container_image=container_image,
         job_name=job_name,
-        pip_install=args.pip_install,
     )
 
     if args.dry_run:
