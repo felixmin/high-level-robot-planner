@@ -17,9 +17,14 @@ Usage:
 
     # Custom resources
     python scripts/submit_job.py --time 01:00:00 --gpus 2 experiment=laq_full
+
+    # Sweep (reads hydra.sweeper.params from experiment config)
+    python scripts/submit_job.py experiment=laq_lr_sweep
+    # Submits one job per parameter combination
 """
 
 import argparse
+import itertools
 import os
 import subprocess
 import tempfile
@@ -31,6 +36,56 @@ from omegaconf import OmegaConf
 
 # Project root (resolved at import time on login node)
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+
+
+def parse_sweep_params(cfg) -> dict[str, list[str]]:
+    """Extract sweep parameters from sweep.params config.
+
+    Returns dict mapping parameter names to lists of values.
+    Example: {'training.optimizer.lr': ['1e-4', '5e-5'], 'seed': ['42', '123']}
+    """
+    sweep_params = {}
+
+    # Check if sweep.params exists
+    if not OmegaConf.select(cfg, "sweep.params"):
+        return sweep_params
+
+    params = cfg.sweep.params
+    for key, value in params.items():
+        # Value can be a string with comma-separated values or a list
+        if isinstance(value, str):
+            # Parse comma-separated values, strip whitespace
+            values = [v.strip() for v in value.split(",")]
+        elif isinstance(value, (list, tuple)):
+            values = [str(v) for v in value]
+        else:
+            # Single value
+            values = [str(value)]
+        sweep_params[key] = values
+
+    return sweep_params
+
+
+def generate_sweep_combinations(sweep_params: dict[str, list[str]]) -> list[list[str]]:
+    """Generate all combinations of sweep parameters as Hydra overrides.
+
+    Returns list of override lists, e.g.:
+    [['training.optimizer.lr=1e-4', 'seed=42'], ['training.optimizer.lr=1e-4', 'seed=123'], ...]
+    """
+    if not sweep_params:
+        return [[]]  # Single empty combination (no sweep)
+
+    # Get keys and values in consistent order
+    keys = list(sweep_params.keys())
+    value_lists = [sweep_params[k] for k in keys]
+
+    # Generate Cartesian product
+    combinations = []
+    for combo in itertools.product(*value_lists):
+        overrides = [f"{key}={val}" for key, val in zip(keys, combo)]
+        combinations.append(overrides)
+
+    return combinations
 
 
 def generate_sbatch_script(
@@ -154,8 +209,10 @@ def main():
         "/dss/dsshome1/00/go98qik2/workspace/containers/lam.sqsh"
     )
 
-    # Job name from experiment
-    job_name = f"hlrp_{cfg.experiment.name}"
+    # Check for sweep parameters
+    sweep_params = parse_sweep_params(cfg)
+    sweep_combinations = generate_sweep_combinations(sweep_params)
+    is_sweep = len(sweep_combinations) > 1
 
     print("=" * 60)
     print("HLRP Job Submission")
@@ -163,6 +220,13 @@ def main():
     print(f"\nScript: {args.script}.py")
     print(f"Experiment: {cfg.experiment.name}")
     print(f"Description: {cfg.experiment.description}")
+
+    if is_sweep:
+        print(f"\n🔄 SWEEP MODE: {len(sweep_combinations)} jobs")
+        print(f"  Sweep parameters:")
+        for param, values in sweep_params.items():
+            print(f"    {param}: {values}")
+
     print(f"\nSlurm settings:")
     print(f"  Partition: {args.partition}")
     print(f"  GPUs: {args.gpus}")
@@ -171,59 +235,101 @@ def main():
     print(f"  CPUs: {args.cpus}")
     print(f"  Container: {container_image}")
 
-    # Generate sbatch script
-    sbatch_content = generate_sbatch_script(
-        script=args.script,
-        overrides=overrides,
-        partition=args.partition,
-        gpus=args.gpus,
-        time=args.time,
-        mem=args.mem,
-        cpus=args.cpus,
-        container_image=container_image,
-        job_name=job_name,
-    )
-
-    if args.dry_run:
-        print("\n[DRY RUN] Generated sbatch script:")
-        print("-" * 60)
-        print(sbatch_content)
-        print("-" * 60)
-        return
-
     # Create logs directory
     logs_dir = PROJECT_ROOT / "outputs" / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write and submit sbatch script
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.sbatch', delete=False) as f:
-        f.write(sbatch_content)
-        sbatch_file = f.name
+    # Submit jobs for each sweep combination
+    submitted_jobs = []
 
-    try:
-        print("\nSubmitting job...")
-        result = subprocess.run(
-            ["sbatch", sbatch_file],
-            capture_output=True,
-            text=True,
-            check=True
+    for i, sweep_overrides in enumerate(sweep_combinations):
+        # Combine base overrides with sweep overrides
+        # Sweep overrides come last to take precedence
+        combined_overrides = list(overrides) + sweep_overrides
+
+        # Generate unique job name for sweeps
+        if is_sweep:
+            # Create a short suffix from sweep params (e.g., "lr1e-4_seed42")
+            suffix_parts = []
+            for override in sweep_overrides:
+                key, val = override.split("=", 1)
+                # Use last part of key (e.g., "lr" from "training.optimizer.lr")
+                short_key = key.split(".")[-1]
+                # Shorten value if needed
+                short_val = val.replace("-", "").replace(".", "")[:8]
+                suffix_parts.append(f"{short_key}{short_val}")
+            job_name = f"hlrp_{cfg.experiment.name}_{'_'.join(suffix_parts)}"
+        else:
+            job_name = f"hlrp_{cfg.experiment.name}"
+
+        # Generate sbatch script
+        sbatch_content = generate_sbatch_script(
+            script=args.script,
+            overrides=combined_overrides,
+            partition=args.partition,
+            gpus=args.gpus,
+            time=args.time,
+            mem=args.mem,
+            cpus=args.cpus,
+            container_image=container_image,
+            job_name=job_name,
         )
 
-        # Parse job ID from output like "Submitted batch job 12345"
-        output = result.stdout.strip()
-        job_id = output.split()[-1] if output else "unknown"
+        if args.dry_run:
+            if is_sweep:
+                print(f"\n[DRY RUN] Job {i+1}/{len(sweep_combinations)}: {sweep_overrides}")
+            print("-" * 60)
+            print(sbatch_content)
+            print("-" * 60)
+            continue
 
-        print(f"\n{output}")
-        print(f"\nMonitor with:")
-        print(f"  squeue --me")
-        print(f"  tail -f {logs_dir}/{job_id}.out")
+        # Write and submit sbatch script
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.sbatch', delete=False) as f:
+            f.write(sbatch_content)
+            sbatch_file = f.name
 
-    except subprocess.CalledProcessError as e:
-        print(f"\nError submitting job: {e.stderr}")
-        raise
-    finally:
-        # Clean up temp file
-        os.unlink(sbatch_file)
+        try:
+            if is_sweep:
+                print(f"\nSubmitting job {i+1}/{len(sweep_combinations)}: {sweep_overrides}")
+            else:
+                print("\nSubmitting job...")
+
+            result = subprocess.run(
+                ["sbatch", sbatch_file],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            # Parse job ID from output like "Submitted batch job 12345"
+            output = result.stdout.strip()
+            job_id = output.split()[-1] if output else "unknown"
+            submitted_jobs.append((job_id, sweep_overrides))
+
+            print(f"  {output}")
+
+        except subprocess.CalledProcessError as e:
+            print(f"\nError submitting job: {e.stderr}")
+            raise
+        finally:
+            # Clean up temp file
+            os.unlink(sbatch_file)
+
+    # Print summary
+    if not args.dry_run and submitted_jobs:
+        print("\n" + "=" * 60)
+        print(f"Submitted {len(submitted_jobs)} job(s)")
+        print("=" * 60)
+        print("\nMonitor with:")
+        print("  squeue --me")
+        if len(submitted_jobs) == 1:
+            job_id = submitted_jobs[0][0]
+            print(f"  tail -f {logs_dir}/{job_id}.out")
+        else:
+            print(f"  tail -f {logs_dir}/<job_id>.out")
+            print("\nJob IDs:")
+            for job_id, sweep_ov in submitted_jobs:
+                print(f"  {job_id}: {sweep_ov if sweep_ov else 'base config'}")
 
 
 if __name__ == "__main__":

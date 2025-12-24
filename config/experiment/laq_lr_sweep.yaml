@@ -1,0 +1,49 @@
+# @package _global_
+
+# Sweep over learning rates for LAQ training
+# Submits one job per parameter combination
+
+defaults:
+  - /model@model: laq
+  - /data@data: laq_oxe
+  - /training@training: laq_optimizer
+  - /cluster@cluster: local_dev
+
+# Sweep parameters - each combination becomes a separate job
+# Uses custom 'sweep.params' key (compatible with submit_job.py)
+sweep:
+  params:
+    training.optimizer.lr: 1e-4, 5e-5, 1e-5
+    seed: 42, 123
+
+experiment:
+  name: laq_lr_sweep
+  description: "Learning rate sweep for LAQ on OXE"
+
+# Model
+model:
+  image_size: 256
+
+# Data - use smaller subset for sweep
+data:
+  dataset_name: language_table_blocktorelative_oracle_sim
+  train_split: "train[:90%]"
+  val_split: "train[90%:]"
+  offset: 10
+  batch_size: 32
+  shuffle_buffer: 1000
+  prefetch_buffer: 4
+  return_metadata: true
+
+# Training
+training:
+  epochs: 10
+  scheduler:
+    type: cosine
+    warmup_epochs: 1
+  validation:
+    check_interval: 0.1
+    limit_batches: 20
+
+logging:
+  use_wandb: true
