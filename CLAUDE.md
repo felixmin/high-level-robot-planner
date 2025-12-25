@@ -213,12 +213,23 @@ python scripts/2_train_laq.py experiment=laq_oxe
 
 # Bridge from OXE
 python scripts/2_train_laq.py data=laq_oxe_bridge training.epochs=100
+
+# RT-1 from OXE
+python scripts/2_train_laq.py data=laq_oxe_rt1 training.epochs=100
+
+# RoboNet from OXE
+python scripts/2_train_laq.py data=laq_oxe_robonet training.epochs=100
+
+# All OXE datasets combined
+python scripts/2_train_laq.py data=laq_oxe_all training.epochs=100
 ```
 
 **Available OXE Datasets**:
 - `language_table` - 442k episodes, 2D tabletop manipulation
 - `language_table_blocktorelative_oracle_sim` - 200k episodes, oracle agent
 - `bridge` - 25,460 train episodes, WidowX kitchen manipulation
+- `rt1` - 87k episodes, Google Robot mobile manipulator, pick/place tasks
+- `robonet` - 83k episodes, multi-robot (widowx, franka, baxter, sawyer), random interactions
 
 **OXE Config Example** (`config/data/laq_oxe_bridge.yaml`):
 ```yaml
@@ -407,9 +418,11 @@ validation:
   - **Compare mode**: Strategies can run separately on each bucket for distribution shift analysis
   - **Implementations**: Basic visualization, latent transfer, clustering, action/state scatter plots
 - **OXE Adapters**: Located in `packages/common/adapters/oxe.py`:
-  - Handles dict-based actions (Bridge) vs flat arrays (language_table)
-  - Handles string instructions (Bridge) vs encoded tensors (language_table)
-  - Configurable via `OXEDatasetConfig` registry
+  - Handles dict-based actions (Bridge, RT-1) vs flat arrays (language_table, RoboNet)
+  - Handles string instructions (Bridge, RT-1) vs encoded tensors (language_table)
+  - Handles step-level instructions (RoboNet) vs observation-level (others)
+  - Extracts robot metadata for multi-robot datasets (RoboNet: widowx, franka, baxter, sawyer)
+  - Configurable via `OXEDatasetConfig` registry with `instruction_in_step` and `robot_key` fields
 - **Logging**: Use `packages/common/logging.py` for consistent logging across stages.
 - **Checkpointing**: Lightning handles checkpoint saving; configure paths via Hydra config.
 

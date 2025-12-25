@@ -25,9 +25,24 @@ Currently supports:
   * State: 7D robot state - uses first 2 dims for visualization
   * Language instructions as string tensors
 
+- rt1: gs://gresearch/robotics/fractal20220817_data/0.1.0
+  * 87k episodes, Google Robot mobile manipulator
+  * Action: 3D world_vector (EEF displacement, dict-based like Bridge)
+  * State: 7D base_pose_tool_reached (position + quaternion)
+  * Language instructions as string tensors
+
+- robonet: gs://gresearch/robotics/robo_net/1.0.0
+  * 83k episodes, multi-robot (widowx, franka, baxter, sawyer)
+  * Action: 5D flat array (3D EEF delta + wrist rotation + gripper)
+  * State: 5D (EEF position + theta + gripper)
+  * Language instructions at step level (not in observation)
+  * Robot type available in episode_metadata for filtering
+
 Key features:
-- Automatic handling of dict-based actions (Bridge) vs flat arrays (language_table)
+- Automatic handling of dict-based actions (Bridge, RT-1) vs flat arrays (language_table, RoboNet)
 - Automatic handling of string vs encoded instruction formats
+- Support for step-level instructions (RoboNet) vs observation-level (others)
+- Robot type extraction for multi-robot datasets
 - Cumulative action computation between frame pairs
 - TFDS split syntax support (e.g., "train[:90%]", "train[1000:2000]")
 """
@@ -58,6 +73,10 @@ class OXEDatasetConfig:
     # For datasets with dict-based actions (like Bridge)
     action_key: Optional[str] = None  # If None, action is flat array; if set, extract this key
     action_is_dict: bool = False  # True if action is a dict with multiple keys
+    # For datasets where instruction is at step level, not in observation (e.g., RoboNet)
+    instruction_in_step: bool = False
+    # For datasets with episode-level metadata (e.g., RoboNet has robot type)
+    robot_key: Optional[str] = None  # Key in episode_metadata for robot type
 
 
 # Registry of supported OXE datasets
@@ -121,6 +140,38 @@ OXE_DATASETS = {
         state_dim=2,  # Use first 2 dims of 7D state for visualization
         action_key="world_vector",  # Extract world_vector from action dict
         action_is_dict=True,
+    ),
+    # RT-1 dataset (Google Robot, mobile manipulator)
+    # 87k episodes of table-top manipulation with 17 objects
+    "rt1": OXEDatasetConfig(
+        name="rt1",
+        gcs_path="gs://gresearch/robotics/fractal20220817_data/0.1.0",
+        image_key="image",
+        instruction_key="natural_language_instruction",
+        state_key="base_pose_tool_reached",  # 7D: position (3) + quaternion (4)
+        image_shape=(256, 320, 3),
+        control_frequency_hz=3.0,  # ~3Hz based on episode lengths
+        action_dim=3,  # world_vector is 3D EEF displacement
+        state_dim=3,  # Use first 3 dims (position) for visualization
+        action_key="world_vector",  # Extract from action dict
+        action_is_dict=True,
+    ),
+    # RoboNet dataset (multi-robot, random interactions)
+    # 83k episodes across widowx, franka, baxter, sawyer robots
+    "robonet": OXEDatasetConfig(
+        name="robonet",
+        gcs_path="gs://gresearch/robotics/robo_net/1.0.0",
+        image_key="image",  # Main camera (also has image1, image2)
+        instruction_key="language_instruction",  # Step-level, not in observation
+        state_key="state",  # 5D: [eef_x, eef_y, eef_z, theta, gripper]
+        image_shape=(240, 320, 3),
+        control_frequency_hz=10.0,  # Estimate
+        action_dim=3,  # First 3 dims of 5D action (EEF delta)
+        state_dim=3,  # First 3 dims of 5D state (EEF position)
+        action_key=None,  # Flat action array
+        action_is_dict=False,
+        instruction_in_step=True,  # Instruction at step level, not observation
+        robot_key="robot",  # episode_metadata.robot for filtering
     ),
 }
 
@@ -246,6 +297,8 @@ class OXEFramePairDataset(IterableDataset):
         state_dim = getattr(self.config, "state_dim", 2)
         action_key = getattr(self.config, "action_key", None)
         action_is_dict = getattr(self.config, "action_is_dict", False)
+        instruction_in_step = getattr(self.config, "instruction_in_step", False)
+        robot_key = getattr(self.config, "robot_key", None)
 
         def episode_to_pairs_generator():
             """Generator that yields frame pairs from episodes."""
@@ -262,25 +315,50 @@ class OXEFramePairDataset(IterableDataset):
                 if n_steps < offset + 1:
                     continue
 
+                # Extract robot type from episode metadata if available
+                robot_type = ""
+                if return_metadata and robot_key and "episode_metadata" in episode:
+                    try:
+                        robot_tensor = episode["episode_metadata"].get(robot_key)
+                        if robot_tensor is not None:
+                            robot_val = robot_tensor.numpy()
+                            if isinstance(robot_val, bytes):
+                                robot_type = robot_val.decode("utf-8")
+                            else:
+                                robot_type = str(robot_val)
+                    except Exception:
+                        robot_type = ""
+
                 # Get instruction (same for all steps in episode)
                 instruction = ""
-                if return_metadata and instruction_key in steps[0]["observation"]:
-                    instr_tensor = steps[0]["observation"][instruction_key]
+                if return_metadata:
                     try:
-                        # Check if it is a string tensor (Bridge) or encoded ints (language_table)
-                        if instr_tensor.dtype == tf.string:
-                            # String tensor (e.g., Bridge natural_language_instruction)
-                            instruction = instr_tensor.numpy().decode("utf-8")
-                        else:
-                            # Encoded int tensor (e.g., language_table)
-                            instruction = (
-                                tf.strings.unicode_encode(
-                                    tf.cast(instr_tensor, tf.int32), "UTF-8"
+                        if instruction_in_step:
+                            # Instruction at step level (e.g., RoboNet)
+                            instr_tensor = steps[0].get(instruction_key)
+                            if instr_tensor is not None:
+                                instr_val = instr_tensor.numpy()
+                                if isinstance(instr_val, bytes):
+                                    instruction = instr_val.decode("utf-8")
+                                else:
+                                    instruction = str(instr_val)
+                        elif instruction_key in steps[0]["observation"]:
+                            # Instruction in observation dict (Bridge, RT-1, language_table)
+                            instr_tensor = steps[0]["observation"][instruction_key]
+                            # Check if it is a string tensor (Bridge) or encoded ints (language_table)
+                            if instr_tensor.dtype == tf.string:
+                                # String tensor (e.g., Bridge natural_language_instruction)
+                                instruction = instr_tensor.numpy().decode("utf-8")
+                            else:
+                                # Encoded int tensor (e.g., language_table)
+                                instruction = (
+                                    tf.strings.unicode_encode(
+                                        tf.cast(instr_tensor, tf.int32), "UTF-8"
+                                    )
+                                    .numpy()
+                                    .decode("utf-8")
+                                    .rstrip("\x00")
                                 )
-                                .numpy()
-                                .decode("utf-8")
-                                .rstrip("\x00")
-                            )
                     except Exception:
                         instruction = ""
 
@@ -303,8 +381,9 @@ class OXEFramePairDataset(IterableDataset):
                             # Dict-based actions (e.g., Bridge has world_vector, rotation_delta)
                             actions = np.stack([s["action"][action_key].numpy() for s in steps])
                         else:
-                            # Flat action array (e.g., language_table)
-                            actions = np.stack([s["action"].numpy() for s in steps])
+                            # Flat action array (e.g., language_table, RoboNet)
+                            # Only take first action_dim dimensions
+                            actions = np.stack([s["action"].numpy()[:action_dim] for s in steps])
                     except Exception:
                         actions = None
                         
@@ -344,6 +423,7 @@ class OXEFramePairDataset(IterableDataset):
                             "dataset_name": dataset_name,
                             "action": cumulative_action.astype(np.float32),
                             "initial_state": initial_state.astype(np.float32),
+                            "robot": robot_type,  # Robot type for filtering (e.g., RoboNet)
                         }
                         yield pair, meta
                     else:
@@ -366,6 +446,8 @@ class OXEFramePairDataset(IterableDataset):
                     "action": tf.TensorSpec(shape=(action_dim,), dtype=tf.float32),
                     # State: initial state
                     "initial_state": tf.TensorSpec(shape=(state_dim,), dtype=tf.float32),
+                    # Robot type (for multi-robot datasets like RoboNet)
+                    "robot": tf.TensorSpec(shape=(), dtype=tf.string),
                 },
             )
         else:
@@ -489,6 +571,15 @@ class OXEFramePairDataset(IterableDataset):
                         if isinstance(meta_tf["dataset_name"].numpy(), bytes)
                         else self.config.name
                     )
+                    # Extract robot type
+                    robot = ""
+                    if "robot" in meta_tf:
+                        robot_val = meta_tf["robot"].numpy()
+                        if isinstance(robot_val, bytes):
+                            robot = robot_val.decode("utf-8")
+                        else:
+                            robot = str(robot_val) if robot_val else ""
+
                     meta = {
                         "episode_id": (
                             meta_tf["episode_id"].numpy().decode("utf-8")
@@ -510,6 +601,8 @@ class OXEFramePairDataset(IterableDataset):
                         "action": meta_tf["action"].numpy().tolist(),
                         # Initial state (for visualization)
                         "initial_state": meta_tf["initial_state"].numpy().tolist(),
+                        # Robot type (for multi-robot datasets)
+                        "robot": robot,
                     }
                     yield {"frames": pair_pt, **meta}
                 else:

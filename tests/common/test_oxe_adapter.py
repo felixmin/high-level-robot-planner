@@ -6,6 +6,8 @@ Tests:
 - MultiOXEFramePairDataset: Multi-dataset interleaving
 - Memory management: Persistent pipelines, cleanup
 - Metadata extraction: Actions, states, instructions
+- RT-1 dataset: Dict-based actions, string instructions
+- RoboNet dataset: Step-level instructions, robot metadata
 """
 
 import gc
@@ -251,6 +253,183 @@ class TestMemoryStability:
             growth = memory_samples[-1] / max(memory_samples[0], 1)
             assert growth < 2.0, f"Memory grew {growth:.1f}x across epochs"
             print(f"✓ Multi-dataset memory stable: {memory_samples[0]/1024:.0f}KB -> {memory_samples[-1]/1024:.0f}KB")
+
+
+class TestRT1Dataset:
+    """Test RT-1 dataset adapter (fractal20220817_data)."""
+
+    @pytest.fixture
+    def rt1_dataset(self):
+        """Create a small RT-1 dataset for testing."""
+        from common.adapters.oxe import OXEFramePairDataset
+
+        ds = OXEFramePairDataset(
+            dataset_name="rt1",
+            split="train[:10]",  # Just 10 episodes
+            offset=3,  # ~1 sec at 3Hz
+            image_size=64,
+            shuffle_buffer=5,
+            return_metadata=True,
+        )
+        yield ds
+        ds.cleanup()
+
+    def test_iteration_basic(self, rt1_dataset):
+        """Test basic iteration over RT-1 dataset."""
+        count = 0
+        for item in rt1_dataset:
+            assert "frames" in item
+            assert item["frames"].shape == (3, 2, 64, 64)
+            assert "action" in item
+            assert "initial_state" in item
+            count += 1
+            if count >= 5:
+                break
+
+        assert count == 5
+        print(f"RT-1: Iterated {count} samples successfully")
+
+    def test_metadata_extraction(self, rt1_dataset):
+        """Test that RT-1 metadata is correctly extracted."""
+        for item in rt1_dataset:
+            # Check required metadata
+            assert item["dataset_type"] == "rt1"
+            assert item["dataset_name"] == "rt1"
+
+            # RT-1 has string instructions like "pick apple from white bowl"
+            assert "language" in item
+            assert isinstance(item["language"], str)
+
+            # Action should be 3D (world_vector)
+            assert len(item["action"]) == 3, f"Expected 3D action, got {len(item['action'])}"
+
+            # State should be 3D (first 3 dims of base_pose_tool_reached)
+            assert len(item["initial_state"]) == 3, f"Expected 3D state, got {len(item['initial_state'])}"
+
+            # Robot field should be empty for RT-1 (no robot metadata)
+            assert "robot" in item
+            break
+
+        print("RT-1: Metadata correctly extracted")
+
+
+class TestRoboNetDataset:
+    """Test RoboNet dataset adapter (robo_net)."""
+
+    @pytest.fixture
+    def robonet_dataset(self):
+        """Create a small RoboNet dataset for testing."""
+        from common.adapters.oxe import OXEFramePairDataset
+
+        ds = OXEFramePairDataset(
+            dataset_name="robonet",
+            split="train[:10]",  # Just 10 episodes
+            offset=10,
+            image_size=64,
+            shuffle_buffer=5,
+            return_metadata=True,
+        )
+        yield ds
+        ds.cleanup()
+
+    def test_iteration_basic(self, robonet_dataset):
+        """Test basic iteration over RoboNet dataset."""
+        count = 0
+        for item in robonet_dataset:
+            assert "frames" in item
+            assert item["frames"].shape == (3, 2, 64, 64)
+            assert "action" in item
+            assert "initial_state" in item
+            count += 1
+            if count >= 5:
+                break
+
+        assert count == 5
+        print(f"RoboNet: Iterated {count} samples successfully")
+
+    def test_metadata_extraction(self, robonet_dataset):
+        """Test that RoboNet metadata is correctly extracted."""
+        for item in robonet_dataset:
+            # Check required metadata
+            assert item["dataset_type"] == "robonet"
+            assert item["dataset_name"] == "robonet"
+
+            # RoboNet has step-level instructions like "Interact with the objects in the bin"
+            assert "language" in item
+            assert isinstance(item["language"], str)
+
+            # Action should be 3D (first 3 dims of 5D action)
+            assert len(item["action"]) == 3, f"Expected 3D action, got {len(item['action'])}"
+
+            # State should be 3D (first 3 dims of 5D state)
+            assert len(item["initial_state"]) == 3, f"Expected 3D state, got {len(item['initial_state'])}"
+
+            # Robot field should contain robot type
+            assert "robot" in item
+            assert isinstance(item["robot"], str)
+            # Valid robot types: widowx, franka, baxter, sawyer
+            if item["robot"]:  # May be empty in some cases
+                assert item["robot"] in ["widowx", "franka", "baxter", "sawyer"], \
+                    f"Unexpected robot type: {item['robot']}"
+            break
+
+        print("RoboNet: Metadata correctly extracted")
+
+    def test_robot_metadata_variation(self, robonet_dataset):
+        """Test that different robot types appear in the dataset."""
+        robot_types = set()
+        count = 0
+
+        for item in robonet_dataset:
+            if item["robot"]:
+                robot_types.add(item["robot"])
+            count += 1
+            if count >= 50 or len(robot_types) >= 3:
+                break
+
+        print(f"RoboNet: Found robot types: {robot_types}")
+        # Should find at least one robot type
+        assert len(robot_types) >= 1, "Expected at least one robot type"
+
+
+class TestOXEDatasetRegistry:
+    """Test OXE dataset registry and config."""
+
+    def test_registry_contains_new_datasets(self):
+        """Test that RT-1 and RoboNet are in the registry."""
+        from common.adapters.oxe import OXE_DATASETS
+
+        assert "rt1" in OXE_DATASETS, "RT-1 not in registry"
+        assert "robonet" in OXE_DATASETS, "RoboNet not in registry"
+        print(f"Registry contains {len(OXE_DATASETS)} datasets: {list(OXE_DATASETS.keys())}")
+
+    def test_rt1_config(self):
+        """Test RT-1 config values."""
+        from common.adapters.oxe import OXE_DATASETS
+
+        cfg = OXE_DATASETS["rt1"]
+        assert cfg.image_key == "image"
+        assert cfg.instruction_key == "natural_language_instruction"
+        assert cfg.action_is_dict is True
+        assert cfg.action_key == "world_vector"
+        assert cfg.action_dim == 3
+        assert cfg.state_dim == 3
+        assert cfg.instruction_in_step is False
+        print("RT-1 config validated")
+
+    def test_robonet_config(self):
+        """Test RoboNet config values."""
+        from common.adapters.oxe import OXE_DATASETS
+
+        cfg = OXE_DATASETS["robonet"]
+        assert cfg.image_key == "image"
+        assert cfg.instruction_key == "language_instruction"
+        assert cfg.action_is_dict is False
+        assert cfg.action_dim == 3
+        assert cfg.state_dim == 3
+        assert cfg.instruction_in_step is True
+        assert cfg.robot_key == "robot"
+        print("RoboNet config validated")
 
 
 if __name__ == "__main__":

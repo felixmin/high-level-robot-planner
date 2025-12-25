@@ -1,0 +1,18 @@
+# OXE RT-1 dataset configuration
+# Google Robot mobile manipulator, table-top manipulation with 17 objects
+# 87k episodes of pick/place/move tasks in micro-kitchens
+
+datasets:
+  - name: rt1
+    train_split: "train[:90%]"  # ~78,491 episodes
+    val_split: "train[90%:]"    # ~8,721 episodes
+    weight: 1.0
+
+# Shared settings
+offset: 3                    # ~1 second at 3Hz
+image_size: 256
+batch_size: 32
+num_workers: 0               # tf.data handles parallelism
+shuffle_buffer: 200          # Buffer size for shuffling
+prefetch_buffer: 4
+return_metadata: true        # Required for action/state scatter validation
