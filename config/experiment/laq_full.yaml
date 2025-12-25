@@ -5,7 +5,7 @@
 
 defaults:
   - /model@model: laq
-  - /data@data: openx_webdataset
+  - /data@data: laq_oxe_multi
   - /training@training: laq_optimizer
   - /cluster@cluster: lrz_h100
 

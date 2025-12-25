@@ -48,7 +48,7 @@ class TestLAQDataModule:
             image_size=256,
             batch_size=4,
             num_workers=0,
-            max_samples=None,
+            max_pairs=None,
         )
 
         dm.setup()
@@ -67,7 +67,7 @@ class TestLAQDataModule:
             image_size=256,
             batch_size=4,
             num_workers=0,
-            max_samples=10,
+            max_pairs=10,
         )
 
         dm.setup()
@@ -90,7 +90,7 @@ class TestLAQDataModule:
             image_size=256,
             batch_size=4,
             num_workers=0,
-            max_samples=20,
+            max_pairs=20,
         )
 
         dm.setup()
@@ -116,7 +116,7 @@ class TestLAQDataModule:
             image_size=256,
             batch_size=4,
             num_workers=2,
-            max_samples=20,
+            max_pairs=20,
         )
 
         dm.setup()
@@ -160,7 +160,7 @@ class TestDataIntegrationWithModel:
             image_size=256,
             batch_size=2,
             num_workers=0,
-            max_samples=5,
+            max_pairs=5,
             val_split=0.0,
         )
         dm.setup()
@@ -425,7 +425,7 @@ class TestLAQDataModuleWithMetadata:
             batch_size=2,
             num_workers=0,
             return_metadata=True,
-            max_samples=5,
+            max_pairs=5,
             val_split=0.0,
         )
 
@@ -455,7 +455,7 @@ class TestLAQDataModulePairLevel:
             batch_size=2,
             num_workers=0,
             offsets=[30],
-            max_samples=10,
+            max_pairs=10,
             val_split=0.2,
         )
 
@@ -478,7 +478,7 @@ class TestLAQDataModulePairLevel:
             batch_size=1,
             num_workers=0,
             offsets=[30],
-            max_samples=1,
+            max_pairs=1,
             val_split=0.0,
         )
 
@@ -504,12 +504,12 @@ class TestSamplingStrategies:
     """Test random vs sequential sampling for subset selection."""
 
     def test_random_sampling_is_reproducible(self, sources):
-        """Test that same seed produces same random indices."""
+        """Test that same seed produces same random subset indices."""
         dm1 = LAQDataModule(
             sources=sources,
             image_size=256,
             batch_size=4,
-            max_samples=10,
+            max_pairs=10,
             val_split=0.0,
             sampling_strategy="random",
             sampling_seed=42,
@@ -520,18 +520,18 @@ class TestSamplingStrategies:
             sources=sources,
             image_size=256,
             batch_size=4,
-            max_samples=10,
+            max_pairs=10,
             val_split=0.0,
             sampling_strategy="random",
             sampling_seed=42,
         )
         dm2.setup()
 
-        # Load a batch from each and compare
-        batch1 = next(iter(dm1.train_dataloader()))
-        batch2 = next(iter(dm2.train_dataloader()))
+        # Compare subset indices directly (not via DataLoader which shuffles)
+        indices1 = dm1.train_dataset.indices
+        indices2 = dm2.train_dataset.indices
 
-        assert torch.allclose(batch1, batch2), "Same seed should produce same data"
+        assert indices1 == indices2, "Same seed should produce same subset indices"
 
         print(f"✓ Random sampling is reproducible with seed=42")
 
@@ -541,7 +541,7 @@ class TestSamplingStrategies:
             sources=sources,
             image_size=256,
             batch_size=4,
-            max_samples=10,
+            max_pairs=10,
             val_split=0.0,
             sampling_strategy="random",
             sampling_seed=42,
@@ -552,7 +552,7 @@ class TestSamplingStrategies:
             sources=sources,
             image_size=256,
             batch_size=4,
-            max_samples=10,
+            max_pairs=10,
             val_split=0.0,
             sampling_strategy="random",
             sampling_seed=123,

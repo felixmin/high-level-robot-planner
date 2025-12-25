@@ -80,13 +80,6 @@ class LAQTask(pl.LightningModule):
         self.training_config = training_config
         self.use_ema = use_ema
 
-        # Convert perceptual_loss config to dict for model (handles OmegaConf)
-        perceptual_loss_config = training_config.get("perceptual_loss", None)
-        if perceptual_loss_config is not None:
-            perceptual_loss_config = OmegaConf.to_container(
-                perceptual_loss_config, resolve=True
-            )
-
         # Initialize LAQ model
         self.model = LatentActionQuantization(
             dim=model_config.dim,
@@ -105,7 +98,6 @@ class LAQTask(pl.LightningModule):
             use_dinov3_encoder=model_config.get("use_dinov3_encoder", False),
             dinov3_model_name=model_config.get("dinov3_model_name", "facebook/dinov3-vits16-pretrain-lvd1689m"),
             dinov3_pool_to_grid=model_config.get("dinov3_pool_to_grid", None),
-            perceptual_loss_config=perceptual_loss_config,
         )
 
         # Storage for validation and training batches (for visualization)
@@ -163,7 +155,6 @@ class LAQTask(pl.LightningModule):
             self.log("train/loss", loss, prog_bar=True, sync_dist=True)
             self.log("train/main_dino_loss", metrics["main_dino_loss"], sync_dist=True)
             self.log("train/aux_pixel_loss", metrics["aux_pixel_loss"], sync_dist=True)
-            self.log("train/perceptual_loss", metrics["perceptual_loss"], sync_dist=True)
             self.log("train/num_unique_codes", metrics["num_unique_codes"], prog_bar=True, sync_dist=True)
             self.log("train/lr", self.optimizers().param_groups[0]["lr"], prog_bar=True)
 
@@ -202,7 +193,6 @@ class LAQTask(pl.LightningModule):
             self.log("val/loss", loss, prog_bar=True, sync_dist=True)
             self.log("val/main_dino_loss", metrics["main_dino_loss"], sync_dist=True)
             self.log("val/aux_pixel_loss", metrics["aux_pixel_loss"], sync_dist=True)
-            self.log("val/perceptual_loss", metrics["perceptual_loss"], sync_dist=True)
             self.log("val/num_unique_codes", metrics["num_unique_codes"], sync_dist=True)
 
         # Store first batch for visualization

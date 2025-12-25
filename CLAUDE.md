@@ -97,7 +97,8 @@ python scripts/2_train_laq.py experiment=laq_full data.batch_size=512 training.o
 ## Infrastructure
 
 **LRZ Cluster (H100 multi-node training):**
-- See `docs/lrz_workflow.md` for setup, job submission, and monitoring
+- See `docs/job_submission.md` for job submission and sweeps
+- See `docs/lrz_workflow.md` for cluster setup and monitoring
 
 **Local RTX 5090 (single-GPU development):**
 - 24GB VRAM: Use batch size 8-16, enable `mixed_precision=bf16` via Hydra config
@@ -146,12 +147,26 @@ Key dependencies: pytorch-lightning, transformers, webdataset, hydra-core, wandb
 # Stage 1: LAQ on local machine
 python scripts/2_train_laq.py experiment=laq_debug
 
-# Stage 1: LAQ on LRZ (full)
-sbatch slurm/train.sbatch scripts/2_train_laq.py experiment=laq_full
+# Stage 1: LAQ on LRZ cluster
+python scripts/submit_job.py experiment=laq_full
 
-# Stage 2: Foundation (multi-node on LRZ)
-sbatch slurm/train.sbatch scripts/4_train_foundation.py experiment=vla_7b
+# Stage 2: Foundation on LRZ (multi-node)
+python scripts/submit_job.py --script 4_train_foundation experiment=vla_7b
 ```
+
+### Submitting Sweeps (Multiple Jobs)
+```bash
+# Define sweep in experiment config with sweep.params
+# See config/experiment/laq_lr_sweep.yaml for example
+
+# Submit sweep (one job per parameter combination)
+python scripts/submit_job.py experiment=laq_lr_sweep
+
+# Dry run to preview jobs
+python scripts/submit_job.py --dry-run experiment=laq_lr_sweep
+```
+
+See `docs/job_submission.md` for full documentation.
 
 ### Modifying Configuration
 Edit YAML files in `config/` hierarchy or override via CLI:

@@ -257,7 +257,7 @@ class TestMultiSourceDataModule:
             image_size=256,
             batch_size=4,
             num_workers=0,
-            max_samples=10,
+            max_pairs=10,
             val_split=0.2,
             split_mode="ratio",  # Trigger multi-source path
         )

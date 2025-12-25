@@ -1,0 +1,18 @@
+# Language Table only - for comparison experiment
+# Train and validate on language_table dataset
+
+datasets:
+  - name: language_table
+    train_split: "train[:90%]"
+    val_split: "train[90%:]"
+    weight: 1.0
+    offset: 10  # 1 second at 10Hz
+
+# Shared settings
+offset: 10
+image_size: 256
+batch_size: 32
+num_workers: 0
+shuffle_buffer: 500
+prefetch_buffer: 4
+return_metadata: true

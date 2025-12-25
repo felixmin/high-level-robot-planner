@@ -1,0 +1,16 @@
+# Latent-labeled dataset configuration for Stage 2 (Foundation VLA)
+# Uses LAQ-encoded latent actions paired with language instructions
+#
+# TODO: Update when WebDataset pipeline is implemented
+
+# Placeholder using OXE format until WebDataset loaders are built
+dataset_name: bridge
+train_split: "train[:90%]"
+val_split: "train[90%:]"
+offset: 5
+image_size: 256
+batch_size: 16
+num_workers: 0
+shuffle_buffer: 200
+prefetch_buffer: 4
+return_metadata: true

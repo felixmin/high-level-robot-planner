@@ -71,7 +71,6 @@ class LatentActionQuantization(nn.Module):
         use_dinov3_encoder = False,
         dinov3_model_name = "facebook/dinov3-vits16-pretrain-lvd1689m",
         dinov3_pool_to_grid = None,  # Pool DINO features to this grid size (e.g., 8 for 8x8)
-        perceptual_loss_config = None,  # Dict with enabled, weight, layers, model_name
     ):
         """
         einstein notations:
@@ -192,30 +191,6 @@ class LatentActionQuantization(nn.Module):
             nn.Linear(dim, channels * eff_patch_h * eff_patch_w),
             Rearrange('b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)', p1 = eff_patch_h, p2 = eff_patch_w)
         )
-
-        # Perceptual Loss Setup (optional DINO-based loss on reconstructions)
-        self.perceptual_loss_config = perceptual_loss_config
-        self.use_perceptual_loss = (
-            perceptual_loss_config is not None
-            and perceptual_loss_config.get("enabled", False)
-        )
-
-        if self.use_perceptual_loss:
-            # Strict validation - all required params must be present
-            required_keys = ["model_name", "weight", "layers"]
-            missing = [k for k in required_keys if k not in perceptual_loss_config]
-            if missing:
-                raise ValueError(f"perceptual_loss_config missing required keys: {missing}")
-
-            logger.info(f"Initializing DINO Perceptual Loss with {perceptual_loss_config['model_name']}")
-            self.perceptual_loss_net = DINOFeatureExtractor(
-                model_name=perceptual_loss_config["model_name"],
-                freeze=True,
-                target_size=image_height,
-            )
-            self.perceptual_loss_net.eval()
-            for p in self.perceptual_loss_net.parameters():
-                p.requires_grad = False
 
         # Pre-compute action shape from code_seq_len (used in forward/inference)
         if math.sqrt(code_seq_len) % 1 == 0:
@@ -481,37 +456,12 @@ class LatentActionQuantization(nn.Module):
         # Aux loss: pixel reconstruction (gradients don't flow to encoder/VQ)
         aux_loss = F.mse_loss(rest_frames, recon_video)
 
-        # Perceptual loss (optional)
-        if self.use_perceptual_loss:
-            target_frame = rest_frames.squeeze(2)  # [B, C, 1, H, W] -> [B, C, H, W]
-            layers = self.perceptual_loss_config["layers"]
-
-            with torch.no_grad():
-                target_feats = self.perceptual_loss_net(
-                    target_frame, output_hidden_states=True, layer_indices=layers
-                )
-
-            # Clamp reconstruction to [0, 1] - DINO normalization assumes valid images
-            recon_clamped = torch.clamp(recon_frames, 0.0, 1.0)
-            recon_feats = self.perceptual_loss_net(
-                recon_clamped, output_hidden_states=True, layer_indices=layers
-            )
-
-            perceptual_loss = sum(
-                F.l1_loss(r_f, t_f) for r_f, t_f in zip(recon_feats, target_feats)
-            )
-            perceptual_weight = self.perceptual_loss_config["weight"]
-        else:
-            perceptual_loss = torch.zeros(1, device=device).squeeze()
-            perceptual_weight = 0.0
-
-        total_loss = main_loss + aux_loss + perceptual_weight * perceptual_loss
+        total_loss = main_loss + aux_loss
 
         metrics = {
             "num_unique_codes": num_unique_indices,
             "main_dino_loss": main_loss.detach(),
             "aux_pixel_loss": aux_loss.detach(),
-            "perceptual_loss": perceptual_loss.detach(),
         }
 
         return total_loss, metrics

@@ -32,8 +32,6 @@ training:
   max_steps: null
   scheduler:
     type: none
-  perceptual_loss:
-    enabled: false
   validation:
     check_interval: 1000
     limit_batches: 100

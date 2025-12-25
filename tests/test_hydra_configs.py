@@ -84,8 +84,8 @@ class TestExperimentConfigs:
             assert cfg.model.llm.model_name == "meta-llama/Llama-2-7b-hf"
 
             # Validate latent-labeled data
-            assert cfg.data.name == "openx_latent_labeled"
-            assert cfg.data.task == "foundation"
+            assert cfg.data.dataset_name == "bridge"
+            assert cfg.data.return_metadata is True
 
             # Validate FSDP training
             assert hasattr(cfg.training, "fsdp")

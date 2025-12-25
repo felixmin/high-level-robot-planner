@@ -506,12 +506,6 @@ class LAQDataModule(pl.LightningDataModule):
         val_scene_filters: Optional[Dict[str, Any]] = None,
         val_buckets: Optional[Dict[str, Dict[str, Any]]] = None,
         val_counts_per_dataset: Optional[Dict[str, int]] = None,
-        # Legacy parameters (ignored but kept for config compatibility)
-        folder: Optional[str] = None,
-        offset: int = 30,
-        use_metadata: bool = True,
-        pair_level: bool = True,
-        max_samples: Optional[int] = None,  # Use max_pairs instead
     ):
         """
         Args:

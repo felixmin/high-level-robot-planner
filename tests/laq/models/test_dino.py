@@ -65,7 +65,7 @@ class TestDINOFeatureExtractor:
         print(f"✓ Feature extractor output shape: {features.shape}")
 
     def test_feature_extractor_multi_layer(self, device, dino_model_name):
-        """Test multi-layer feature extraction for perceptual loss."""
+        """Test multi-layer feature extraction."""
         from laq.models.dino import DINOFeatureExtractor
         
         extractor = DINOFeatureExtractor(
@@ -205,15 +205,16 @@ class TestLAQWithDINO:
     def test_laq_dino_forward(self, laq_with_dino, device):
         """Test LAQ+DINO forward pass."""
         x = torch.randn(2, 3, 2, 256, 256, device=device)
-        
+
         with torch.no_grad():
-            loss, num_unique, recon, aux_loss = laq_with_dino(x, step=0)
-        
+            loss, metrics = laq_with_dino(x, step=0)
+
         assert loss.item() >= 0
-        assert num_unique > 0
-        assert recon.shape == (2, 3, 256, 256)
-        
-        print(f"✓ LAQ+DINO forward: loss={loss.item():.4f}, unique={num_unique}")
+        assert metrics["num_unique_codes"] > 0
+        assert "main_dino_loss" in metrics
+        assert "aux_pixel_loss" in metrics
+
+        print(f"✓ LAQ+DINO forward: loss={loss.item():.4f}, unique={metrics['num_unique_codes']}")
 
     def test_laq_dino_reconstruction(self, laq_with_dino, device):
         """Test LAQ+DINO reconstruction output."""
@@ -243,21 +244,21 @@ class TestLAQWithDINO:
     def test_laq_dino_gradient_flow(self, laq_with_dino, device):
         """Test gradients flow through LAQ+DINO (DINO frozen)."""
         x = torch.randn(2, 3, 2, 256, 256, device=device, requires_grad=True)
-        
-        loss, num_unique, recon, aux_loss = laq_with_dino(x, step=0)
+
+        loss, metrics = laq_with_dino(x, step=0)
         loss.backward()
-        
+
         # Input should have gradients (through unfrozen parts)
         assert x.grad is not None
-        
+
         # DINO extractor should NOT have gradients (frozen)
         dino_params = list(laq_with_dino.dino_feature_extractor.model.parameters())
         for p in dino_params[:5]:  # Check first 5 params
             assert p.grad is None or p.grad.abs().sum() == 0
-            
+
         # Projection layer SHOULD have gradients
         assert laq_with_dino.dino_encoder.proj.weight.grad is not None
-        
+
         print("✓ Gradient flow correct (DINO frozen, projection trainable)")
 
 
