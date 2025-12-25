@@ -181,8 +181,8 @@ def main():
     )
     parser.add_argument(
         "--mem",
-        default="64G",
-        help="Memory per node"
+        default=None,
+        help="Memory per node (default: from cluster config or 200G)"
     )
     parser.add_argument(
         "--cpus",
@@ -209,6 +209,14 @@ def main():
         "/dss/dsshome1/00/go98qik2/workspace/containers/lam.sqsh"
     )
 
+    # Memory: use CLI arg > cluster config > default 200G
+    if args.mem is not None:
+        mem = args.mem
+    elif OmegaConf.select(cfg, "cluster.compute.mem_gb"):
+        mem = f"{cfg.cluster.compute.mem_gb}G"
+    else:
+        mem = "200G"  # Safe default for OXE streaming
+
     # Check for sweep parameters
     sweep_params = parse_sweep_params(cfg)
     sweep_combinations = generate_sweep_combinations(sweep_params)
@@ -231,7 +239,7 @@ def main():
     print(f"  Partition: {args.partition}")
     print(f"  GPUs: {args.gpus}")
     print(f"  Time: {args.time}")
-    print(f"  Memory: {args.mem}")
+    print(f"  Memory: {mem}")
     print(f"  CPUs: {args.cpus}")
     print(f"  Container: {container_image}")
 
@@ -269,7 +277,7 @@ def main():
             partition=args.partition,
             gpus=args.gpus,
             time=args.time,
-            mem=args.mem,
+            mem=mem,
             cpus=args.cpus,
             container_image=container_image,
             job_name=job_name,
