@@ -57,35 +57,35 @@ class TestValidationCache:
     def test_cache_metadata(self):
         """Test metadata storage and retrieval."""
         cache = ValidationCache()
-        
-        # Add metadata batches
-        meta1 = [{"dataset_type": "youtube"}, {"dataset_type": "youtube"}]
-        meta2 = [{"dataset_type": "bridge"}, {"dataset_type": "bridge"}]
+
+        # Add metadata batches using standardized keys
+        meta1 = [{"dataset_name": "youtube"}, {"dataset_name": "youtube"}]
+        meta2 = [{"dataset_name": "bridge"}, {"dataset_name": "bridge"}]
         cache.metadata.append(meta1)
         cache.metadata.append(meta2)
-        
+
         all_meta = cache.get_all_metadata()
         assert len(all_meta) == 4
-        assert all_meta[0]["dataset_type"] == "youtube"
-        assert all_meta[2]["dataset_type"] == "bridge"
-    
-    def test_get_frames_by_dataset_type(self):
-        """Test filtering frames by dataset type."""
+        assert all_meta[0]["dataset_name"] == "youtube"
+        assert all_meta[2]["dataset_name"] == "bridge"
+
+    def test_get_frames_by_dataset_name(self):
+        """Test filtering frames by dataset name."""
         cache = ValidationCache()
-        
-        # Add frames with metadata
+
+        # Add frames with metadata using standardized keys
         frames = torch.randn(4, 3, 2, 64, 64)
         cache.frames.append(frames)
         cache.metadata.append([
-            {"dataset_type": "youtube"},
-            {"dataset_type": "bridge"},
-            {"dataset_type": "youtube"},
-            {"dataset_type": "bridge"},
+            {"dataset_name": "youtube"},
+            {"dataset_name": "bridge"},
+            {"dataset_name": "youtube"},
+            {"dataset_name": "bridge"},
         ])
-        
-        youtube_frames = cache.get_frames_by_dataset_type("youtube")
-        bridge_frames = cache.get_frames_by_dataset_type("bridge")
-        
+
+        youtube_frames = cache.get_frames_by_dataset_name("youtube")
+        bridge_frames = cache.get_frames_by_dataset_name("bridge")
+
         assert youtube_frames.shape[0] == 2
         assert bridge_frames.shape[0] == 2
 
@@ -246,23 +246,23 @@ class TestMetadataPruning:
     def test_prune_metadata_keeps_essential_keys(self):
         """Test that pruning keeps only essential metadata keys."""
         full_metadata = {
-            "dataset_type": "bridge",
             "dataset_name": "bridge",
             "action": [0.1, 0.2, 0.3],
             "initial_state": [1.0, 2.0],
-            "instruction": "pick up the block",  # Should be removed
-            "episode_id": 12345,  # Should be removed
+            "language": "pick up the block",  # Essential - should be kept
+            "episode_id": "12345",  # Should be removed (not essential for caching)
+            "frame_idx": 42,  # Should be removed
             "raw_observation": {"large": "dict"},  # Should be removed
         }
 
         pruned = prune_metadata(full_metadata)
 
-        assert "dataset_type" in pruned
         assert "dataset_name" in pruned
         assert "action" in pruned
         assert "initial_state" in pruned
-        assert "instruction" not in pruned
+        assert "language" in pruned  # Now kept as essential
         assert "episode_id" not in pruned
+        assert "frame_idx" not in pruned
         assert "raw_observation" not in pruned
 
     def test_prune_metadata_empty_input(self):
@@ -276,16 +276,16 @@ class TestMetadataPruning:
 
         frame = torch.randn(3, 2, 64, 64)
         full_meta = {
-            "dataset_type": "bridge",
-            "instruction": "should be removed",
+            "dataset_name": "bridge",
+            "episode_id": "should be removed",
             "extra_field": "also removed",
         }
 
         cache.add_sample(frame, full_meta, prune=True)
 
         stored_meta = cache.get_all_metadata()[0]
-        assert "dataset_type" in stored_meta
-        assert "instruction" not in stored_meta
+        assert "dataset_name" in stored_meta
+        assert "episode_id" not in stored_meta
         assert "extra_field" not in stored_meta
 
     def test_cache_add_sample_no_prune(self):
@@ -294,15 +294,15 @@ class TestMetadataPruning:
 
         frame = torch.randn(3, 2, 64, 64)
         full_meta = {
-            "dataset_type": "bridge",
-            "instruction": "should be kept",
+            "dataset_name": "bridge",
+            "episode_id": "should be kept",
         }
 
         cache.add_sample(frame, full_meta, prune=False)
 
         stored_meta = cache.get_all_metadata()[0]
-        assert "dataset_type" in stored_meta
-        assert "instruction" in stored_meta
+        assert "dataset_name" in stored_meta
+        assert "episode_id" in stored_meta
 
     def test_cache_add_batch_prunes_by_default(self):
         """Test that add_batch prunes metadata by default."""
@@ -310,8 +310,8 @@ class TestMetadataPruning:
 
         frames = torch.randn(2, 3, 2, 64, 64)
         metadata_list = [
-            {"dataset_type": "bridge", "instruction": "remove1"},
-            {"dataset_type": "youtube", "instruction": "remove2"},
+            {"dataset_name": "bridge", "episode_id": "remove1"},
+            {"dataset_name": "youtube", "episode_id": "remove2"},
         ]
 
         cache.add_batch(frames, metadata_list, prune=True)
@@ -319,8 +319,8 @@ class TestMetadataPruning:
         all_meta = cache.get_all_metadata()
         assert len(all_meta) == 2
         for meta in all_meta:
-            assert "dataset_type" in meta
-            assert "instruction" not in meta
+            assert "dataset_name" in meta
+            assert "episode_id" not in meta
 
 
 class TestStrategyBuckets:

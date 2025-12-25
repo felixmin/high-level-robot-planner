@@ -82,11 +82,12 @@ except ImportError:
 
 # Essential metadata keys to cache (RAM safety - prevents Bridge metadata bloat)
 # Only these keys are retained when caching samples to buckets
+# Uses standardized keys from the unified batch interface
 ESSENTIAL_METADATA_KEYS = frozenset({
-    "dataset_type",    # For bucketing/labeling (e.g., "youtube", "bridge", "oxe")
-    "dataset_name",    # For OXE dataset filtering (e.g., "language_table", "bridge")
+    "dataset_name",    # Primary source identifier (e.g., "youtube", "bridge", "language_table")
     "action",          # For action scatter strategies (only first 2 dims used)
     "initial_state",   # For state scatter strategies (only first 2 dims used)
+    "language",        # Task descriptions/instructions
 })
 
 
@@ -348,18 +349,18 @@ class ValidationCache:
                 count += 1
         return count
 
-    def get_frames_by_dataset_type(self, dataset_type: str) -> Optional[torch.Tensor]:
-        """Get frames filtered by dataset type (convenience method)."""
-        frames, _ = self.get_frames_by_filter({"dataset_type": dataset_type})
+    def get_frames_by_dataset_name(self, dataset_name: str) -> Optional[torch.Tensor]:
+        """Get frames filtered by dataset name (convenience method)."""
+        frames, _ = self.get_frames_by_filter({"dataset_name": dataset_name})
         return frames
 
     def get_dataset_distribution(self) -> Dict[str, int]:
-        """Get count of samples per dataset type."""
+        """Get count of samples per dataset name."""
         all_metadata = self.get_all_metadata()
         distribution: Dict[str, int] = {}
         for meta in all_metadata:
-            dtype = meta.get("dataset_type", "unknown")
-            distribution[dtype] = distribution.get(dtype, 0) + 1
+            dname = meta.get("dataset_name", "unknown")
+            distribution[dname] = distribution.get(dname, 0) + 1
         return distribution
 
 
@@ -728,17 +729,17 @@ class BasicVisualizationStrategy(ValidationStrategy):
                             caption=[f"Step {trainer.global_step} ({bucket_name})"],
                         )
         else:
-            # Fall back to auto-bucketing by dataset_type (Legacy/Default)
-            dataset_types = set()
+            # Fall back to auto-bucketing by dataset_name
+            dataset_names = set()
             for meta in all_metadata:
-                if isinstance(meta, dict) and "dataset_type" in meta:
-                    dtype = meta.get("dataset_type")
-                    if dtype:
-                        dataset_types.add(dtype)
+                if isinstance(meta, dict) and "dataset_name" in meta:
+                    dname = meta.get("dataset_name")
+                    if dname:
+                        dataset_names.add(dname)
 
-            for dtype in dataset_types:
+            for dname in dataset_names:
                 bucket_frames, _ = cache.get_frames_by_filter(
-                    {"dataset_type": dtype}, frames=all_frames, metadata=all_metadata
+                    {"dataset_name": dname}, frames=all_frames, metadata=all_metadata
                 )
                 if bucket_frames is not None and len(bucket_frames) > 0:
                     n_samples = min(self.samples_per_bucket, len(bucket_frames))
@@ -748,9 +749,9 @@ class BasicVisualizationStrategy(ValidationStrategy):
                     bucket_grid = self._create_recon_grid(samples, pl_module)
                     if bucket_grid is not None:
                         wandb_logger.log_image(
-                            key=f"{prefix}/reconstructions_{dtype}",
+                            key=f"{prefix}/reconstructions_{dname}",
                             images=[bucket_grid],
-                            caption=[f"Step {trainer.global_step} ({dtype})"],
+                            caption=[f"Step {trainer.global_step} ({dname})"],
                         )
 
     def _sample_from_train_dataloader(

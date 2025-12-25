@@ -104,6 +104,9 @@ class LAQTask(pl.LightningModule):
         self.validation_batch = None
         self.training_batch = None
 
+        # Flag for one-time batch validation (to catch interface issues early)
+        self._batch_validated = False
+
     def forward(
         self,
         video: torch.Tensor,
@@ -125,6 +128,42 @@ class LAQTask(pl.LightningModule):
             return_recons_only=return_recons_only,
             return_only_codebook_ids=return_only_codebook_ids,
         )
+
+    def on_train_batch_start(self, batch: Any, batch_idx: int) -> None:
+        """
+        Validate batch keys on first batch to catch interface issues early.
+
+        This hook runs once per training to verify that the dataloader produces
+        batches with standardized keys (frames, episode_id, frame_idx, etc.).
+        Helps catch configuration errors (e.g., wrong collate function) early.
+
+        Validates against STANDARD_BATCH_KEYS to ensure interface parity between
+        LAQDataModule and OXEDataModule.
+        """
+        if self._batch_validated:
+            return
+
+        # Only validate when batch is a dict (metadata mode enabled)
+        if isinstance(batch, dict):
+            from common.data import validate_batch_keys, STANDARD_BATCH_KEYS
+            import logging
+
+            logger = logging.getLogger(__name__)
+
+            # Validate all standard keys to ensure interface parity
+            # This catches misconfigured dataloaders early
+            validate_batch_keys(
+                batch,
+                required_keys=list(STANDARD_BATCH_KEYS),
+                raise_on_missing=True,
+            )
+
+            # Log what keys we got (helpful for debugging)
+            if self.trainer.is_global_zero:
+                logger.info(f"Batch keys validated: {list(batch.keys())}")
+                logger.info(f"Required standard keys present: {list(STANDARD_BATCH_KEYS)}")
+
+        self._batch_validated = True
 
     def training_step(
         self,

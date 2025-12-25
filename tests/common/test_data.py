@@ -419,7 +419,7 @@ class TestLAQDataModuleWithMetadata:
         print(f"✓ DataModule with filter: {len(dm.train_dataset)} train samples")
 
     def test_datamodule_with_metadata_returns_dict(self, sources):
-        """Test DataModule returns metadata dicts when configured."""
+        """Test DataModule returns metadata dicts with standardized keys."""
         dm = LAQDataModule(
             sources=sources,
             batch_size=2,
@@ -436,12 +436,15 @@ class TestLAQDataModuleWithMetadata:
         assert isinstance(batch, dict)
         assert batch["frames"].shape[1:] == (3, 2, 256, 256)
         assert isinstance(batch["metadata"], list)
-        assert isinstance(batch["scene_idx"], list)
-        assert isinstance(batch["first_frame_idx"], torch.Tensor)
+        # Standardized keys
+        assert isinstance(batch["episode_id"], list)  # Was: scene_idx
+        assert isinstance(batch["frame_idx"], list)  # Was: first_frame_idx (now list, not tensor)
+        assert isinstance(batch["dataset_name"], list)
+        assert isinstance(batch["language"], list)
 
-        print(f"✓ DataModule returns metadata dict batch")
+        print(f"✓ DataModule returns metadata dict batch with standardized keys")
         print(f"  - Frames shape: {batch['frames'].shape}")
-        print(f"  - Metadata entries: {len(batch['metadata'])}")
+        print(f"  - Keys: {list(batch.keys())}")
 
 
 class TestLAQDataModulePairLevel:

@@ -33,7 +33,6 @@ class TestExperimentConfigs:
             assert cfg.model.patch_size == 32
 
             # Validate data config (uses multi-dataset)
-            assert cfg.data.name == "laq_multi_dataset"
             assert hasattr(cfg.data, "sources")
             assert cfg.data.batch_size == 4
 
@@ -179,7 +178,6 @@ class TestExperimentConsistency:
             assert cfg.model.dim == 1024
 
             # Validate data config (uses multi-dataset)
-            assert cfg.data.name == "laq_multi_dataset"
             assert hasattr(cfg.data, "sources")
 
             # Validate training (5000 epochs)

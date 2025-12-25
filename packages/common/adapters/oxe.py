@@ -197,6 +197,8 @@ class OXEFramePairDataset(IterableDataset):
         self._persistent_pipeline = None
         self._pipeline_iterator = None
         self._epoch_count = 0
+        # Idempotency flag for cleanup
+        self._cleaned_up = False
 
     def _init_tfds(self):
         """Initialize TFDS builder and dataset (lazy)."""
@@ -337,8 +339,8 @@ class OXEFramePairDataset(IterableDataset):
                             "episode_id": episode_id,
                             "frame_idx": t,
                             "offset": offset,
-                            "instruction": instruction,
-                            "dataset_type": "oxe",
+                            "language": instruction,  # Standardized key (was: instruction)
+                            "dataset_type": dataset_name,  # Use actual dataset name for filtering
                             "dataset_name": dataset_name,
                             "action": cumulative_action.astype(np.float32),
                             "initial_state": initial_state.astype(np.float32),
@@ -357,7 +359,7 @@ class OXEFramePairDataset(IterableDataset):
                     "episode_id": tf.TensorSpec(shape=(), dtype=tf.string),
                     "frame_idx": tf.TensorSpec(shape=(), dtype=tf.int32),
                     "offset": tf.TensorSpec(shape=(), dtype=tf.int32),
-                    "instruction": tf.TensorSpec(shape=(), dtype=tf.string),
+                    "language": tf.TensorSpec(shape=(), dtype=tf.string),  # Standardized key
                     "dataset_type": tf.TensorSpec(shape=(), dtype=tf.string),
                     "dataset_name": tf.TensorSpec(shape=(), dtype=tf.string),
                     # Action: cumulative action between frame pairs (e.g., 2D for language_table)
@@ -390,26 +392,69 @@ class OXEFramePairDataset(IterableDataset):
             self._persistent_pipeline = self._create_tf_pipeline()
         return self._persistent_pipeline
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """
         Explicitly release TensorFlow resources.
 
         Call this when you are done with the dataset and want to free memory
         before the object is garbage collected.
+
+        This method is idempotent - safe to call multiple times.
+
+        Uses extremely permissive error handling to ensure clean process exit
+        even if TensorFlow/GCS is in a bad state (e.g., killed mid-step).
         """
-        import gc
+        # Idempotency check: skip if already cleaned up
+        if self._cleaned_up:
+            return
 
-        self._persistent_pipeline = None
-        self._pipeline_iterator = None
-        self._builder = None
-        gc.collect()
+        # Mark as cleaned up FIRST to prevent re-entry during exception handling
+        self._cleaned_up = True
 
-        # Try to clear TensorFlow caches (may not be fully effective)
+        # Use BaseException to catch SystemExit, KeyboardInterrupt, etc.
+        # This ensures process can exit cleanly regardless of TF/GCS state
+        try:
+            if self._persistent_pipeline is not None:
+                del self._persistent_pipeline
+        except BaseException:
+            pass
+        finally:
+            self._persistent_pipeline = None
+
+        try:
+            if self._pipeline_iterator is not None:
+                del self._pipeline_iterator
+        except BaseException:
+            pass
+        finally:
+            self._pipeline_iterator = None
+
+        try:
+            if self._builder is not None:
+                del self._builder
+        except BaseException:
+            pass
+        finally:
+            self._builder = None
+
+        # Garbage collection - skip if interpreter is shutting down
+        try:
+            import gc
+            gc.collect()
+        except BaseException:
+            pass
+
+        # Try to clear TensorFlow caches (may fail during shutdown)
         try:
             import tensorflow as tf
             tf.keras.backend.clear_session()
-        except Exception:
+        except BaseException:
             pass
+
+        try:
+            logger.debug(f"OXEFramePairDataset cleanup completed for {self.config.name}")
+        except BaseException:
+            pass  # Logging may fail during interpreter shutdown
 
     def __del__(self):
         """Cleanup on deletion."""
@@ -438,7 +483,12 @@ class OXEFramePairDataset(IterableDataset):
                     pair_pt = (
                         torch.from_numpy(pair_np).permute(3, 0, 1, 2).float() / 255.0
                     )
-                    # Convert metadata
+                    # Convert metadata - use standardized keys
+                    dataset_name = (
+                        meta_tf["dataset_name"].numpy().decode("utf-8")
+                        if isinstance(meta_tf["dataset_name"].numpy(), bytes)
+                        else self.config.name
+                    )
                     meta = {
                         "episode_id": (
                             meta_tf["episode_id"].numpy().decode("utf-8")
@@ -447,21 +497,15 @@ class OXEFramePairDataset(IterableDataset):
                         ),
                         "frame_idx": int(meta_tf["frame_idx"].numpy()),
                         "offset": int(meta_tf["offset"].numpy()),
-                        "instruction": (
-                            meta_tf["instruction"].numpy().decode("utf-8").rstrip("\x00")
-                            if isinstance(meta_tf["instruction"].numpy(), bytes)
+                        # Standardized key (was: instruction)
+                        "language": (
+                            meta_tf["language"].numpy().decode("utf-8").rstrip("\x00")
+                            if isinstance(meta_tf["language"].numpy(), bytes)
                             else ""
                         ),
-                        "dataset_type": (
-                            meta_tf["dataset_type"].numpy().decode("utf-8")
-                            if isinstance(meta_tf["dataset_type"].numpy(), bytes)
-                            else "oxe"
-                        ),
-                        "dataset_name": (
-                            meta_tf["dataset_name"].numpy().decode("utf-8")
-                            if isinstance(meta_tf["dataset_name"].numpy(), bytes)
-                            else self.config.name
-                        ),
+                        # Use dataset_name for both (enables bucket filtering by dataset)
+                        "dataset_type": dataset_name,
+                        "dataset_name": dataset_name,
                         # Cumulative action between frames (for visualization)
                         "action": meta_tf["action"].numpy().tolist(),
                         # Initial state (for visualization)
@@ -566,17 +610,31 @@ class MultiOXEFramePairDataset(IterableDataset):
         self._init_datasets()
         return sum(len(ds) for ds in self._datasets)
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """
         Explicitly release TensorFlow resources from all underlying datasets.
 
         Call this when you are done with the dataset and want to free memory.
+        This method is idempotent - safe to call multiple times.
+
+        Uses extremely permissive error handling to ensure clean process exit
+        even if TensorFlow/GCS is in a bad state.
         """
-        if self._datasets is not None:
-            for ds in self._datasets:
-                ds.cleanup()
-            self._datasets = None
-            self._weights = None
+        datasets_to_cleanup = self._datasets
+        self._datasets = None  # Clear reference first to prevent re-entry
+        self._weights = None
+
+        if datasets_to_cleanup is not None:
+            for ds in datasets_to_cleanup:
+                try:
+                    ds.cleanup()
+                except BaseException:
+                    pass  # Ignore all errors during shutdown
+
+        try:
+            logger.debug("MultiOXEFramePairDataset cleanup completed")
+        except BaseException:
+            pass  # Logging may fail during interpreter shutdown
 
     def __del__(self):
         """Cleanup on deletion."""

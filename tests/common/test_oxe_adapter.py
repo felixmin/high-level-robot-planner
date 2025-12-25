@@ -85,16 +85,19 @@ class TestOXEFramePairDataset:
         print("✓ Cleanup releases resources")
 
     def test_metadata_extraction(self, small_dataset):
-        """Test that metadata is correctly extracted."""
+        """Test that metadata is correctly extracted with standardized keys."""
         for item in small_dataset:
-            # Check required metadata fields
+            # Check required metadata fields (using standardized keys)
             assert "episode_id" in item
             assert "frame_idx" in item
             assert "offset" in item
+            # dataset_type now matches dataset_name (not generic "oxe")
             assert "dataset_type" in item
-            assert item["dataset_type"] == "oxe"
+            assert item["dataset_type"] == "language_table"
             assert "dataset_name" in item
             assert item["dataset_name"] == "language_table"
+            # language replaces instruction
+            assert "language" in item
 
             # Check action and state are lists/floats
             assert isinstance(item["action"], list)

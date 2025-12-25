@@ -1,9 +1,6 @@
 # Multi-Dataset LAQ Training Configuration
 # Loads data from multiple sources with per-source filtering
 
-name: laq_multi_dataset
-task: laq
-
 # Multi-source configuration - combines multiple datasets
 sources:
   - type: youtube
@@ -25,16 +22,11 @@ pin_memory: true
 
 # Frame pair settings
 image_size: 256
-offset: 30
-
-# Dataset mode
-pair_level: true
-offsets: [30]
-
-# Metadata filtering (optional)
-use_metadata: true
-return_metadata: true  # Required for per-bucket validation visualization
+offsets: [30]  # Frame offset(s) for pair generation
 min_frames: 2
+
+# Metadata options
+return_metadata: true  # Required for per-bucket validation visualization
 
 # Global filters applied after per-source filters
 # filters:

@@ -280,55 +280,127 @@ def metadata_collate_fn(batch: List[Dict]) -> Dict:
     Custom collate function for MultiSourcePairDataset.
 
     Stacks tensors but keeps metadata as lists (can't be collated).
+    Uses standardized keys for interface consistency with OXE datasets.
 
     Args:
         batch: List of dicts from MultiSourcePairDataset
 
     Returns:
-        Dict with:
+        Dict with standardized keys:
         - 'frames': Stacked tensor [B, C, 2, H, W]
-        - 'scene_idx': List of ints
-        - 'metadata': List of SceneMetadata (not collated)
-        - 'motion_track_path': List of paths or Nones
-        - 'first_frame_idx': Tensor of ints
-        - 'second_frame_idx': Tensor of ints
-        - 'dataset_type': List of strings (for per-bucket visualization)
-        - 'environment': List of strings (for debugging/analysis)
-        - 'task': List of strings (for language correlation analysis)
-        - 'language': List of strings (for language-action correlation)
+        - 'episode_id': List of strings (was: scene_idx)
+        - 'frame_idx': List of ints (was: first_frame_idx)
+        - 'dataset_name': List of strings (source identifier)
+        - 'dataset_type': List of strings (alias for dataset_name, OXE compatibility)
+        - 'language': List of strings (task descriptions)
+        - 'metadata': List of SceneMetadata (raw, not collated)
+        - 'second_frame_idx': Tensor of ints (kept for compatibility)
+        - 'environment': List of strings (for analysis)
+        - 'task': List of strings (for analysis)
     """
     # Extract useful fields from metadata for easy access
-    dataset_types = []
+    dataset_names = []
     environments = []
     tasks = []
     languages = []
-    
+    episode_ids = []
+    frame_indices = []
+
     for item in batch:
         meta = item.get("metadata")
+        # Convert scene_idx to episode_id (string format for consistency)
+        episode_ids.append(str(item.get("scene_idx", "")))
+        frame_indices.append(item.get("first_frame_idx", 0))
+
         if meta is not None and hasattr(meta, "extras"):
             extras = meta.extras
-            dataset_types.append(extras.get("dataset_type", "unknown"))
+            # Use dataset_type as dataset_name for consistency
+            dataset_names.append(extras.get("dataset_type", "unknown"))
             environments.append(extras.get("environment", "unknown"))
             tasks.append(extras.get("task", "unknown"))
             languages.append(extras.get("language", ""))
         else:
-            dataset_types.append("unknown")
+            dataset_names.append("unknown")
             environments.append("unknown")
             tasks.append("unknown")
             languages.append("")
-    
+
     return {
+        # Core standardized keys (match OXE interface exactly)
         "frames": torch.stack([item["frames"] for item in batch]),
-        "scene_idx": [item["scene_idx"] for item in batch],
+        "episode_id": episode_ids,
+        "frame_idx": frame_indices,
+        "dataset_name": dataset_names,
+        "dataset_type": dataset_names,  # Alias for OXE compatibility
+        "language": languages,
+        # Additional metadata
         "metadata": [item.get("metadata") for item in batch],
-        "motion_track_path": [item.get("motion_track_path") for item in batch],
-        "first_frame_idx": torch.tensor([item["first_frame_idx"] for item in batch]),
         "second_frame_idx": torch.tensor([item["second_frame_idx"] for item in batch]),
-        "dataset_type": dataset_types,
         "environment": environments,
         "task": tasks,
-        "language": languages,
     }
+
+
+# Standard batch keys expected in LAQ training batches
+STANDARD_BATCH_KEYS = frozenset({
+    "frames",       # [B, C, 2, H, W] frame pairs tensor
+    "episode_id",   # List[str] unique episode/scene identifiers
+    "frame_idx",    # List[int] start frame indices
+    "dataset_name", # List[str] source dataset names
+    "language",     # List[str] task descriptions/instructions
+})
+
+
+def validate_batch_keys(
+    batch: Dict[str, Any],
+    required_keys: Optional[List[str]] = None,
+    raise_on_missing: bool = True,
+) -> bool:
+    """
+    Validate that a batch dictionary contains required keys.
+
+    Used to ensure interface consistency between LAQDataModule and OXEDataModule.
+    Call this once at the start of training to catch configuration errors early.
+
+    Args:
+        batch: Batch dictionary from dataloader
+        required_keys: List of required keys (defaults to STANDARD_BATCH_KEYS)
+        raise_on_missing: If True, raise ValueError on missing keys; else return False
+
+    Returns:
+        True if all required keys present, False otherwise (when raise_on_missing=False)
+
+    Raises:
+        ValueError: If required keys are missing and raise_on_missing=True
+
+    Example:
+        >>> batch = next(iter(dataloader))
+        >>> validate_batch_keys(batch)  # Raises if missing keys
+        >>> validate_batch_keys(batch, required_keys=["frames", "language"])
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    if required_keys is None:
+        required_keys = list(STANDARD_BATCH_KEYS)
+
+    missing_keys = [key for key in required_keys if key not in batch]
+
+    if missing_keys:
+        msg = f"Batch missing required keys: {missing_keys}. Present keys: {list(batch.keys())}"
+        if raise_on_missing:
+            raise ValueError(msg)
+        else:
+            logger.warning(msg)
+            return False
+
+    # Optional: warn about unexpected keys (for debugging)
+    extra_keys = set(batch.keys()) - STANDARD_BATCH_KEYS - {"metadata", "second_frame_idx", "environment", "task", "offset", "action", "initial_state"}
+    if extra_keys:
+        logger.debug(f"Batch contains extra keys (not an error): {extra_keys}")
+
+    return True
 
 
 @dataclass
@@ -1148,3 +1220,29 @@ class OXEDataModule(pl.LightningDataModule):
             pin_memory=True,
             collate_fn=oxe_collate_fn if self.return_metadata else None,
         )
+
+    def teardown(self, stage: Optional[str] = None) -> None:
+        """
+        Clean up resources when training/validation ends.
+
+        Explicitly releases TensorFlow resources from streaming datasets
+        to prevent memory/file handle leaks.
+
+        Uses extremely permissive error handling to ensure clean process exit
+        even if TensorFlow/GCS is in a bad state (e.g., killed mid-step).
+
+        Args:
+            stage: Current stage ('fit', 'validate', 'test', 'predict', or None)
+        """
+        for attr_name in ("train_dataset", "val_dataset"):
+            try:
+                dataset = getattr(self, attr_name, None)
+                if dataset is not None:
+                    dataset.cleanup()
+            except BaseException:
+                pass  # Ignore all errors during shutdown
+            finally:
+                try:
+                    setattr(self, attr_name, None)
+                except BaseException:
+                    pass
