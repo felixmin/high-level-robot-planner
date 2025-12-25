@@ -54,21 +54,26 @@ class ActionTokenScatterStrategy(ValidationStrategy):
 
 ### 3. Strategy-Bucket Binding
 
-Strategies are bound to specific buckets via configuration:
+Strategies declare their bucket bindings directly via the `buckets` field. To run a strategy on multiple buckets with per-bucket metrics, create separate named instances:
 
 ```yaml
 validation:
-  strategy_bucket_bindings:
-    action_token_scatter:
-      buckets: [language_table]  # Only runs on language_table bucket
-    latent_transfer:
-      buckets: [bridge_iid, bridge_holdout]
-      compare_buckets: true  # Run separately per bucket with metric suffix
+  strategies:
+    # Single bucket binding
+    action_scatter_lt:
+      type: action_token_scatter
+      buckets: ["language_table"]
+
+    # Per-bucket comparison: create separate instances
+    transfer_bridge_iid:
+      type: latent_transfer
+      buckets: ["bridge_iid"]
+    transfer_bridge_holdout:
+      type: latent_transfer
+      buckets: ["bridge_holdout"]
 ```
 
-**Binding Modes**:
-- **Merged mode** (`compare_buckets: false`): Combine bucket data and run once
-- **Compare mode** (`compare_buckets: true`): Run separately on each bucket with metric suffix (e.g., `val/latent_transfer_mse_bridge_iid` vs `val/latent_transfer_mse_bridge_holdout`)
+This produces metrics like `val/transfer_bridge_iid_mse` and `val/transfer_bridge_holdout_mse` for distribution shift analysis.
 
 ## Data Flow
 
@@ -94,9 +99,7 @@ At validation end:
     ├─> Check should_run() (frequency)
     ├─> Get assigned buckets
     ├─> Check can_run() per bucket (data availability)
-    └─> Run strategy
-        ├─> Compare mode: run separately per bucket
-        └─> Merged mode: combine bucket data, run once
+    └─> Run strategy on each bucket with metric suffix
 ```
 
 ## Available Validation Strategies
@@ -163,32 +166,33 @@ validation:
       filters: {dataset_type: "oxe", dataset_name: "language_table"}
       max_samples: 200
 
-  # Bind strategies to buckets
-  strategy_bucket_bindings:
-    basic_visualization:
-      buckets: all
-    latent_transfer:
-      buckets: [bridge_iid, bridge_holdout]
-      compare_buckets: true
-    action_token_scatter:
-      buckets: [language_table]
-    clustering:
-      buckets: all
-
-  # Configure strategies
+  # Strategies with embedded bucket bindings
   strategies:
-    basic_visualization:
+    basic:
       enabled: true
       visualize_train: true
       visualize_val: true
-    latent_transfer:
-      enabled: true
-      every_n_validations: 10
+
+    # Per-bucket latent transfer (separate instances for comparison)
+    transfer_bridge_iid:
+      type: latent_transfer
+      buckets: ["bridge_iid"]
+      every_n_validations: 5
       num_pairs: 256
-    action_token_scatter:
-      enabled: true
+    transfer_bridge_holdout:
+      type: latent_transfer
+      buckets: ["bridge_holdout"]
+      every_n_validations: 5
+      num_pairs: 256
+
+    # Action visualization on language_table only
+    action_scatter_lt:
+      type: action_token_scatter
+      buckets: ["language_table"]
       every_n_validations: 3
       num_samples: 1000
+
+    # Clustering runs on global cache (no bucket binding)
     clustering:
       enabled: true
       every_n_validations: 20
@@ -204,7 +208,7 @@ validation:
 ## Key Benefits
 
 1. **Automatic compatibility**: Strategies skip execution if data requirements not met
-2. **Distribution shift analysis**: Compare mode enables IID vs OOD metric comparison
+2. **Distribution shift analysis**: Named strategy instances enable IID vs OOD metric comparison
 3. **Memory efficient**: Per-bucket sample limits prevent OOM
 4. **Extensible**: Easy to add new strategies or datasets
 5. **Heterogeneous data**: Works seamlessly across datasets with different metadata

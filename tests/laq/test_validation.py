@@ -330,16 +330,13 @@ class TestStrategyBuckets:
         """Test that strategies have empty buckets by default."""
         strategy = BasicVisualizationStrategy()
         assert strategy.buckets == []
-        assert strategy.compare_buckets == False
 
     def test_strategy_with_buckets(self):
         """Test creating strategy with bucket configuration."""
         strategy = LatentTransferStrategy(
             buckets=["language_table", "bridge"],
-            compare_buckets=True,
         )
         assert strategy.buckets == ["language_table", "bridge"]
-        assert strategy.compare_buckets == True
 
     def test_strategy_single_bucket(self):
         """Test strategy with single bucket."""
@@ -347,7 +344,6 @@ class TestStrategyBuckets:
             buckets=["language_table"],
         )
         assert strategy.buckets == ["language_table"]
-        assert strategy.compare_buckets == False
 
 
 class TestCompositionPattern:

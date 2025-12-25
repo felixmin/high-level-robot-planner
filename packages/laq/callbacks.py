@@ -29,12 +29,10 @@ class ValidationStrategyCallback(Callback):
     Architecture (Composition Pattern):
     - Buckets: Named data subsets with filters (e.g., "language_table", "bridge")
     - Strategies: Self-contained validation logic with embedded bucket bindings
-    - Each strategy has `buckets` and `compare_buckets` properties
 
     Features:
     - Per-bucket caching: Each bucket has its own cache
     - Strategy-embedded binding: Strategies read from their own `buckets` property
-    - Compare mode: Run strategy separately on each bucket for distribution shift analysis
     - Automatic applicability checks: Strategies check if they have enough valid data
 
     Args:
@@ -276,58 +274,20 @@ class ValidationStrategyCallback(Callback):
                     print(f"Warning: Strategy {strategy.name} failed: {e}")
                 continue
 
-            if strategy.compare_buckets:  # Read directly from strategy
-                # Run separately on each bucket with metric suffix
-                for bucket_name in bucket_names:
-                    if bucket_name not in self.bucket_caches:
-                        print(f"⚠️ Bucket '{bucket_name}' not found for {strategy.name}")
-                        continue
-                    cache = self.bucket_caches[bucket_name]
-                    can_run, reason = strategy.can_run(cache)
-                    if not can_run:
-                        print(f"⚠️ Skipping {strategy.name} on {bucket_name}: {reason}")
-                        continue
-                    try:
-                        strategy.run(cache, pl_module, trainer, metric_suffix=f"_{bucket_name}")
-                    except Exception as e:
-                        print(f"Warning: Strategy {strategy.name} on {bucket_name} failed: {e}")
-            else:
-                # Merge bucket caches and run once
-                from laq.validation import ValidationCache
-                merged = ValidationCache()
-                merged.max_samples = sum(
-                    self.bucket_caches[b].max_samples
-                    for b in bucket_names
-                    if b in self.bucket_caches
-                )
-
-                for bucket_name in bucket_names:
-                    if bucket_name not in self.bucket_caches:
-                        print(f"⚠️ Bucket '{bucket_name}' not found for {strategy.name}")
-                        continue
-                    bucket_cache = self.bucket_caches[bucket_name]
-                    bucket_frames = bucket_cache.get_all_frames()
-                    bucket_meta = bucket_cache.get_all_metadata()
-                    bucket_codes = bucket_cache.get_all_codes()
-                    bucket_latents = bucket_cache.get_all_latents()
-
-                    if bucket_frames is not None:
-                        merged.frames.append(bucket_frames)
-                        merged.metadata.append(bucket_meta)
-                        merged._sample_count += len(bucket_frames)
-                        if bucket_codes is not None:
-                            merged.codes.append(bucket_codes)
-                        if bucket_latents is not None:
-                            merged.latents.append(bucket_latents)
-
-                can_run, reason = strategy.can_run(merged)
+            # Run on each bucket with metric suffix
+            for bucket_name in bucket_names:
+                if bucket_name not in self.bucket_caches:
+                    print(f"⚠️ Bucket '{bucket_name}' not found for {strategy.name}")
+                    continue
+                cache = self.bucket_caches[bucket_name]
+                can_run, reason = strategy.can_run(cache)
                 if not can_run:
-                    print(f"⚠️ Skipping {strategy.name}: {reason}")
+                    print(f"⚠️ Skipping {strategy.name} on {bucket_name}: {reason}")
                     continue
                 try:
-                    strategy.run(merged, pl_module, trainer)
+                    strategy.run(cache, pl_module, trainer, metric_suffix=f"_{bucket_name}")
                 except Exception as e:
-                    print(f"Warning: Strategy {strategy.name} failed: {e}")
+                    print(f"Warning: Strategy {strategy.name} on {bucket_name} failed: {e}")
 
         # Run garbage collection after validation to free memory
         # This helps prevent memory buildup when using tf.data pipelines

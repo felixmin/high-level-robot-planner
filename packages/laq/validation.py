@@ -32,27 +32,23 @@ validation:
     transfer_lt:
       type: latent_transfer
       buckets: ["language_table"]
-      compare_buckets: true
       every_n_validations: 5
 
     transfer_bridge:
       type: latent_transfer
       buckets: ["bridge"]
-      compare_buckets: true
       every_n_validations: 5
 
     # Action scatter only on language_table (has 2D actions)
     action_scatter_lt:
       type: action_token_scatter
       buckets: ["language_table"]
-      compare_buckets: true
 ```
 
 Key features:
 - Instance names (e.g., "transfer_lt") become metric names in wandb
 - 'type' field maps to strategy class (see STRATEGY_REGISTRY)
 - 'buckets' list specifies which bucket caches to use
-- 'compare_buckets: true' runs strategy separately per bucket with suffix
 - Metadata is pruned to ESSENTIAL_METADATA_KEYS for RAM safety
 """
 
@@ -378,13 +374,11 @@ class ValidationStrategy(ABC):
 
     Strategies are self-contained with bucket bindings:
     - buckets: List of bucket names this strategy operates on
-    - compare_buckets: If True, run separately on each bucket with metric suffix
 
     Example config:
         transfer_lt:
             type: latent_transfer
             buckets: ["language_table"]
-            compare_buckets: true
             every_n_validations: 2
     """
 
@@ -395,7 +389,6 @@ class ValidationStrategy(ABC):
         every_n_validations: int = 1,
         min_samples: int = 10,
         buckets: Optional[List[str]] = None,
-        compare_buckets: bool = False,
         **kwargs,
     ):
         self.name = name
@@ -403,7 +396,6 @@ class ValidationStrategy(ABC):
         self.every_n_validations = every_n_validations
         self.min_samples = min_samples
         self.buckets = buckets or []  # Empty = use global cache
-        self.compare_buckets = compare_buckets
         self.validation_count = 0
 
     def should_run(self) -> bool:
@@ -530,7 +522,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
             name=name,
             enabled=enabled,
             every_n_validations=1,  # Always run
-            **kwargs,  # Pass buckets, compare_buckets, etc.
+            **kwargs,  # Pass buckets, etc.
         )
         self.num_fixed_samples = num_fixed_samples
         self.num_random_samples = num_random_samples
@@ -875,7 +867,7 @@ class LatentTransferStrategy(ValidationStrategy):
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
-            **kwargs,  # Pass buckets, compare_buckets, etc.
+            **kwargs,  # Pass buckets, etc.
         )
         self.num_pairs = num_pairs
 
@@ -1085,7 +1077,7 @@ class ClusteringStrategy(ValidationStrategy):
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
-            **kwargs,  # Pass buckets, compare_buckets, etc.
+            **kwargs,  # Pass buckets, etc.
         )
         self.num_samples = num_samples
         self.num_clusters = num_clusters
@@ -1226,7 +1218,7 @@ class CodebookHistogramStrategy(ValidationStrategy):
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
-            **kwargs,  # Pass buckets, compare_buckets, etc.
+            **kwargs,  # Pass buckets, etc.
         )
 
     def needs_caching(self) -> bool:
@@ -1348,7 +1340,7 @@ class LatentSequenceHistogramStrategy(ValidationStrategy):
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
-            **kwargs,  # Pass buckets, compare_buckets, etc.
+            **kwargs,  # Pass buckets, etc.
         )
         self.num_top_sequences = num_top_sequences
 
@@ -1472,7 +1464,7 @@ class AllSequencesHistogramStrategy(ValidationStrategy):
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
-            **kwargs,  # Pass buckets, compare_buckets, etc.
+            **kwargs,  # Pass buckets, etc.
         )
 
     def needs_caching(self) -> bool:
@@ -1582,7 +1574,7 @@ class MetadataScatterStrategy(ValidationStrategy):
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
-            **kwargs,  # Pass buckets, compare_buckets, etc.
+            **kwargs,  # Pass buckets, etc.
         )
         self.num_samples = num_samples
         self.dataset_filter = dataset_filter
@@ -1764,7 +1756,7 @@ class ActionTokenScatterStrategy(MetadataScatterStrategy):
             every_n_validations=every_n_validations,
             num_samples=num_samples,
             min_samples=min_samples,
-            **kwargs,  # Pass buckets, compare_buckets, dataset_filter, etc.
+            **kwargs,  # Pass buckets, dataset_filter, etc.
         )
 
     def required_metadata(self) -> List[str]:
@@ -1848,7 +1840,7 @@ class ActionSequenceScatterStrategy(MetadataScatterStrategy):
             every_n_validations=every_n_validations,
             num_samples=num_samples,
             min_samples=min_samples,
-            **kwargs,  # Pass buckets, compare_buckets, dataset_filter, etc.
+            **kwargs,  # Pass buckets, dataset_filter, etc.
         )
 
     def required_metadata(self) -> List[str]:
@@ -1984,7 +1976,7 @@ class TopSequencesScatterStrategy(MetadataScatterStrategy):
             every_n_validations=every_n_validations,
             num_samples=num_samples,
             min_samples=min_samples,
-            **kwargs,  # Pass buckets, compare_buckets, dataset_filter, etc.
+            **kwargs,  # Pass buckets, dataset_filter, etc.
         )
         self.num_top_sequences = num_top_sequences
 
@@ -2115,7 +2107,7 @@ class StateSequenceScatterStrategy(MetadataScatterStrategy):
             every_n_validations=every_n_validations,
             num_samples=num_samples,
             min_samples=min_samples,
-            **kwargs,  # Pass buckets, compare_buckets, dataset_filter, etc.
+            **kwargs,  # Pass buckets, dataset_filter, etc.
         )
         self.num_top_sequences = num_top_sequences
 

@@ -340,37 +340,33 @@ validation:
       filters: {dataset_type: "oxe", dataset_name: "language_table"}
       max_samples: 200
 
-  # Bind strategies to buckets
-  strategy_bucket_bindings:
-    basic_visualization:
-      buckets: all  # Run on all buckets
-    latent_transfer:
-      buckets: [bridge_iid, bridge_holdout]
-      compare_buckets: true  # Run separately per bucket with metric suffix
-    action_token_scatter:
-      buckets: [language_table]  # Only bucket with action metadata
-    clustering:
-      buckets: all
-
+  # Strategies with embedded bucket bindings
   strategies:
-    basic_visualization:
+    basic:
       enabled: true
       visualize_train: true
       visualize_val: true
 
-    # Latent transfer: test action transfer between scenes
-    latent_transfer:
-      enabled: true
+    # Per-bucket latent transfer (separate instances for comparison)
+    transfer_bridge_iid:
+      type: latent_transfer
+      buckets: ["bridge_iid"]
+      every_n_validations: 10
+      num_pairs: 256
+    transfer_bridge_holdout:
+      type: latent_transfer
+      buckets: ["bridge_holdout"]
       every_n_validations: 10
       num_pairs: 256
 
     # Action visualization (requires action metadata)
-    action_token_scatter:
-      enabled: true
+    action_scatter_lt:
+      type: action_token_scatter
+      buckets: ["language_table"]
       every_n_validations: 3
       num_samples: 1000
 
-    # Clustering: analyze latent action distribution
+    # Clustering (runs on all data when no buckets specified)
     clustering:
       enabled: true
       every_n_validations: 20
@@ -379,8 +375,8 @@ validation:
 
 **Key Features**:
 - **Bucket-aware routing**: Samples routed to matching buckets based on filters
-- **Strategy-bucket binding**: Strategies declare which buckets they operate on
-- **Compare mode**: Run separately on each bucket for distribution shift analysis (e.g., `val/latent_transfer_mse_bridge_iid` vs `val/latent_transfer_mse_bridge_holdout`)
+- **Strategy-bucket binding**: Strategies declare which buckets they operate on via `buckets` field
+- **Named instances**: Create multiple strategy instances (e.g., `transfer_bridge_iid`, `transfer_bridge_holdout`) for per-bucket metrics
 - **Automatic applicability checks**: Strategies skip execution if insufficient data
 - **Metadata requirements**: Strategies declare required metadata (e.g., `action`, `initial_state`)
 

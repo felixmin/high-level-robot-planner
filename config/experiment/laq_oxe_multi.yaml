@@ -77,13 +77,11 @@ training:
       transfer_lt:
         type: latent_transfer
         buckets: ["language_table"]
-        compare_buckets: true
         every_n_validations: 5
         num_pairs: 128
       transfer_bridge:
         type: latent_transfer
         buckets: ["bridge"]
-        compare_buckets: true
         every_n_validations: 5
         num_pairs: 128
 
@@ -91,25 +89,21 @@ training:
       action_scatter_lt:
         type: action_token_scatter
         buckets: ["language_table"]
-        compare_buckets: true
         every_n_validations: 3
         num_samples: 256
       action_seq_lt:
         type: action_sequence_scatter
         buckets: ["language_table"]
-        compare_buckets: true
         every_n_validations: 5
         num_samples: 256
       top_seq_lt:
         type: top_sequences_scatter
         buckets: ["language_table"]
-        compare_buckets: true
         every_n_validations: 5
         num_top_sequences: 5
       state_scatter_lt:
         type: state_sequence_scatter
         buckets: ["language_table"]
-        compare_buckets: true
         every_n_validations: 5
         num_samples: 256
 

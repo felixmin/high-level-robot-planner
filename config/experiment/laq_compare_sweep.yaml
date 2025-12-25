@@ -76,32 +76,27 @@ training:
       latent_transfer:
         enabled: true
         buckets: ["language_table"]
-        compare_buckets: true
         every_n_validations: 5
         num_pairs: 128
 
       action_scatter:
         type: action_token_scatter
         buckets: ["language_table"]
-        compare_buckets: true
         every_n_validations: 3
         num_samples: 256
       action_seq:
         type: action_sequence_scatter
         buckets: ["language_table"]
-        compare_buckets: true
         every_n_validations: 5
         num_samples: 256
       top_seq:
         type: top_sequences_scatter
         buckets: ["language_table"]
-        compare_buckets: true
         every_n_validations: 5
         num_top_sequences: 5
       state_scatter:
         type: state_sequence_scatter
         buckets: ["language_table"]
-        compare_buckets: true
         every_n_validations: 5
         num_samples: 256
 
