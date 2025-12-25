@@ -148,6 +148,8 @@ def main(cfg: DictConfig):
     # Setup validation strategies
     val_config = training_config.validation
     strategies_config = val_config.get("strategies", {})
+    if strategies_config:
+        strategies_config = OmegaConf.to_container(strategies_config, resolve=True)
 
     # Get bucket configs (new "buckets" key, with "val_buckets" as fallback)
     bucket_configs = val_config.get("buckets", val_config.get("val_buckets", None))
