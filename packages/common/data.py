@@ -141,10 +141,12 @@ class SceneFilter:
     - Equality: `stabilized_label: "uncertain"` or `has_hands: true`
     - Comparison: `max_trans: [">", 10.0]` or `num_frames: [">=", 100]`
     - Exclusion: `label: ["!=", "static"]`
-    - Multiple values (membership): `task_category: ["pnp_push_sweep", "stack_blocks"]`
+    - Not null: `action: ["not_null", true]`
+    - Membership: `dataset_name: ["in", ["youtube", "bridge"]]`
+    - Multiple values: `task_category: ["pnp_push_sweep", "stack_blocks"]`
     - Callable (Python only): `{"num_frames": lambda x: x > 100}`
 
-    Operators: ">", ">=", "<", "<=", "!=", "=="
+    Operators: ">", ">=", "<", "<=", "!=", "==", "in", "not_null"
 
     Missing key behavior:
         If a filter refers to a field not present in a scene (neither as an
@@ -170,54 +172,22 @@ class SceneFilter:
     def __init__(self, filters: Optional[Dict[str, Any]] = None):
         self.filters = filters or {}
 
+    def _get_scene_value(self, scene: SceneMetadata, key: str) -> Any:
+        """Get value from scene, checking attributes then extras."""
+        if hasattr(scene, key):
+            return getattr(scene, key)
+        elif key in scene.extras:
+            return scene.extras[key]
+        return None  # Key not found
+
     def matches(self, scene: SceneMetadata) -> bool:
         """Check if a scene matches all filter criteria."""
-        for key, condition in self.filters.items():
-            # Get value from scene (check extras if not a direct attribute)
-            if hasattr(scene, key):
-                value = getattr(scene, key)
-            elif key in scene.extras:
-                value = scene.extras[key]
-            else:
-                return False  # Unknown field - exclude
-
-            # Apply condition
-            if callable(condition):
-                if not condition(value):
-                    return False
-            elif isinstance(condition, (tuple, list)) and len(condition) == 2:
-                # YAML gives lists, not tuples: [">", 0.05]
-                # Check if first element is an operator string
-                first_elem = condition[0]
-                if isinstance(first_elem, str) and first_elem in (">", ">=", "<", "<=", "!=", "=="):
-                    # Treat as (operator, threshold)
-                    op, threshold = condition
-                    if op == ">" and not (value > threshold):
-                        return False
-                    elif op == ">=" and not (value >= threshold):
-                        return False
-                    elif op == "<" and not (value < threshold):
-                        return False
-                    elif op == "<=" and not (value <= threshold):
-                        return False
-                    elif op == "!=" and not (value != threshold):
-                        return False
-                    elif op == "==" and not (value == threshold):
-                        return False
-                else:
-                    # Treat as "value in list" (multiple allowed values)
-                    if value not in condition:
-                        return False
-            elif isinstance(condition, list):
-                # List of allowed values: ["pnp_push_sweep", "stack_blocks"]
-                if value not in condition:
-                    return False
-            else:
-                # Direct equality
-                if value != condition:
-                    return False
-
-        return True
+        from common.filters import matches_filters
+        return matches_filters(
+            data=scene,  # type: ignore (SceneMetadata is dict-like for our purposes)
+            filters=self.filters,
+            get_value=lambda s, k: self._get_scene_value(s, k),
+        )
 
     def filter_scenes(self, scenes: List[SceneMetadata]) -> List[SceneMetadata]:
         """Filter a list of scenes."""
