@@ -23,8 +23,31 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
 import lightning.pytorch as pl
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
 from lightning.pytorch.loggers import WandbLogger
+
+
+class ProgressLoggerCallback(Callback):
+    """Log training progress to stdout for cluster jobs where tqdm doesn't work."""
+
+    def __init__(self, log_every_n_steps: int = 100):
+        self.log_every_n_steps = log_every_n_steps
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if (trainer.global_step + 1) % self.log_every_n_steps == 0:
+            loss = outputs.get("loss", 0) if isinstance(outputs, dict) else outputs
+            lr = trainer.optimizers[0].param_groups[0]["lr"]
+            print(
+                f"[Step {trainer.global_step + 1}] "
+                f"loss={float(loss):.4f}, lr={lr:.2e}, "
+                f"epoch={trainer.current_epoch}"
+            )
+
+    def on_validation_end(self, trainer, pl_module):
+        metrics = {k: v for k, v in trainer.callback_metrics.items() if "val" in k}
+        if metrics:
+            metrics_str = ", ".join(f"{k}={float(v):.4f}" for k, v in metrics.items())
+            print(f"[Validation] step={trainer.global_step}, {metrics_str}")
 
 from common.data import LAQDataModule, OXEDataModule
 from common.logging import set_seed, count_parameters
@@ -144,6 +167,11 @@ def main(cfg: DictConfig):
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
     callbacks.append(lr_monitor)
     print("✓ Learning rate monitor added")
+
+    # Progress logging (for cluster jobs where tqdm doesn't work in log files)
+    progress_logger = ProgressLoggerCallback(log_every_n_steps=100)
+    callbacks.append(progress_logger)
+    print("✓ Progress logger added (logs every 100 steps)")
 
     # Setup validation strategies
     val_config = training_config.validation
