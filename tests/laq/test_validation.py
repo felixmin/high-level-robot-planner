@@ -13,6 +13,9 @@ from laq.validation import (
     LatentTransferStrategy,
     ClusteringStrategy,
     create_validation_strategies,
+    prune_metadata,
+    ESSENTIAL_METADATA_KEYS,
+    STRATEGY_REGISTRY,
 )
 
 
@@ -143,9 +146,11 @@ class TestCreateValidationStrategies:
         strategies = create_validation_strategies(config)
 
         assert len(strategies) == 3
-        assert any(s.name == "basic_visualization" for s in strategies)
-        assert any(s.name == "latent_transfer" for s in strategies)
-        assert any(s.name == "clustering" for s in strategies)
+        # Names come from instance keys, not default strategy names
+        names = {s.name for s in strategies}
+        assert "basic" in names
+        assert "latent_transfer" in names
+        assert "clustering" in names
 
     def test_create_only_basic(self):
         """Test creating only basic strategy."""
@@ -157,7 +162,7 @@ class TestCreateValidationStrategies:
         strategies = create_validation_strategies(config)
 
         assert len(strategies) == 1
-        assert strategies[0].name == "basic_visualization"
+        assert strategies[0].name == "basic"  # Name from instance key
 
     def test_empty_config(self):
         """Test with empty config."""
@@ -233,6 +238,214 @@ class TestClusteringStrategy:
 
         metrics = strategy.run(cache, pl_module, trainer)
         assert metrics == {}
+
+
+class TestMetadataPruning:
+    """Test metadata pruning for RAM safety."""
+
+    def test_prune_metadata_keeps_essential_keys(self):
+        """Test that pruning keeps only essential metadata keys."""
+        full_metadata = {
+            "dataset_type": "bridge",
+            "dataset_name": "bridge",
+            "action": [0.1, 0.2, 0.3],
+            "initial_state": [1.0, 2.0],
+            "instruction": "pick up the block",  # Should be removed
+            "episode_id": 12345,  # Should be removed
+            "raw_observation": {"large": "dict"},  # Should be removed
+        }
+
+        pruned = prune_metadata(full_metadata)
+
+        assert "dataset_type" in pruned
+        assert "dataset_name" in pruned
+        assert "action" in pruned
+        assert "initial_state" in pruned
+        assert "instruction" not in pruned
+        assert "episode_id" not in pruned
+        assert "raw_observation" not in pruned
+
+    def test_prune_metadata_empty_input(self):
+        """Test pruning with empty metadata."""
+        pruned = prune_metadata({})
+        assert pruned == {}
+
+    def test_cache_add_sample_prunes_by_default(self):
+        """Test that add_sample prunes metadata by default."""
+        cache = ValidationCache()
+
+        frame = torch.randn(3, 2, 64, 64)
+        full_meta = {
+            "dataset_type": "bridge",
+            "instruction": "should be removed",
+            "extra_field": "also removed",
+        }
+
+        cache.add_sample(frame, full_meta, prune=True)
+
+        stored_meta = cache.get_all_metadata()[0]
+        assert "dataset_type" in stored_meta
+        assert "instruction" not in stored_meta
+        assert "extra_field" not in stored_meta
+
+    def test_cache_add_sample_no_prune(self):
+        """Test that add_sample can skip pruning."""
+        cache = ValidationCache()
+
+        frame = torch.randn(3, 2, 64, 64)
+        full_meta = {
+            "dataset_type": "bridge",
+            "instruction": "should be kept",
+        }
+
+        cache.add_sample(frame, full_meta, prune=False)
+
+        stored_meta = cache.get_all_metadata()[0]
+        assert "dataset_type" in stored_meta
+        assert "instruction" in stored_meta
+
+    def test_cache_add_batch_prunes_by_default(self):
+        """Test that add_batch prunes metadata by default."""
+        cache = ValidationCache()
+
+        frames = torch.randn(2, 3, 2, 64, 64)
+        metadata_list = [
+            {"dataset_type": "bridge", "instruction": "remove1"},
+            {"dataset_type": "youtube", "instruction": "remove2"},
+        ]
+
+        cache.add_batch(frames, metadata_list, prune=True)
+
+        all_meta = cache.get_all_metadata()
+        assert len(all_meta) == 2
+        for meta in all_meta:
+            assert "dataset_type" in meta
+            assert "instruction" not in meta
+
+
+class TestStrategyBuckets:
+    """Test bucket configuration in strategies."""
+
+    def test_strategy_default_empty_buckets(self):
+        """Test that strategies have empty buckets by default."""
+        strategy = BasicVisualizationStrategy()
+        assert strategy.buckets == []
+        assert strategy.compare_buckets == False
+
+    def test_strategy_with_buckets(self):
+        """Test creating strategy with bucket configuration."""
+        strategy = LatentTransferStrategy(
+            buckets=["language_table", "bridge"],
+            compare_buckets=True,
+        )
+        assert strategy.buckets == ["language_table", "bridge"]
+        assert strategy.compare_buckets == True
+
+    def test_strategy_single_bucket(self):
+        """Test strategy with single bucket."""
+        strategy = ClusteringStrategy(
+            buckets=["language_table"],
+        )
+        assert strategy.buckets == ["language_table"]
+        assert strategy.compare_buckets == False
+
+
+class TestCompositionPattern:
+    """Test the composition pattern for strategy creation."""
+
+    def test_create_with_type_field(self):
+        """Test creating multiple instances of same type using 'type' field."""
+        config = {
+            "transfer_lt": {
+                "type": "latent_transfer",
+                "buckets": ["language_table"],
+                "every_n_validations": 2,
+            },
+            "transfer_bridge": {
+                "type": "latent_transfer",
+                "buckets": ["bridge"],
+                "every_n_validations": 5,
+            },
+        }
+        strategies = create_validation_strategies(config)
+
+        assert len(strategies) == 2
+
+        # Check instance names (not type names)
+        names = {s.name for s in strategies}
+        assert "transfer_lt" in names
+        assert "transfer_bridge" in names
+
+        # Check each has correct buckets
+        lt_strategy = next(s for s in strategies if s.name == "transfer_lt")
+        bridge_strategy = next(s for s in strategies if s.name == "transfer_bridge")
+
+        assert lt_strategy.buckets == ["language_table"]
+        assert lt_strategy.every_n_validations == 2
+        assert bridge_strategy.buckets == ["bridge"]
+        assert bridge_strategy.every_n_validations == 5
+
+    def test_backwards_compat_no_type_field(self):
+        """Test backwards compatibility when type field is omitted."""
+        config = {
+            "basic": {"enabled": True},
+            "latent_transfer": {"enabled": True, "every_n_validations": 3},
+        }
+        strategies = create_validation_strategies(config)
+
+        assert len(strategies) == 2
+        # When no type field, instance name is used as type
+        names = {s.name for s in strategies}
+        assert "basic" in names
+        assert "latent_transfer" in names
+
+    def test_skip_disabled_strategies(self):
+        """Test that disabled strategies are skipped."""
+        config = {
+            "transfer_lt": {
+                "type": "latent_transfer",
+                "enabled": False,
+            },
+            "transfer_bridge": {
+                "type": "latent_transfer",
+                "enabled": True,
+            },
+        }
+        strategies = create_validation_strategies(config)
+
+        assert len(strategies) == 1
+        assert strategies[0].name == "transfer_bridge"
+
+    def test_unknown_type_warning(self, capsys):
+        """Test that unknown strategy type prints warning."""
+        config = {
+            "my_custom": {
+                "type": "nonexistent_strategy",
+            },
+        }
+        strategies = create_validation_strategies(config)
+
+        assert len(strategies) == 0
+        captured = capsys.readouterr()
+        assert "Unknown strategy type" in captured.out
+
+    def test_strategy_registry_completeness(self):
+        """Test that all expected strategy types are in registry."""
+        expected_types = [
+            "basic",
+            "basic_visualization",
+            "latent_transfer",
+            "clustering",
+            "codebook_histogram",
+            "sequence_histogram",
+            "all_sequences_histogram",
+            "action_token_scatter",
+            "action_sequence_scatter",
+            "top_sequences_scatter",
+            "state_sequence_scatter",
+        ]
+        for strategy_type in expected_types:
+            assert strategy_type in STRATEGY_REGISTRY, f"Missing: {strategy_type}"
 
 
 if __name__ == "__main__":

@@ -48,27 +48,21 @@ training:
       bridge:
         filters: {dataset_name: "bridge"}
         max_samples: 128
+    # --- Validation Strategies (Composition Pattern) ---
+    # Each strategy instance is self-contained with its own bucket bindings
+    # Use 'type' field to specify strategy class, instance name becomes metric name
     strategies:
+      # Basic visualization - runs on all data (no bucket binding)
       basic:
         enabled: true
         visualize_train: true
         visualize_val: true
-        visualize_per_bucket: true  # Show per-dataset visualizations
-      latent_transfer:
-        enabled: true
-        every_n_validations: 5
-        num_pairs: 128
-      clustering:
-        enabled: true
-        every_n_validations: 5
-        num_samples: 256
+        visualize_per_bucket: true
+
+      # Global strategies (run on combined data)
       codebook_histogram:
         enabled: true
         every_n_validations: 3
-      action_token_scatter:
-        enabled: true
-        every_n_validations: 3
-        num_samples: 256
       sequence_histogram:
         enabled: true
         every_n_validations: 5
@@ -76,16 +70,48 @@ training:
       all_sequences_histogram:
         enabled: true
         every_n_validations: 5
-      action_sequence_scatter:
+      clustering:
         enabled: true
         every_n_validations: 5
         num_samples: 256
-      top_sequences_scatter:
-        enabled: true
+
+      # Per-bucket latent transfer (compare distribution shift)
+      transfer_lt:
+        type: latent_transfer
+        buckets: ["language_table"]
+        compare_buckets: true
+        every_n_validations: 5
+        num_pairs: 128
+      transfer_bridge:
+        type: latent_transfer
+        buckets: ["bridge"]
+        compare_buckets: true
+        every_n_validations: 5
+        num_pairs: 128
+
+      # Action scatter only on language_table (has 2D actions)
+      action_scatter_lt:
+        type: action_token_scatter
+        buckets: ["language_table"]
+        compare_buckets: true
+        every_n_validations: 3
+        num_samples: 256
+      action_seq_lt:
+        type: action_sequence_scatter
+        buckets: ["language_table"]
+        compare_buckets: true
+        every_n_validations: 5
+        num_samples: 256
+      top_seq_lt:
+        type: top_sequences_scatter
+        buckets: ["language_table"]
+        compare_buckets: true
         every_n_validations: 5
         num_top_sequences: 5
-      state_sequence_scatter:
-        enabled: true
+      state_scatter_lt:
+        type: state_sequence_scatter
+        buckets: ["language_table"]
+        compare_buckets: true
         every_n_validations: 5
         num_samples: 256
 

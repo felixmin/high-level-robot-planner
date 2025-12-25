@@ -5,39 +5,55 @@ Implements flexible, configurable validation that can run:
 - Light validation (always): reconstruction loss + visualizations
 - Heavy validation (periodic): latent transfer analysis, clustering
 
-Architecture:
-- Buckets: Named data subsets with filters (e.g., "youtube_iid", "bridge_holdout")
-- Strategies: Validation logic bound to specific buckets
+Architecture (Composition Pattern):
+- Buckets: Named data subsets with filters (e.g., "language_table", "bridge")
+- Strategies: Self-contained validation instances with embedded bucket bindings
 - Each strategy declares its metadata requirements and minimum sample counts
+- Use 'type' field to create multiple instances of the same strategy type
 
 Usage in config:
 ```yaml
 validation:
   buckets:
-    youtube_iid:
-      filters: {dataset_type: "youtube"}
-      max_samples: 100
-    bridge_holdout:
-      filters: {dataset_type: "bridge", environment: "toykitchen7"}
-      max_samples: 100
-      is_holdout: true
     language_table:
-      filters: {dataset_type: "language_table"}
+      filters: {dataset_name: "language_table"}
+      max_samples: 200
+    bridge:
+      filters: {dataset_name: "bridge"}
       max_samples: 200
 
   strategies:
+    # Basic visualization (runs on global cache)
     basic:
       enabled: true
-      buckets: all
-    action_token_scatter:
-      enabled: true
-      buckets: [language_table]
-    latent_transfer:
-      enabled: true
-      every_n_validations: 10
-      buckets: [bridge_iid, bridge_holdout]
+      visualize_train: true
+
+    # Multiple instances of same strategy type with different buckets
+    transfer_lt:
+      type: latent_transfer
+      buckets: ["language_table"]
+      compare_buckets: true
+      every_n_validations: 5
+
+    transfer_bridge:
+      type: latent_transfer
+      buckets: ["bridge"]
+      compare_buckets: true
+      every_n_validations: 5
+
+    # Action scatter only on language_table (has 2D actions)
+    action_scatter_lt:
+      type: action_token_scatter
+      buckets: ["language_table"]
       compare_buckets: true
 ```
+
+Key features:
+- Instance names (e.g., "transfer_lt") become metric names in wandb
+- 'type' field maps to strategy class (see STRATEGY_REGISTRY)
+- 'buckets' list specifies which bucket caches to use
+- 'compare_buckets: true' runs strategy separately per bucket with suffix
+- Metadata is pruned to ESSENTIAL_METADATA_KEYS for RAM safety
 """
 
 from abc import ABC, abstractmethod
@@ -66,6 +82,21 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
+
+
+# Essential metadata keys to cache (RAM safety - prevents Bridge metadata bloat)
+# Only these keys are retained when caching samples to buckets
+ESSENTIAL_METADATA_KEYS = frozenset({
+    "dataset_type",    # For bucketing/labeling (e.g., "youtube", "bridge", "oxe")
+    "dataset_name",    # For OXE dataset filtering (e.g., "language_table", "bridge")
+    "action",          # For action scatter strategies (only first 2 dims used)
+    "initial_state",   # For state scatter strategies (only first 2 dims used)
+})
+
+
+def prune_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Prune metadata to essential keys only (RAM safety)."""
+    return {k: v for k, v in metadata.items() if k in ESSENTIAL_METADATA_KEYS}
 
 
 @dataclass
@@ -171,13 +202,23 @@ class ValidationCache:
         meta: Dict[str, Any],
         code: Optional[torch.Tensor] = None,
         latent: Optional[torch.Tensor] = None,
+        prune: bool = True,
     ):
-        """Add a single sample to the cache."""
+        """Add a single sample to the cache.
+
+        Args:
+            frame: Frame tensor to cache
+            meta: Metadata dictionary
+            code: Optional codebook indices
+            latent: Optional latent representation
+            prune: If True, prune metadata to essential keys only (RAM safety)
+        """
         if self.is_full():
             return
 
         self.frames.append(frame.cpu() if frame.is_cuda else frame)
-        self.metadata.append([meta])  # Always store as list for consistency with add_batch
+        cached_meta = prune_metadata(meta) if prune else meta
+        self.metadata.append([cached_meta])  # Always store as list for consistency with add_batch
         self._sample_count += 1
 
         if code is not None:
@@ -191,8 +232,17 @@ class ValidationCache:
         metadata_list: List[Dict[str, Any]],
         codes: Optional[torch.Tensor] = None,
         latents: Optional[torch.Tensor] = None,
+        prune: bool = True,
     ):
-        """Add a batch of samples to the cache, respecting max_samples."""
+        """Add a batch of samples to the cache, respecting max_samples.
+
+        Args:
+            frames: Batch of frame tensors
+            metadata_list: List of metadata dictionaries
+            codes: Optional batch of codebook indices
+            latents: Optional batch of latent representations
+            prune: If True, prune metadata to essential keys only (RAM safety)
+        """
         remaining = self.max_samples - self._sample_count
         if remaining <= 0:
             return
@@ -200,7 +250,11 @@ class ValidationCache:
         n_to_add = min(frames.shape[0], remaining)
 
         self.frames.append(frames[:n_to_add].cpu() if frames.is_cuda else frames[:n_to_add])
-        self.metadata.append(metadata_list[:n_to_add])
+        if prune:
+            cached_metadata = [prune_metadata(m) for m in metadata_list[:n_to_add]]
+        else:
+            cached_metadata = metadata_list[:n_to_add]
+        self.metadata.append(cached_metadata)
         self._sample_count += n_to_add
 
         if codes is not None:
@@ -322,8 +376,16 @@ class ValidationStrategy(ABC):
     - What data it needs (via required_metadata, min_samples)
     - What to compute and log (via run)
 
-    Strategies are bound to buckets and can operate in compare mode
-    (run separately on each bucket) or merged mode (combine bucket data).
+    Strategies are self-contained with bucket bindings:
+    - buckets: List of bucket names this strategy operates on
+    - compare_buckets: If True, run separately on each bucket with metric suffix
+
+    Example config:
+        transfer_lt:
+            type: latent_transfer
+            buckets: ["language_table"]
+            compare_buckets: true
+            every_n_validations: 2
     """
 
     def __init__(
@@ -332,12 +394,16 @@ class ValidationStrategy(ABC):
         enabled: bool = True,
         every_n_validations: int = 1,
         min_samples: int = 10,
+        buckets: Optional[List[str]] = None,
+        compare_buckets: bool = False,
         **kwargs,
     ):
         self.name = name
         self.enabled = enabled
         self.every_n_validations = every_n_validations
         self.min_samples = min_samples
+        self.buckets = buckets or []  # Empty = use global cache
+        self.compare_buckets = compare_buckets
         self.validation_count = 0
 
     def should_run(self) -> bool:
@@ -448,6 +514,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
 
     def __init__(
         self,
+        name: str = "basic_visualization",
         enabled: bool = True,
         num_fixed_samples: int = 8,
         num_random_samples: int = 8,
@@ -460,9 +527,10 @@ class BasicVisualizationStrategy(ValidationStrategy):
         **kwargs,
     ):
         super().__init__(
-            name="basic_visualization",
+            name=name,
             enabled=enabled,
             every_n_validations=1,  # Always run
+            **kwargs,  # Pass buckets, compare_buckets, etc.
         )
         self.num_fixed_samples = num_fixed_samples
         self.num_random_samples = num_random_samples
@@ -795,6 +863,7 @@ class LatentTransferStrategy(ValidationStrategy):
 
     def __init__(
         self,
+        name: str = "latent_transfer",
         enabled: bool = True,
         every_n_validations: int = 10,
         num_pairs: int = 256,
@@ -802,10 +871,11 @@ class LatentTransferStrategy(ValidationStrategy):
         **kwargs,
     ):
         super().__init__(
-            name="latent_transfer",
+            name=name,
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
+            **kwargs,  # Pass buckets, compare_buckets, etc.
         )
         self.num_pairs = num_pairs
 
@@ -1001,6 +1071,7 @@ class ClusteringStrategy(ValidationStrategy):
 
     def __init__(
         self,
+        name: str = "clustering",
         enabled: bool = True,
         every_n_validations: int = 20,
         num_samples: int = 1000,
@@ -1010,10 +1081,11 @@ class ClusteringStrategy(ValidationStrategy):
         **kwargs,
     ):
         super().__init__(
-            name="clustering",
+            name=name,
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
+            **kwargs,  # Pass buckets, compare_buckets, etc.
         )
         self.num_samples = num_samples
         self.num_clusters = num_clusters
@@ -1143,16 +1215,18 @@ class CodebookHistogramStrategy(ValidationStrategy):
 
     def __init__(
         self,
+        name: str = "codebook_histogram",
         enabled: bool = True,
         every_n_validations: int = 1,
         min_samples: int = 10,
         **kwargs,
     ):
         super().__init__(
-            name="codebook_histogram",
+            name=name,
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
+            **kwargs,  # Pass buckets, compare_buckets, etc.
         )
 
     def needs_caching(self) -> bool:
@@ -1262,6 +1336,7 @@ class LatentSequenceHistogramStrategy(ValidationStrategy):
 
     def __init__(
         self,
+        name: str = "sequence_histogram",
         enabled: bool = True,
         every_n_validations: int = 1,
         num_top_sequences: int = 50,
@@ -1269,10 +1344,11 @@ class LatentSequenceHistogramStrategy(ValidationStrategy):
         **kwargs,
     ):
         super().__init__(
-            name="sequence_histogram",
+            name=name,
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
+            **kwargs,  # Pass buckets, compare_buckets, etc.
         )
         self.num_top_sequences = num_top_sequences
 
@@ -1385,16 +1461,18 @@ class AllSequencesHistogramStrategy(ValidationStrategy):
 
     def __init__(
         self,
+        name: str = "all_sequences_histogram",
         enabled: bool = True,
         every_n_validations: int = 1,
         min_samples: int = 10,
         **kwargs,
     ):
         super().__init__(
-            name="all_sequences_histogram",
+            name=name,
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
+            **kwargs,  # Pass buckets, compare_buckets, etc.
         )
 
     def needs_caching(self) -> bool:
@@ -1496,7 +1574,7 @@ class MetadataScatterStrategy(ValidationStrategy):
         every_n_validations: int = 1,
         num_samples: int = 1000,
         min_samples: int = 10,
-        dataset_filter: Optional[str] = "language_table",
+        dataset_filter: Optional[str] = None,  # Changed: bucket filtering handles this now
         **kwargs,
     ):
         super().__init__(
@@ -1504,6 +1582,7 @@ class MetadataScatterStrategy(ValidationStrategy):
             enabled=enabled,
             every_n_validations=every_n_validations,
             min_samples=min_samples,
+            **kwargs,  # Pass buckets, compare_buckets, etc.
         )
         self.num_samples = num_samples
         self.dataset_filter = dataset_filter
@@ -1672,6 +1751,7 @@ class ActionTokenScatterStrategy(MetadataScatterStrategy):
 
     def __init__(
         self,
+        name: str = "action_token_scatter",
         enabled: bool = True,
         every_n_validations: int = 1,
         num_samples: int = 1000,
@@ -1679,12 +1759,12 @@ class ActionTokenScatterStrategy(MetadataScatterStrategy):
         **kwargs,
     ):
         super().__init__(
-            name="action_token_scatter",
+            name=name,
             enabled=enabled,
             every_n_validations=every_n_validations,
             num_samples=num_samples,
             min_samples=min_samples,
-            dataset_filter="language_table",
+            **kwargs,  # Pass buckets, compare_buckets, dataset_filter, etc.
         )
 
     def required_metadata(self) -> List[str]:
@@ -1755,6 +1835,7 @@ class ActionSequenceScatterStrategy(MetadataScatterStrategy):
 
     def __init__(
         self,
+        name: str = "action_sequence_scatter",
         enabled: bool = True,
         every_n_validations: int = 1,
         num_samples: int = 1000,
@@ -1762,12 +1843,12 @@ class ActionSequenceScatterStrategy(MetadataScatterStrategy):
         **kwargs,
     ):
         super().__init__(
-            name="action_sequence_scatter",
+            name=name,
             enabled=enabled,
             every_n_validations=every_n_validations,
             num_samples=num_samples,
             min_samples=min_samples,
-            dataset_filter="language_table",
+            **kwargs,  # Pass buckets, compare_buckets, dataset_filter, etc.
         )
 
     def required_metadata(self) -> List[str]:
@@ -1889,6 +1970,7 @@ class TopSequencesScatterStrategy(MetadataScatterStrategy):
 
     def __init__(
         self,
+        name: str = "top_sequences_scatter",
         enabled: bool = True,
         every_n_validations: int = 1,
         num_samples: int = 1000,
@@ -1897,12 +1979,12 @@ class TopSequencesScatterStrategy(MetadataScatterStrategy):
         **kwargs,
     ):
         super().__init__(
-            name="top_sequences_scatter",
+            name=name,
             enabled=enabled,
             every_n_validations=every_n_validations,
             num_samples=num_samples,
             min_samples=min_samples,
-            dataset_filter="language_table",
+            **kwargs,  # Pass buckets, compare_buckets, dataset_filter, etc.
         )
         self.num_top_sequences = num_top_sequences
 
@@ -2019,6 +2101,7 @@ class StateSequenceScatterStrategy(MetadataScatterStrategy):
 
     def __init__(
         self,
+        name: str = "state_sequence_scatter",
         enabled: bool = True,
         every_n_validations: int = 1,
         num_samples: int = 1000,
@@ -2027,12 +2110,12 @@ class StateSequenceScatterStrategy(MetadataScatterStrategy):
         **kwargs,
     ):
         super().__init__(
-            name="state_sequence_scatter",
+            name=name,
             enabled=enabled,
             every_n_validations=every_n_validations,
             num_samples=num_samples,
             min_samples=min_samples,
-            dataset_filter="language_table",
+            **kwargs,  # Pass buckets, compare_buckets, dataset_filter, etc.
         )
         self.num_top_sequences = num_top_sequences
 
@@ -2140,22 +2223,42 @@ class StateSequenceScatterStrategy(MetadataScatterStrategy):
             print(f"Warning: state_sequence_scatter visualization failed: {e}")
 
 
+# Strategy type registry - maps type names to classes
+STRATEGY_REGISTRY: Dict[str, type] = {
+    "basic": BasicVisualizationStrategy,
+    "basic_visualization": BasicVisualizationStrategy,
+    "latent_transfer": LatentTransferStrategy,
+    "clustering": ClusteringStrategy,
+    "codebook_histogram": CodebookHistogramStrategy,
+    "sequence_histogram": LatentSequenceHistogramStrategy,
+    "all_sequences_histogram": AllSequencesHistogramStrategy,
+    "action_token_scatter": ActionTokenScatterStrategy,
+    "action_sequence_scatter": ActionSequenceScatterStrategy,
+    "top_sequences_scatter": TopSequencesScatterStrategy,
+    "state_sequence_scatter": StateSequenceScatterStrategy,
+}
+
+
 def create_validation_strategies(
     config: Dict[str, Any],
     val_buckets: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[ValidationStrategy]:
     """
-    Create validation strategies from config.
+    Create validation strategies from config using composition pattern.
+
+    Each config key is a strategy instance name, with optional 'type' field
+    to specify which strategy class to use. This allows multiple instances
+    of the same strategy type with different configurations.
 
     Args:
-        config: validation.strategies config dict
-        val_buckets: Optional dict of bucket definitions for visualization
+        config: validation.strategies config dict. Each key is an instance name.
             Example:
             {
-                "youtube": {"dataset_type": "youtube"},
-                "bridge_toykitchen": {"dataset_type": "bridge", "environment": "toykitchen1"},
-                "with_language": {"language": ["not_null", true]},
+                "basic": {"enabled": true, "visualize_train": true},
+                "transfer_lt": {"type": "latent_transfer", "buckets": ["language_table"]},
+                "transfer_bridge": {"type": "latent_transfer", "buckets": ["bridge"]},
             }
+        val_buckets: Optional dict of bucket definitions for visualization
 
     Returns:
         List of ValidationStrategy instances
@@ -2165,71 +2268,36 @@ def create_validation_strategies(
     if not config:
         return strategies
 
-    # Basic visualization (always-on by default)
-    if config.get("basic", {}).get("enabled", True):
-        # Convert OmegaConf to plain dict to allow adding keys
-        basic_config = dict(config.get("basic", {}))
-        # Add val_buckets if specified
-        if val_buckets:
-            basic_config["val_buckets"] = val_buckets
-        strategies.append(BasicVisualizationStrategy(
-            **basic_config,
-            num_fixed_samples=config.get("num_fixed_samples", 4),
-            num_random_samples=config.get("num_random_samples", 4),
-        ))
+    for instance_name, instance_config in config.items():
+        # Skip if not a dict (could be a top-level param like num_fixed_samples)
+        if not isinstance(instance_config, dict):
+            continue
 
-    # Latent transfer analysis
-    if config.get("latent_transfer", {}).get("enabled", False):
-        strategies.append(LatentTransferStrategy(
-            **config.get("latent_transfer", {}),
-        ))
+        # Skip disabled strategies
+        if not instance_config.get("enabled", True):
+            continue
 
-    # Clustering analysis
-    if config.get("clustering", {}).get("enabled", False):
-        strategies.append(ClusteringStrategy(
-            **config.get("clustering", {}),
-        ))
+        # Get strategy type (defaults to instance_name for backwards compat)
+        strategy_type = instance_config.get("type", instance_name)
 
-    # Codebook histogram
-    if config.get("codebook_histogram", {}).get("enabled", False):
-        strategies.append(CodebookHistogramStrategy(
-            **config.get("codebook_histogram", {}),
-        ))
+        if strategy_type not in STRATEGY_REGISTRY:
+            print(f"Warning: Unknown strategy type '{strategy_type}' for '{instance_name}', skipping")
+            continue
 
-    # Sequence histogram (combinations)
-    if config.get("sequence_histogram", {}).get("enabled", False):
-        strategies.append(LatentSequenceHistogramStrategy(
-            **config.get("sequence_histogram", {}),
-        ))
+        strategy_class = STRATEGY_REGISTRY[strategy_type]
 
-    # All sequences histogram (long tail)
-    if config.get("all_sequences_histogram", {}).get("enabled", False):
-        strategies.append(AllSequencesHistogramStrategy(
-            **config.get("all_sequences_histogram", {}),
-        ))
+        # Build kwargs, excluding 'type' which is just for class selection
+        kwargs = {k: v for k, v in instance_config.items() if k != "type"}
+        kwargs["name"] = instance_name  # Use instance name, not type
 
-    # Action-token scatter (for datasets with 2D actions like language_table)
-    if config.get("action_token_scatter", {}).get("enabled", False):
-        strategies.append(ActionTokenScatterStrategy(
-            **config.get("action_token_scatter", {}),
-        ))
+        # Pass val_buckets to basic visualization strategy
+        if strategy_type in ("basic", "basic_visualization") and val_buckets:
+            kwargs["val_buckets"] = val_buckets
 
-    # Action-sequence scatter
-    if config.get("action_sequence_scatter", {}).get("enabled", False):
-        strategies.append(ActionSequenceScatterStrategy(
-            **config.get("action_sequence_scatter", {}),
-        ))
-
-    # Top sequences scatter
-    if config.get("top_sequences_scatter", {}).get("enabled", False):
-        strategies.append(TopSequencesScatterStrategy(
-            **config.get("top_sequences_scatter", {}),
-        ))
-
-    # State-sequence scatter
-    if config.get("state_sequence_scatter", {}).get("enabled", False):
-        strategies.append(StateSequenceScatterStrategy(
-            **config.get("state_sequence_scatter", {}),
-        ))
+        try:
+            strategies.append(strategy_class(**kwargs))
+        except TypeError as e:
+            print(f"Warning: Failed to create strategy '{instance_name}': {e}")
+            continue
 
     return strategies

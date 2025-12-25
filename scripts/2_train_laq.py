@@ -149,14 +149,16 @@ def main(cfg: DictConfig):
     val_config = training_config.validation
     strategies_config = val_config.get("strategies", {})
 
-    val_buckets = val_config.get("val_buckets", None)
-    if val_buckets:
-        # Convert OmegaConf to dict if needed
-        val_buckets = OmegaConf.to_container(val_buckets, resolve=True)
-    strategies = create_validation_strategies(strategies_config, val_buckets=val_buckets)
+    # Get bucket configs (new "buckets" key, with "val_buckets" as fallback)
+    bucket_configs = val_config.get("buckets", val_config.get("val_buckets", None))
+    if bucket_configs:
+        bucket_configs = OmegaConf.to_container(bucket_configs, resolve=True)
+
+    strategies = create_validation_strategies(strategies_config, val_buckets=bucket_configs)
 
     val_strategy_callback = ValidationStrategyCallback(
         strategies=strategies,
+        bucket_configs=bucket_configs,  # Pass bucket configs for routing
         num_fixed_samples=val_config.get("num_fixed_samples", 8),
         num_random_samples=val_config.get("num_random_samples", 8),
         max_cached_samples=val_config.get("max_cached_samples", 256),
@@ -164,8 +166,11 @@ def main(cfg: DictConfig):
     callbacks.append(val_strategy_callback)
     print(f"✓ Validation strategy callback added ({len(strategies)} strategies)")
     print(f"  - Max cached samples: {val_config.get('max_cached_samples', 256)}")
+    if bucket_configs:
+        print(f"  - Buckets: {list(bucket_configs.keys())}")
     for strategy in strategies:
-        print(f"  - {strategy.name}: every {strategy.every_n_validations} validations")
+        bucket_info = f", buckets={strategy.buckets}" if strategy.buckets else ""
+        print(f"  - {strategy.name}: every {strategy.every_n_validations} validations{bucket_info}")
 
     # Optional EMA
     if training_config.get("use_ema", False):

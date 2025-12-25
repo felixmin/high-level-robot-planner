@@ -7,8 +7,7 @@ Includes:
 """
 
 import gc
-from typing import Optional, List, Dict, Any, Tuple
-from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any
 
 import torch
 from torchvision.utils import make_grid
@@ -23,41 +22,31 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 
-@dataclass
-class StrategyBucketBinding:
-    """Binding between a strategy and its assigned buckets."""
-    strategy: Any  # ValidationStrategy
-    bucket_names: List[str]  # ["bridge_iid", "bridge_holdout"] or ["all"]
-    compare_buckets: bool = False  # If True, run separately on each bucket with suffix
-
-
 class ValidationStrategyCallback(Callback):
     """
     Flexible validation callback with bucket-aware routing.
 
-    Architecture:
-    - Buckets: Named data subsets with filters (e.g., "youtube_iid", "bridge_holdout")
-    - Strategies: Validation logic bound to specific buckets
-    - Each strategy declares its metadata requirements and minimum sample counts
+    Architecture (Composition Pattern):
+    - Buckets: Named data subsets with filters (e.g., "language_table", "bridge")
+    - Strategies: Self-contained validation logic with embedded bucket bindings
+    - Each strategy has `buckets` and `compare_buckets` properties
 
     Features:
     - Per-bucket caching: Each bucket has its own cache
-    - Strategy-bucket binding: Strategies run on their assigned buckets
+    - Strategy-embedded binding: Strategies read from their own `buckets` property
     - Compare mode: Run strategy separately on each bucket for distribution shift analysis
     - Automatic applicability checks: Strategies check if they have enough valid data
 
     Args:
-        strategies: List of ValidationStrategy instances
-        strategy_bucket_bindings: Dict mapping strategy names to bucket configs
-        bucket_configs: Dict of bucket name -> BucketConfig
+        strategies: List of ValidationStrategy instances (with buckets property)
+        bucket_configs: Dict of bucket name -> BucketConfig or dict with filters
         num_fixed_samples: Number of fixed samples per bucket
-        global_cache_max: Maximum samples for global cache (fallback)
+        max_cached_samples: Maximum samples for global cache (fallback)
     """
 
     def __init__(
         self,
         strategies: Optional[List] = None,
-        strategy_bucket_bindings: Optional[Dict[str, Dict[str, Any]]] = None,
         bucket_configs: Optional[Dict[str, Any]] = None,
         num_fixed_samples: int = 8,
         num_random_samples: int = 8,
@@ -101,26 +90,6 @@ class ValidationStrategyCallback(Callback):
         self.global_cache = ValidationCache()
         self.global_cache.max_samples = max_cached_samples
 
-        # Build strategy-bucket bindings
-        self.bindings: List[StrategyBucketBinding] = []
-        bindings_config = strategy_bucket_bindings or {}
-
-        for strategy in self.strategies:
-            binding_cfg = bindings_config.get(strategy.name, {})
-            bucket_names = binding_cfg.get("buckets", "all")
-
-            if bucket_names == "all":
-                # Use all defined buckets, or fall back to global
-                bucket_names = list(self.bucket_configs.keys()) if self.bucket_configs else []
-
-            compare_buckets = binding_cfg.get("compare_buckets", False)
-
-            self.bindings.append(StrategyBucketBinding(
-                strategy=strategy,
-                bucket_names=bucket_names,
-                compare_buckets=compare_buckets,
-            ))
-
         # Track fixed sample indices
         self.fixed_indices: Optional[List[int]] = None
         self.validation_count = 0
@@ -128,8 +97,8 @@ class ValidationStrategyCallback(Callback):
 
     def _any_strategy_needs_codes(self) -> bool:
         """Check if any running strategy needs codebook indices."""
-        for binding in self.bindings:
-            if binding.strategy.should_run() and binding.strategy.needs_codes():
+        for strategy in self.strategies:
+            if strategy.should_run() and strategy.needs_codes():
                 return True
         return False
 
@@ -270,8 +239,8 @@ class ValidationStrategyCallback(Callback):
         self.validation_count += 1
 
         # Update strategy counters
-        for binding in self.bindings:
-            binding.strategy.increment_count()
+        for strategy in self.strategies:
+            strategy.increment_count()
 
         # Select fixed samples for global cache on first validation
         if not self._first_full_validation_done:
@@ -288,15 +257,15 @@ class ValidationStrategyCallback(Callback):
                 holdout_tag = " (holdout)" if cache.is_holdout else ""
                 print(f"  [{name}]{holdout_tag}: {count} samples")
 
-        # Run each strategy on its assigned buckets
-        for binding in self.bindings:
-            strategy = binding.strategy
-
+        # Run each strategy on its assigned buckets (read from strategy.buckets)
+        for strategy in self.strategies:
             if not strategy.should_run():
                 continue
 
+            bucket_names = strategy.buckets  # Read directly from strategy
+
             # No bucket bindings -> use global cache
-            if not binding.bucket_names:
+            if not bucket_names:
                 can_run, reason = strategy.can_run(self.global_cache)
                 if not can_run:
                     print(f"⚠️ Skipping {strategy.name}: {reason}")
@@ -307,10 +276,11 @@ class ValidationStrategyCallback(Callback):
                     print(f"Warning: Strategy {strategy.name} failed: {e}")
                 continue
 
-            if binding.compare_buckets:
+            if strategy.compare_buckets:  # Read directly from strategy
                 # Run separately on each bucket with metric suffix
-                for bucket_name in binding.bucket_names:
+                for bucket_name in bucket_names:
                     if bucket_name not in self.bucket_caches:
+                        print(f"⚠️ Bucket '{bucket_name}' not found for {strategy.name}")
                         continue
                     cache = self.bucket_caches[bucket_name]
                     can_run, reason = strategy.can_run(cache)
@@ -327,12 +297,13 @@ class ValidationStrategyCallback(Callback):
                 merged = ValidationCache()
                 merged.max_samples = sum(
                     self.bucket_caches[b].max_samples
-                    for b in binding.bucket_names
+                    for b in bucket_names
                     if b in self.bucket_caches
                 )
 
-                for bucket_name in binding.bucket_names:
+                for bucket_name in bucket_names:
                     if bucket_name not in self.bucket_caches:
+                        print(f"⚠️ Bucket '{bucket_name}' not found for {strategy.name}")
                         continue
                     bucket_cache = self.bucket_caches[bucket_name]
                     bucket_frames = bucket_cache.get_all_frames()
