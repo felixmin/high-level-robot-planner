@@ -33,5 +33,6 @@ image_size: 256
 batch_size: 32
 num_workers: 0                   # tf.data handles parallelism
 shuffle_buffer: 200              # Split across datasets
-prefetch_buffer: 4
+prefetch_buffer: 16              # Increased for better I/O overlap
+persistent_iterator: true        # Keep iterator alive to avoid shuffle buffer refill
 return_metadata: true            # Required for validation strategies

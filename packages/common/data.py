@@ -1056,6 +1056,7 @@ class OXEDataModule(pl.LightningDataModule):
         shuffle_buffer: int = 200,
         prefetch_buffer: int = 4,
         return_metadata: bool = True,
+        persistent_iterator: bool = True,
         # Legacy parameters (ignored but kept for config compatibility)
         name: Optional[str] = None,
         task: Optional[str] = None,
@@ -1106,6 +1107,7 @@ class OXEDataModule(pl.LightningDataModule):
         self.shuffle_buffer = shuffle_buffer
         self.prefetch_buffer = prefetch_buffer
         self.return_metadata = return_metadata
+        self.persistent_iterator = persistent_iterator
 
         # Will be set in setup()
         self.train_dataset = None
@@ -1127,6 +1129,7 @@ class OXEDataModule(pl.LightningDataModule):
                 shuffle_buffer=self.shuffle_buffer,
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
+                persistent_iterator=self.persistent_iterator,
             )
             self.val_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
@@ -1137,6 +1140,7 @@ class OXEDataModule(pl.LightningDataModule):
                 shuffle_buffer=0,  # No shuffle for val
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
+                persistent_iterator=self.persistent_iterator,
             )
             print(f"✓ OXE DataModule initialized (single dataset)")
             print(f"  - Dataset: {cfg['name']}")
@@ -1152,6 +1156,7 @@ class OXEDataModule(pl.LightningDataModule):
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 is_train=True,
+                persistent_iterator=self.persistent_iterator,
             )
             self.val_dataset = MultiOXEFramePairDataset(
                 datasets=self.dataset_configs,
@@ -1161,6 +1166,7 @@ class OXEDataModule(pl.LightningDataModule):
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 is_train=False,
+                persistent_iterator=self.persistent_iterator,
             )
             dataset_names = [cfg["name"] for cfg in self.dataset_configs]
             print(f"✓ OXE DataModule initialized (multi-dataset)")
