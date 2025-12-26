@@ -1151,7 +1151,6 @@ class OXEDataModule(pl.LightningDataModule):
             self.train_dataset = MultiOXEFramePairDataset(
                 datasets=self.dataset_configs,
                 image_size=self.image_size,
-                offset=self.offset,
                 shuffle_buffer=self.shuffle_buffer,
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
@@ -1161,7 +1160,6 @@ class OXEDataModule(pl.LightningDataModule):
             self.val_dataset = MultiOXEFramePairDataset(
                 datasets=self.dataset_configs,
                 image_size=self.image_size,
-                offset=self.offset,
                 shuffle_buffer=0,  # No shuffle for val
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
