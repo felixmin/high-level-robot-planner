@@ -209,6 +209,7 @@ class OXEFramePairDataset(IterableDataset):
         num_parallel_calls: Optional[int] = None,  # None = AUTOTUNE
         return_metadata: bool = False,
         gcs_path: Optional[str] = None,
+        persistent_iterator: bool = True,  # Keep iterator alive to avoid shuffle buffer refill
     ):
         super().__init__()
 
@@ -240,12 +241,14 @@ class OXEFramePairDataset(IterableDataset):
         self.prefetch_buffer = prefetch_buffer
         self.num_parallel_calls = num_parallel_calls
         self.return_metadata = return_metadata
+        self.persistent_iterator = persistent_iterator
 
         # Lazy initialization of tf.data pipeline
         self._builder = None
         self._num_episodes = None
         # Persistent pipeline - created once, reused across epochs
         self._persistent_pipeline = None
+        # Persistent iterator - avoids shuffle buffer refill on each epoch
         self._pipeline_iterator = None
         self._epoch_count = 0
         # Idempotency flag for cleanup
@@ -545,18 +548,33 @@ class OXEFramePairDataset(IterableDataset):
         except Exception:
             pass
 
+    def _get_or_create_iterator(self):
+        """Get existing iterator or create new one.
+
+        When persistent_iterator=True (default), reuses the same iterator across
+        epochs to avoid refilling the shuffle buffer from GCS each time.
+        """
+        tf_ds = self._get_or_create_pipeline()
+
+        if self.persistent_iterator:
+            if self._pipeline_iterator is None:
+                self._pipeline_iterator = iter(tf_ds)
+            return self._pipeline_iterator
+        else:
+            # Create fresh iterator each epoch (triggers shuffle buffer refill)
+            return iter(tf_ds)
+
     def __iter__(self) -> Iterator:
         """Iterate over frame pairs."""
         import tensorflow as tf
 
         self._epoch_count += 1
 
-        # Get or create the persistent pipeline
-        # The pipeline uses repeat() internally, so we just create a new iterator
-        tf_ds = self._get_or_create_pipeline()
+        # Get or create iterator (persistent by default to avoid shuffle buffer refill)
+        tf_iter = self._get_or_create_iterator()
 
         # Iterate and convert to PyTorch
-        for item in tf_ds:
+        for item in tf_iter:
             try:
                 if self.return_metadata:
                     pair_tf, meta_tf = item
@@ -631,9 +649,8 @@ class MultiOXEFramePairDataset(IterableDataset):
             - name: Dataset name (e.g., "bridge", "language_table")
             - train_split / val_split: TFDS split strings
             - weight: Sampling weight (default 1.0)
-            - offset: Optional per-dataset offset override
+            - offset: Frame offset for pairs (REQUIRED)
         image_size: Target image size (shared)
-        offset: Default frame offset for pairs
         shuffle_buffer: Size of shuffle buffer (split across datasets)
         prefetch_buffer: tf.data prefetch buffer size
         return_metadata: If True, return dict with metadata
@@ -644,25 +661,27 @@ class MultiOXEFramePairDataset(IterableDataset):
         self,
         datasets: list,
         image_size: int = 256,
-        offset: int = 5,
         shuffle_buffer: int = 200,
         prefetch_buffer: int = 2,
         return_metadata: bool = True,
         is_train: bool = True,
+        persistent_iterator: bool = True,  # Keep iterators alive to avoid shuffle buffer refill
     ):
         super().__init__()
 
         self.dataset_configs = datasets
         self.image_size = image_size
-        self.default_offset = offset
         self.shuffle_buffer = shuffle_buffer
         self.prefetch_buffer = prefetch_buffer
         self.return_metadata = return_metadata
         self.is_train = is_train
+        self.persistent_iterator = persistent_iterator
 
         # Will be populated lazily
         self._datasets = None
         self._weights = None
+        # Persistent iterators for each dataset
+        self._iterators = None
 
     def _init_datasets(self):
         """Initialize individual datasets lazily."""
@@ -682,14 +701,22 @@ class MultiOXEFramePairDataset(IterableDataset):
             else:
                 split = cfg.get("val_split", "train[90%:]")
 
+            # Offset is required for each dataset
+            if "offset" not in cfg:
+                raise ValueError(
+                    f"Dataset '{cfg['name']}' is missing required 'offset' field. "
+                    f"Please specify offset in config/data/oxe/{cfg['name']}.yaml"
+                )
+
             ds = OXEFramePairDataset(
                 dataset_name=cfg["name"],
                 split=split,
                 image_size=self.image_size,
-                offset=cfg.get("offset", self.default_offset),
+                offset=cfg["offset"],
                 shuffle_buffer=buffer_per_dataset if self.is_train else 0,
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
+                persistent_iterator=self.persistent_iterator,
             )
             self._datasets.append(ds)
             weights.append(cfg.get("weight", 1.0))
