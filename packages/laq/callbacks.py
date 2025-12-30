@@ -94,9 +94,14 @@ class ValidationStrategyCallback(Callback):
         self._first_full_validation_done = False
 
     def _any_strategy_needs_codes(self) -> bool:
-        """Check if any running strategy needs codebook indices."""
+        """Check if any strategy will need codebook indices on this validation.
+
+        Note: This is called during batch processing, before validation_count is
+        incremented. We need to check with (count + 1) to predict what strategies
+        will run at epoch end.
+        """
         for strategy in self.strategies:
-            if strategy.should_run() and strategy.needs_codes():
+            if strategy.will_run_next() and strategy.needs_codes():
                 return True
         return False
 

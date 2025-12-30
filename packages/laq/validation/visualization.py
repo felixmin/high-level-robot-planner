@@ -47,12 +47,13 @@ class BasicVisualizationStrategy(ValidationStrategy):
         visualize_per_bucket: bool = True,
         samples_per_bucket: int = 4,
         val_buckets: Optional[Dict[str, Dict[str, Any]]] = None,
+        every_n_validations: int = 1,  # Default: always run
         **kwargs,
     ):
         super().__init__(
             name=name,
             enabled=enabled,
-            every_n_validations=1,  # Always run
+            every_n_validations=every_n_validations,
             **kwargs,  # Pass buckets, etc.
         )
         self.num_fixed_samples = num_fixed_samples

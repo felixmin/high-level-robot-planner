@@ -305,6 +305,16 @@ class ValidationStrategy(ABC):
             return False
         return (self.validation_count % self.every_n_validations) == 0
 
+    def will_run_next(self) -> bool:
+        """Check if this strategy will run after the next increment.
+
+        Used during batch processing to predict if codes need to be computed
+        before the validation_count is incremented at epoch end.
+        """
+        if not self.enabled:
+            return False
+        return ((self.validation_count + 1) % self.every_n_validations) == 0
+
     def increment_count(self):
         """Increment validation counter."""
         self.validation_count += 1
