@@ -77,6 +77,8 @@ class OXEDatasetConfig:
     instruction_in_step: bool = False
     # For datasets with episode-level metadata (e.g., RoboNet has robot type)
     robot_key: Optional[str] = None  # Key in episode_metadata for robot type
+    # Approx avg episode length for __len__ calculation
+    avg_episode_length: int = 30
 
 
 # Registry of supported OXE datasets
@@ -89,6 +91,7 @@ OXE_DATASETS = {
         state_key="effector_translation",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
+        avg_episode_length=40,  # ~40 steps on average
     ),
     # Oracle sim datasets (scripted agent, longer episodes, cleaner data)
     "language_table_blocktorelative_oracle_sim": OXEDatasetConfig(
@@ -99,6 +102,7 @@ OXE_DATASETS = {
         state_key="effector_translation",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
+        avg_episode_length=40,
     ),
     "language_table_blocktoblock_oracle_sim": OXEDatasetConfig(
         name="language_table_blocktoblock_oracle_sim",
@@ -108,6 +112,7 @@ OXE_DATASETS = {
         state_key="effector_translation",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
+        avg_episode_length=40,
     ),
     "language_table_blocktoabsolute_oracle_sim": OXEDatasetConfig(
         name="language_table_blocktoabsolute_oracle_sim",
@@ -117,6 +122,7 @@ OXE_DATASETS = {
         state_key="effector_translation",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
+        avg_episode_length=40,
     ),
     "language_table_separate_oracle_sim": OXEDatasetConfig(
         name="language_table_separate_oracle_sim",
@@ -126,6 +132,7 @@ OXE_DATASETS = {
         state_key="effector_translation",
         image_shape=(360, 640, 3),
         control_frequency_hz=10.0,
+        avg_episode_length=40,
     ),
     # Bridge dataset (WidowX kitchen manipulation)
     "bridge": OXEDatasetConfig(
@@ -140,6 +147,7 @@ OXE_DATASETS = {
         state_dim=2,  # Use first 2 dims of 7D state for visualization
         action_key="world_vector",  # Extract world_vector from action dict
         action_is_dict=True,
+        avg_episode_length=50,  # Bridge episodes are typically longer
     ),
     # RT-1 dataset (Google Robot, mobile manipulator)
     # 87k episodes of table-top manipulation with 17 objects
@@ -155,6 +163,7 @@ OXE_DATASETS = {
         state_dim=3,  # Use first 3 dims (position) for visualization
         action_key="world_vector",  # Extract from action dict
         action_is_dict=True,
+        avg_episode_length=30,  # RT-1 episodes are variable but often ~30 steps
     ),
     # RoboNet dataset (multi-robot, random interactions)
     # 83k episodes across widowx, franka, baxter, sawyer robots
@@ -172,6 +181,7 @@ OXE_DATASETS = {
         action_is_dict=False,
         instruction_in_step=True,  # Instruction at step level, not observation
         robot_key="robot",  # episode_metadata.robot for filtering
+        avg_episode_length=30,  # Estimate
     ),
 }
 
@@ -274,8 +284,9 @@ class OXEFramePairDataset(IterableDataset):
     def __len__(self):
         """Approximate length based on episodes * avg pairs per episode."""
         self._init_tfds()
-        # Estimate: avg 25 steps per episode for oracle_sim, offset=5 -> ~20 pairs
-        avg_pairs_per_episode = max(1, 25 - self.offset)
+        # Estimate based on dataset-specific average episode length
+        avg_len = self.config.avg_episode_length
+        avg_pairs_per_episode = max(1, avg_len - self.offset)
         return self._num_episodes * avg_pairs_per_episode
 
     def _create_tf_pipeline(self):
@@ -287,21 +298,21 @@ class OXEFramePairDataset(IterableDataset):
 
         # Shuffle episodes if enabled
         if self.shuffle_buffer > 0:
-            ds = ds.shuffle(min(self.shuffle_buffer, 1000))
+            ds = ds.shuffle(self.shuffle_buffer)
 
         image_key = self.config.image_key
         instruction_key = self.config.instruction_key
-        state_key = getattr(self.config, "state_key", "effector_translation")
+        state_key = self.config.state_key
         offset = self.offset
         image_size = self.image_size
         return_metadata = self.return_metadata
         dataset_name = self.config.name
         action_dim = self.config.action_dim
-        state_dim = getattr(self.config, "state_dim", 2)
-        action_key = getattr(self.config, "action_key", None)
-        action_is_dict = getattr(self.config, "action_is_dict", False)
-        instruction_in_step = getattr(self.config, "instruction_in_step", False)
-        robot_key = getattr(self.config, "robot_key", None)
+        state_dim = self.config.state_dim
+        action_key = self.config.action_key
+        action_is_dict = self.config.action_is_dict
+        instruction_in_step = self.config.instruction_in_step
+        robot_key = self.config.robot_key
 
         def episode_to_pairs_generator():
             """Generator that yields frame pairs from episodes."""
@@ -382,11 +393,15 @@ class OXEFramePairDataset(IterableDataset):
                     try:
                         if action_is_dict and action_key:
                             # Dict-based actions (e.g., Bridge has world_vector, rotation_delta)
-                            actions = np.stack([s["action"][action_key].numpy() for s in steps])
+                            # Vectorize: stack tensors first, then convert to numpy once
+                            actions_tf = tf.stack([s["action"][action_key] for s in steps])
+                            actions = actions_tf.numpy()
                         else:
                             # Flat action array (e.g., language_table, RoboNet)
                             # Only take first action_dim dimensions
-                            actions = np.stack([s["action"].numpy()[:action_dim] for s in steps])
+                            # Vectorize: stack tensors first, then convert to numpy once
+                            actions_tf = tf.stack([s["action"] for s in steps])
+                            actions = actions_tf.numpy()[:, :action_dim]
                     except Exception:
                         actions = None
                         
@@ -395,7 +410,9 @@ class OXEFramePairDataset(IterableDataset):
                 if return_metadata and state_key in steps[0]["observation"]:
                     try:
                         # Only take first N dims (e.g. 2 for 2D plot)
-                        states = np.stack([s["observation"][state_key].numpy()[:state_dim] for s in steps])
+                        # Vectorize: stack tensors first, then convert to numpy once
+                        states_tf = tf.stack([s["observation"][state_key] for s in steps])
+                        states = states_tf.numpy()[:, :state_dim]
                     except Exception:
                         states = None
 
@@ -547,6 +564,14 @@ class OXEFramePairDataset(IterableDataset):
             self.cleanup()
         except Exception:
             pass
+
+    def reset_iterator(self):
+        """Force reset the underlying iterator (useful for cyclic sampling)."""
+        self._pipeline_iterator = None
+        if self._persistent_pipeline is not None:
+            # Just getting a new iterator from the existing pipeline works
+            # because TF datasets are re-iterable
+            self._pipeline_iterator = iter(self._persistent_pipeline)
 
     def _get_or_create_iterator(self):
         """Get existing iterator or create new one.
@@ -764,39 +789,49 @@ class MultiOXEFramePairDataset(IterableDataset):
             pass
 
     def __iter__(self):
-        """Interleave samples from all datasets based on weights."""
+        """Interleave samples from all datasets based on weights with CYCLIC sampling."""
         import random
 
         self._init_datasets()
 
         # Create iterators for each dataset
+        # NOTE: If iterators are already active (persistent), this continues them.
         iterators = [iter(ds) for ds in self._datasets]
-        active = list(range(len(iterators)))  # Indices of active iterators
-
-        while active:
-            # Choose dataset based on weights (only from active ones)
-            active_weights = [self._weights[i] for i in active]
-            total = sum(active_weights)
-            normalized = [w / total for w in active_weights]
-
-            # Weighted random selection
+        
+        # We loop for exactly __len__ steps to define the epoch length.
+        # This prevents distribution shift: even if a dataset runs out,
+        # we restart it so the mixing weights remain constant.
+        steps_total = len(self)
+        
+        for _ in range(steps_total):
+            # Choose dataset based on weights
+            # We select from ALL datasets, not just "active" ones
             r = random.random()
             cumsum = 0
-            chosen_idx = 0
-            for i, w in enumerate(normalized):
+            dataset_idx = 0
+            for i, w in enumerate(self._weights):
                 cumsum += w
                 if r <= cumsum:
-                    chosen_idx = i
+                    dataset_idx = i
                     break
-
-            dataset_idx = active[chosen_idx]
-
+            
+            # Fetch item from chosen dataset, handling exhaustion by cycling
             try:
                 item = next(iterators[dataset_idx])
                 yield item
             except StopIteration:
-                # This dataset is exhausted, remove from active
-                active.remove(dataset_idx)
+                # Dataset exhausted: restart it immediately (Cycle)
+                # 1. Force reset the underlying iterator in the dataset object
+                self._datasets[dataset_idx].reset_iterator()
+                # 2. Get the new iterator
+                iterators[dataset_idx] = iter(self._datasets[dataset_idx])
+                # 3. Retry fetching (assumes dataset is not empty)
+                try:
+                    item = next(iterators[dataset_idx])
+                    yield item
+                except StopIteration:
+                    # Failsafe if dataset is truly empty
+                    continue
 
 
 def get_oxe_dataset_info(dataset_name: str = "language_table") -> Dict[str, Any]:

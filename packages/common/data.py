@@ -416,6 +416,9 @@ class MultiSourcePairDataset(Dataset):
         # Build source root lookup
         self._source_roots = {s["type"]: Path(s["root"]) for s in sources}
 
+        # Cache for frame files per scene
+        self._scene_frame_files: List[List[Path]] = []
+
         # Build all frame pairs
         self.pairs = self._build_pairs()
 
@@ -449,8 +452,12 @@ class MultiSourcePairDataset(Dataset):
     def _build_pairs(self) -> List[FramePairIndex]:
         """Build explicit list of all valid frame pairs."""
         pairs = []
+        self._scene_frame_files = []
+        
         for scene_idx, scene in enumerate(self.scenes):
             frame_files = self._get_frame_files_for_scene(scene)
+            self._scene_frame_files.append(frame_files)
+            
             n = len(frame_files)
             if n < 2:
                 continue
@@ -474,7 +481,8 @@ class MultiSourcePairDataset(Dataset):
         pair = self.pairs[index]
         scene = self.scenes[pair.scene_idx]
 
-        frame_files = self._get_frame_files_for_scene(scene)
+        # Use cached frame files instead of scanning disk
+        frame_files = self._scene_frame_files[pair.scene_idx]
 
         first_path = frame_files[pair.first_frame_idx]
         second_path = frame_files[pair.second_frame_idx]
