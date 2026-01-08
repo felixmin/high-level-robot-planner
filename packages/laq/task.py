@@ -40,6 +40,9 @@ def separate_weight_decayable_params(
     no_wd_params = []
 
     for param in params:
+        if not param.requires_grad:
+            continue
+            
         if param.ndim >= 2:
             wd_params.append(param)
         else:
