@@ -21,6 +21,7 @@ model:
   dinov3_pool_to_grid: 8
   code_seq_len: 1
   codebook_size: 4096
+  use_aux_loss: false
 
 # Data settings
 data:
