@@ -1,0 +1,109 @@
+# @package _global_
+
+# Test configuration for unified logging
+# Quick run to verify logs go to runs/ folder with SLURM job ID
+
+defaults:
+  - /model@model: laq
+  - /data@data: laq_oxe_language_table
+  - /training@training: laq_optimizer
+  - /cluster@cluster: lrz_h100
+
+experiment:
+  name: laq_logging_test
+  description: "Short test run to verify unified logging works on cluster"
+
+# Data config - use minimal data for quick test
+data:
+  dataset_name: language_table
+  train_split: "train[:100]"  # Only 100 samples for quick test
+  val_split: "train[90:100]"  # Only 10 validation samples
+  offset: 5
+  image_size: 256
+  batch_size: 8  # Small batch for quick iterations
+  num_workers: 0
+  shuffle_buffer: 50
+  prefetch_buffer: 2
+  return_metadata: true
+
+# Training config - very short for testing
+training:
+  epochs: 1  # Just 1 epoch
+  max_steps: 50  # Only 50 steps (~5 minutes on cluster)
+
+  optimizer:
+    type: AdamW
+    lr: 0.0001
+    betas: [0.9, 0.999]
+    weight_decay: 0.01
+
+  scheduler:
+    type: none
+
+  gradient:
+    clip_val: 1.0
+    clip_algorithm: norm
+
+  loss_weights:
+    reconstruction: 1.0
+    vq: 1.0
+
+  validation:
+    check_interval: 25  # Validate twice during the 50 steps
+    num_fixed_samples: 4
+    num_random_samples: 4
+    max_cached_samples: 32
+
+    # Minimal validation strategies for quick testing
+    strategies:
+      basic:
+        enabled: true
+        visualize_train: true
+        visualize_val: true
+
+      codebook_histogram:
+        enabled: true
+        every_n_validations: 1
+
+    limit_batches: 10  # Only 10 validation batches
+
+  checkpoint:
+    monitor: val/loss
+    mode: min
+    save_top_k: 1
+    save_last: true
+    every_n_epochs: 1
+
+  profiler:
+    enabled: false
+
+# Logging - use unified logging
+logging:
+  use_wandb: true
+  project: hlrp
+  tags:
+    - logging_test
+    - short_run
+  level: INFO
+  unified: true  # KEY: Enable unified logging
+  capture_stdout: true
+
+# Model - standard LAQ config
+model:
+  name: laq_vit
+  dim: 1024
+  quant_dim: 32
+  codebook_size: 8
+  image_size: 256
+  patch_size: 32
+  spatial_depth: 8
+  temporal_depth: 8
+  dim_head: 64
+  heads: 16
+  code_seq_len: 4
+  channels: 3
+  attn_dropout: 0.0
+  ff_dropout: 0.0
+  use_dinov3_encoder: true
+  dinov3_model_name: facebook/dinov3-vits16-pretrain-lvd1689m
+  dinov3_pool_to_grid: 8

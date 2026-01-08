@@ -10,6 +10,7 @@ Includes:
 """
 
 import csv
+import logging
 import os
 import random
 import re
@@ -22,6 +23,9 @@ from torch.utils.data import Dataset, DataLoader, Subset
 from torchvision import transforms as T
 from PIL import Image
 import lightning.pytorch as pl
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -628,19 +632,19 @@ class LAQDataModule(pl.LightningDataModule):
             adapter = self._get_adapter(source_type)
             scenes = adapter.collect_scenes(source_root, filters=source_filters)
 
-            print(f"✓ Loaded {len(scenes)} scenes from {source_type} ({source_root})")
+            logger.info(f"✓ Loaded {len(scenes)} scenes from {source_type} ({source_root})")
             all_scenes.extend(scenes)
 
         # Apply global filters if specified
         if self.filters:
             filter_obj = SceneFilter(self.filters)
             all_scenes = filter_obj.filter_scenes(all_scenes)
-            print(f"✓ After global filtering: {len(all_scenes)} scenes")
+            logger.info(f"✓ After global filtering: {len(all_scenes)} scenes")
 
         # Filter by min_frames
         all_scenes = [s for s in all_scenes if s.num_frames >= self.min_frames]
 
-        print(f"✓ Total scenes: {len(all_scenes)}")
+        logger.info(f"✓ Total scenes: {len(all_scenes)}")
         return all_scenes
 
     def _split_scenes_by_fixed_count(
@@ -686,7 +690,7 @@ class LAQDataModule(pl.LightningDataModule):
             if target_pairs == 0:
                 # No val pairs requested for this dataset
                 train_scenes.extend(dtype_scenes)
-                print(f"  - {dtype}: {len(dtype_scenes)} train scenes, 0 val scenes (no val requested)")
+                logger.info(f"  - {dtype}: {len(dtype_scenes)} train scenes, 0 val scenes (no val requested)")
                 continue
 
             # Shuffle deterministically
@@ -713,7 +717,7 @@ class LAQDataModule(pl.LightningDataModule):
             # Calculate train frame pair count for logging
             train_pair_count = sum(pairs_per_scene(s) for s in train_subset)
 
-            print(f"  - {dtype}: {len(train_subset)} train scenes ({train_pair_count} pairs), "
+            logger.info(f"  - {dtype}: {len(train_subset)} train scenes ({train_pair_count} pairs), "
                   f"{len(val_subset)} val scenes ({val_pair_count} pairs, target: {target_pairs})")
 
         # Shuffle final lists
@@ -723,7 +727,7 @@ class LAQDataModule(pl.LightningDataModule):
         total_train_pairs = sum(pairs_per_scene(s) for s in train_scenes)
         total_val_pairs = sum(pairs_per_scene(s) for s in val_scenes)
 
-        print(f"✓ Fixed count split: {len(train_scenes)} train scenes ({total_train_pairs} pairs), "
+        logger.info(f"✓ Fixed count split: {len(train_scenes)} train scenes ({total_train_pairs} pairs), "
               f"{len(val_scenes)} val scenes ({total_val_pairs} pairs)")
         return train_scenes, val_scenes
 
@@ -744,7 +748,7 @@ class LAQDataModule(pl.LightningDataModule):
             if (s.scene_folder, s.scene_idx) not in val_ids
         ]
 
-        print(f"✓ Metadata split: {len(train_scenes)} train, {len(val_scenes)} val scenes")
+        logger.info(f"✓ Metadata split: {len(train_scenes)} train, {len(val_scenes)} val scenes")
         return train_scenes, val_scenes
 
     def _split_scenes_by_ratio(
@@ -795,9 +799,9 @@ class LAQDataModule(pl.LightningDataModule):
             dt = s.extras.get("dataset_type", "unknown")
             val_by_type[dt] = val_by_type.get(dt, 0) + 1
         
-        print(f"✓ Stratified split: {len(train_scenes)} train, {len(val_scenes)} val scenes")
-        print(f"  Train by dataset: {train_by_type}")
-        print(f"  Val by dataset: {val_by_type}")
+        logger.info(f"✓ Stratified split: {len(train_scenes)} train, {len(val_scenes)} val scenes")
+        logger.info(f"  Train by dataset: {train_by_type}")
+        logger.info(f"  Val by dataset: {val_by_type}")
         
         return train_scenes, val_scenes
 
@@ -811,7 +815,7 @@ class LAQDataModule(pl.LightningDataModule):
             bucket_filter = SceneFilter(bucket_filters)
             bucket_scenes = bucket_filter.filter_scenes(scenes)
             buckets[bucket_name] = bucket_scenes
-            print(f"  - Val bucket '{bucket_name}': {len(bucket_scenes)} scenes")
+            logger.info(f"  - Val bucket '{bucket_name}': {len(bucket_scenes)} scenes")
 
         return buckets
 
@@ -825,7 +829,7 @@ class LAQDataModule(pl.LightningDataModule):
             bucket_filter = SceneFilter(bucket_filters)
             bucket_scenes = bucket_filter.filter_scenes(scenes)
             buckets[bucket_name] = bucket_scenes
-            print(f"  - Train bucket '{bucket_name}': {len(bucket_scenes)} scenes")
+            logger.info(f"  - Train bucket '{bucket_name}': {len(bucket_scenes)} scenes")
 
         return buckets
 
@@ -846,7 +850,7 @@ class LAQDataModule(pl.LightningDataModule):
         val_bucket_scenes = {}
         train_bucket_scenes = {}
         if self.val_buckets:
-            print("Building buckets:")
+            logger.info("Building buckets:")
             val_bucket_scenes = self._build_validation_buckets(val_scenes)
             train_bucket_scenes = self._build_training_buckets(train_scenes)
 
@@ -1142,10 +1146,10 @@ class OXEDataModule(pl.LightningDataModule):
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
             )
-            print(f"✓ OXE DataModule initialized (single dataset)")
-            print(f"  - Dataset: {cfg['name']}")
-            print(f"  - Train split: {cfg.get('train_split', 'train[:90%]')}")
-            print(f"  - Val split: {cfg.get('val_split', 'train[90%:]')}")
+            logger.info(f"✓ OXE DataModule initialized (single dataset)")
+            logger.info(f"  - Dataset: {cfg['name']}")
+            logger.info(f"  - Train split: {cfg.get('train_split', 'train[:90%]')}")
+            logger.info(f"  - Val split: {cfg.get('val_split', 'train[90%:]')}")
         else:
             # Multiple datasets - use interleaving
             self.train_dataset = MultiOXEFramePairDataset(
@@ -1167,12 +1171,12 @@ class OXEDataModule(pl.LightningDataModule):
                 persistent_iterator=self.persistent_iterator,
             )
             dataset_names = [cfg["name"] for cfg in self.dataset_configs]
-            print(f"✓ OXE DataModule initialized (multi-dataset)")
-            print(f"  - Datasets: {', '.join(dataset_names)}")
+            logger.info(f"✓ OXE DataModule initialized (multi-dataset)")
+            logger.info(f"  - Datasets: {', '.join(dataset_names)}")
 
-        print(f"  - Offset: {self.offset} steps")
-        print(f"  - Image size: {self.image_size}")
-        print(f"  - Shuffle buffer: {self.shuffle_buffer}")
+        logger.info(f"  - Offset: {self.offset} steps")
+        logger.info(f"  - Image size: {self.image_size}")
+        logger.info(f"  - Shuffle buffer: {self.shuffle_buffer}")
 
     def train_dataloader(self):
         """Create training dataloader."""

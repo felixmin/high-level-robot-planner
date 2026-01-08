@@ -13,6 +13,7 @@ Usage:
 """
 
 import sys
+import logging
 from pathlib import Path
 
 # Add packages to path
@@ -24,7 +25,6 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
-from lightning.pytorch.loggers import WandbLogger
 
 
 class ProgressLoggerCallback(Callback):
@@ -37,6 +37,7 @@ class ProgressLoggerCallback(Callback):
         if (trainer.global_step + 1) % self.log_every_n_steps == 0:
             loss = outputs.get("loss", 0) if isinstance(outputs, dict) else outputs
             lr = trainer.optimizers[0].param_groups[0]["lr"]
+            # Use print() for progress output (captured by WandB and unified logging)
             print(
                 f"[Step {trainer.global_step + 1}] "
                 f"loss={float(loss):.4f}, lr={lr:.2e}, "
@@ -47,10 +48,12 @@ class ProgressLoggerCallback(Callback):
         metrics = {k: v for k, v in trainer.callback_metrics.items() if "val" in k}
         if metrics:
             metrics_str = ", ".join(f"{k}={float(v):.4f}" for k, v in metrics.items())
+            # Use print() for progress output (captured by WandB and unified logging)
             print(f"[Validation] step={trainer.global_step}, {metrics_str}")
 
 from common.data import LAQDataModule, OXEDataModule
 from common.logging import set_seed, count_parameters
+from common.unified_logging import setup_unified_logging, setup_wandb_with_unified_paths
 from laq import (
     LAQTask,
     EMACallback,
@@ -71,25 +74,46 @@ def main(cfg: DictConfig):
     4. Setup Lightning trainer with callbacks
     5. Train the model
     """
-    print("=" * 80)
-    print("LAPA Stage 1: LAQ Training")
-    print("=" * 80)
-    print("\nConfiguration:")
-    print(OmegaConf.to_yaml(cfg))
-    print("=" * 80)
+    # Setup unified logging if enabled
+    use_unified_logging = cfg.logging.get("unified", True)
+
+    if use_unified_logging:
+        logger, output_dir = setup_unified_logging(
+            workspace_root=workspace_root,
+            job_id=None,  # Auto-detect SLURM_JOB_ID or use 'local'
+            log_level=cfg.logging.get("level", "INFO"),
+            capture_stdout=cfg.logging.get("capture_stdout", True),
+        )
+    else:
+        # Fallback to basic logging for backward compatibility
+        logger = logging.getLogger("laq.training")
+        logging.basicConfig(
+            level=logging.INFO,
+            format='[%(asctime)s][%(name)s][%(levelname)s] - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        output_dir = Path("./outputs")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("=" * 80)
+    logger.info("LAPA Stage 1: LAQ Training")
+    logger.info("=" * 80)
+    logger.info("\nConfiguration:")
+    logger.info(OmegaConf.to_yaml(cfg))
+    logger.info("=" * 80)
 
     # Set random seed for reproducibility
     if hasattr(cfg, "seed"):
         set_seed(cfg.seed)
-        print(f"✓ Random seed set to {cfg.seed}")
+        logger.info(f"✓ Random seed set to {cfg.seed}")
     else:
         set_seed(42)
-        print(f"✓ Random seed set to 42 (default)")
+        logger.info(f"✓ Random seed set to 42 (default)")
 
     # Initialize data module
-    print("\n" + "=" * 80)
-    print("Initializing Data Module")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info("Initializing Data Module")
+    logger.info("=" * 80)
 
     # Detect data module type based on config
     data_config = {k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
@@ -98,34 +122,34 @@ def main(cfg: DictConfig):
         # OXE streaming dataset (single or multi-dataset)
         datamodule = OXEDataModule(**data_config)
         datamodule.setup()
-        print(f"  - Batch size: {cfg.data.batch_size}")
-        print(f"  - Estimated train pairs: ~{len(datamodule.train_dataset):,}")
+        logger.info(f"  - Batch size: {cfg.data.batch_size}")
+        logger.info(f"  - Estimated train pairs: ~{len(datamodule.train_dataset):,}")
     else:
         # Multi-source file-based dataset (YouTube, Bridge, etc.)
         datamodule = LAQDataModule(**data_config)
         datamodule.setup()
 
         source_info = [f"{s['type']}: {s['root']}" for s in cfg.data.sources]
-        print(f"✓ DataModule initialized (multi-source)")
+        logger.info(f"✓ DataModule initialized (multi-source)")
         for s in source_info:
-            print(f"  - Source: {s}")
-        print(f"  - Image size: {cfg.data.image_size}")
-        print(f"  - Batch size: {cfg.data.batch_size}")
-        print(f"  - Total scenes available: {datamodule.total_available}")
-        print(f"  - Train frame pairs: {len(datamodule.train_dataset)}")
-        print(f"  - Val frame pairs: {len(datamodule.val_dataset)}")
+            logger.info(f"  - Source: {s}")
+        logger.info(f"  - Image size: {cfg.data.image_size}")
+        logger.info(f"  - Batch size: {cfg.data.batch_size}")
+        logger.info(f"  - Total scenes available: {datamodule.total_available}")
+        logger.info(f"  - Train frame pairs: {len(datamodule.train_dataset)}")
+        logger.info(f"  - Val frame pairs: {len(datamodule.val_dataset)}")
 
         # Print per-dataset frame pair breakdown
         pairs_per_dataset = datamodule.get_pairs_per_dataset()
         if pairs_per_dataset["train"]:
-            print(f"  - Train pairs by dataset: {pairs_per_dataset['train']}")
+            logger.info(f"  - Train pairs by dataset: {pairs_per_dataset['train']}")
         if pairs_per_dataset["val"]:
-            print(f"  - Val pairs by dataset: {pairs_per_dataset['val']}")
+            logger.info(f"  - Val pairs by dataset: {pairs_per_dataset['val']}")
 
     # Initialize LAQ task
-    print("\n" + "=" * 80)
-    print("Initializing LAQ Task")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info("Initializing LAQ Task")
+    logger.info("=" * 80)
 
     model_config = cfg.model
     training_config = cfg.training
@@ -137,21 +161,25 @@ def main(cfg: DictConfig):
     )
 
     num_params = count_parameters(task.model)
-    print(f"✓ LAQ model initialized")
-    print(f"  - Total parameters: {num_params:,}")
-    print(f"  - Codebook size: {model_config.codebook_size}")
-    print(f"  - Code sequence length: {model_config.code_seq_len}")
+    logger.info(f"✓ LAQ model initialized")
+    logger.info(f"  - Total parameters: {num_params:,}")
+    logger.info(f"  - Codebook size: {model_config.codebook_size}")
+    logger.info(f"  - Code sequence length: {model_config.code_seq_len}")
 
     # Setup callbacks
-    print("\n" + "=" * 80)
-    print("Setting up Callbacks")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info("Setting up Callbacks")
+    logger.info("=" * 80)
 
     callbacks = []
 
-    # Checkpointing
+    # Checkpointing (save to unified output directory)
     checkpoint_config = training_config.checkpoint
+    checkpoint_dir = output_dir / "checkpoints"
+    checkpoint_dir.mkdir(exist_ok=True)
+
     checkpoint_callback = ModelCheckpoint(
+        dirpath=str(checkpoint_dir),  # Route to unified output directory
         monitor=checkpoint_config.monitor,
         mode=checkpoint_config.mode,
         save_top_k=checkpoint_config.save_top_k,
@@ -161,17 +189,18 @@ def main(cfg: DictConfig):
         verbose=True,
     )
     callbacks.append(checkpoint_callback)
-    print(f"✓ Checkpoint callback added (monitor={checkpoint_config.monitor})")
+    logger.info(f"✓ Checkpoint callback added (monitor={checkpoint_config.monitor})")
+    logger.info(f"  - Checkpoint directory: {checkpoint_dir}")
 
     # Learning rate monitoring
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
     callbacks.append(lr_monitor)
-    print("✓ Learning rate monitor added")
+    logger.info("✓ Learning rate monitor added")
 
     # Progress logging (for cluster jobs where tqdm doesn't work in log files)
     progress_logger = ProgressLoggerCallback(log_every_n_steps=100)
     callbacks.append(progress_logger)
-    print("✓ Progress logger added (logs every 100 steps)")
+    logger.info("✓ Progress logger added (logs every 100 steps)")
 
     # Setup validation strategies
     val_config = training_config.validation
@@ -194,13 +223,13 @@ def main(cfg: DictConfig):
         max_cached_samples=val_config.get("max_cached_samples", 256),
     )
     callbacks.append(val_strategy_callback)
-    print(f"✓ Validation strategy callback added ({len(strategies)} strategies)")
-    print(f"  - Max cached samples: {val_config.get('max_cached_samples', 256)}")
+    logger.info(f"✓ Validation strategy callback added ({len(strategies)} strategies)")
+    logger.info(f"  - Max cached samples: {val_config.get('max_cached_samples', 256)}")
     if bucket_configs:
-        print(f"  - Buckets: {list(bucket_configs.keys())}")
+        logger.info(f"  - Buckets: {list(bucket_configs.keys())}")
     for strategy in strategies:
         bucket_info = f", buckets={strategy.buckets}" if strategy.buckets else ""
-        print(f"  - {strategy.name}: every {strategy.every_n_validations} validations{bucket_info}")
+        logger.info(f"  - {strategy.name}: every {strategy.every_n_validations} validations{bucket_info}")
 
     # Optional EMA
     if training_config.get("use_ema", False):
@@ -210,29 +239,30 @@ def main(cfg: DictConfig):
             update_after_step=training_config.get("ema_update_after_step", 0),
         )
         callbacks.append(ema_callback)
-        print("✓ EMA callback added")
+        logger.info("✓ EMA callback added")
 
-    # Setup logger
-    print("\n" + "=" * 80)
-    print("Setting up Logger")
-    print("=" * 80)
+    # Setup WandB logger (use unified logging paths)
+    logger.info("\n" + "=" * 80)
+    logger.info("Setting up WandB Logger")
+    logger.info("=" * 80)
 
     if hasattr(cfg, "logging") and cfg.logging.get("use_wandb", True):
-        logger = WandbLogger(
-            project=cfg.logging.get("project", "laq-training"),
+        wandb_logger = setup_wandb_with_unified_paths(
+            logger=logger,
+            output_dir=output_dir,
+            project=cfg.logging.get("project", "hlrp"),
             name=cfg.experiment.name,
-            save_dir=cfg.logging.get("save_dir", "logs"),
-            tags=cfg.logging.get("tags", ["laq"]),
+            tags=cfg.logging.get("tags", []),
+            use_wandb=True,
         )
-        print(f"✓ WandB logger initialized (project={cfg.logging.get('project', 'laq-training')})")
     else:
-        logger = None
-        print("✓ No logger (WandB disabled)")
+        wandb_logger = None
+        logger.info("✓ WandB disabled")
 
     # Setup profiler
-    print("\n" + "=" * 80)
-    print("Setting up Profiler")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info("Setting up Profiler")
+    logger.info("=" * 80)
 
     profiler = None
     profiler_type = None
@@ -244,11 +274,11 @@ def main(cfg: DictConfig):
         if profiler_type == "simple":
             from lightning.pytorch.profilers import SimpleProfiler
             profiler = SimpleProfiler(dirpath=dirpath, filename=filename)
-            print(f"✓ SimpleProfiler enabled")
+            logger.info(f"✓ SimpleProfiler enabled")
         elif profiler_type == "advanced":
             from lightning.pytorch.profilers import AdvancedProfiler
             profiler = AdvancedProfiler(dirpath=dirpath, filename=filename)
-            print(f"✓ AdvancedProfiler enabled")
+            logger.info(f"✓ AdvancedProfiler enabled")
         elif profiler_type == "pytorch":
             from lightning.pytorch.profilers import PyTorchProfiler
             profiler = PyTorchProfiler(
@@ -258,15 +288,15 @@ def main(cfg: DictConfig):
                 export_to_chrome=True,
                 row_limit=20,
             )
-            print(f"✓ PyTorchProfiler enabled (high overhead!)")
-        print(f"  - Output: {dirpath}/{filename}")
+            logger.info(f"✓ PyTorchProfiler enabled (high overhead!)")
+        logger.info(f"  - Output: {dirpath}/{filename}")
     else:
-        print("✓ Profiler disabled")
+        logger.info("✓ Profiler disabled")
 
     # Setup trainer
-    print("\n" + "=" * 80)
-    print("Setting up Trainer")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info("Setting up Trainer")
+    logger.info("=" * 80)
 
     # Get validation check interval from config
     val_check_interval = training_config.validation.get("check_interval", 10000)
@@ -283,7 +313,7 @@ def main(cfg: DictConfig):
         gradient_clip_val=training_config.gradient.clip_val,
         gradient_clip_algorithm=training_config.gradient.clip_algorithm,
         callbacks=callbacks,
-        logger=logger,
+        logger=wandb_logger,  # Use wandb_logger, not logger (which is our unified logger)
         profiler=profiler,
         log_every_n_steps=10,
         val_check_interval=val_check_interval,  # Configurable validation frequency
@@ -292,35 +322,35 @@ def main(cfg: DictConfig):
         enable_model_summary=True,
     )
 
-    print(f"✓ Trainer initialized")
-    print(f"  - Max epochs: {training_config.epochs}")
-    print(f"  - Val check interval: {val_check_interval}")
-    print(f"  - Limit val batches: {limit_val_batches}")
-    print(f"  - Precision: {cfg.get('precision', '32-true')}")
-    print(f"  - Accelerator: auto")
-    print(f"  - Devices: auto")
-    print(f"  - Profiler: {profiler_type if profiler else 'disabled'}")
+    logger.info(f"✓ Trainer initialized")
+    logger.info(f"  - Max epochs: {training_config.epochs}")
+    logger.info(f"  - Val check interval: {val_check_interval}")
+    logger.info(f"  - Limit val batches: {limit_val_batches}")
+    logger.info(f"  - Precision: {cfg.get('precision', '32-true')}")
+    logger.info(f"  - Accelerator: auto")
+    logger.info(f"  - Devices: auto")
+    logger.info(f"  - Profiler: {profiler_type if profiler else 'disabled'}")
 
     # Train
-    print("\n" + "=" * 80)
-    print("Starting Training")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info("Starting Training")
+    logger.info("=" * 80)
 
     # Check for resume checkpoint
     ckpt_path = training_config.get("resume_from_checkpoint", None)
     if ckpt_path:
-        print(f"✓ Resuming from checkpoint: {ckpt_path}")
+        logger.info(f"✓ Resuming from checkpoint: {ckpt_path}")
 
     trainer.fit(task, datamodule=datamodule, ckpt_path=ckpt_path)
 
-    print("\n" + "=" * 80)
-    print("Training Complete!")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info("Training Complete!")
+    logger.info("=" * 80)
 
     # Print best checkpoint
     if checkpoint_callback.best_model_path:
-        print(f"✓ Best checkpoint: {checkpoint_callback.best_model_path}")
-        print(f"  - Best val/loss: {checkpoint_callback.best_model_score:.4f}")
+        logger.info(f"✓ Best checkpoint: {checkpoint_callback.best_model_path}")
+        logger.info(f"  - Best val/loss: {checkpoint_callback.best_model_score:.4f}")
 
 
 if __name__ == "__main__":

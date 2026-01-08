@@ -4,18 +4,37 @@
 defaults:
   - _self_
   - experiment: laq_debug  # Default experiment (override with experiment=X)
+  - override hydra/hydra_logging: disabled  # Disable Hydra's own logging
+  - override hydra/job_logging: none        # We handle logging ourselves
 
 # Global settings
 experiment_name: ${experiment.name}
 seed: 42
 precision: "32-true"  # "32-true", "16-mixed", "bf16-mixed"
 
+# Hydra configuration (routes .hydra config backups to runs folder)
+hydra:
+  run:
+    dir: runs/output/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: runs/output/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
 # Logging configuration
 logging:
-  use_wandb: true  # Set to true to enable WandB logging
-  project: hlrp
-  save_dir: ./logs
-  log_model: false
-  tags: []
-  level: INFO
+  # Unified logging system (recommended)
+  unified: true              # Enable unified logging to runs/ folder
+  level: INFO                # Logging level (DEBUG, INFO, WARNING, ERROR)
+
+  # WandB integration
+  use_wandb: true            # Enable Weights & Biases logging
+  project: hlrp              # WandB project name
+  log_model: false           # Upload model checkpoints to WandB
+  tags: []                   # WandB tags for run organization
+
+  # Output structure:
+  #   runs/logs/{job_id}.log                          - All logger.info() calls (timestamped)
+  #   runs/output/{job_id}/wandb/                     - WandB files (includes print() capture)
+  #   runs/output/{job_id}/checkpoints/               - Model checkpoints
+  #   runs/output/hydra/YYYY-MM-DD/HH-MM-SS/.hydra/   - Hydra config backups
 
