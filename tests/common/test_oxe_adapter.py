@@ -124,16 +124,17 @@ class TestMultiOXEFramePairDataset:
                     "train_split": "train[:50]",
                     "val_split": "train[50:60]",
                     "weight": 0.5,
+                    "offset": 5,
                 },
                 {
                     "name": "bridge",
                     "train_split": "train[:50]",
                     "val_split": "train[50:60]",
                     "weight": 0.5,
+                    "offset": 5,
                 },
             ],
             image_size=64,
-            offset=5,
             shuffle_buffer=10,
             return_metadata=True,
             is_train=True,
@@ -225,10 +226,9 @@ class TestMemoryStability:
 
         ds = MultiOXEFramePairDataset(
             datasets=[
-                {"name": "language_table", "train_split": "train[:30]", "weight": 1.0},
+                {"name": "language_table", "train_split": "train[:30]", "weight": 1.0, "offset": 5},
             ],
             image_size=64,
-            offset=5,
             shuffle_buffer=10,
             return_metadata=False,
             is_train=True,

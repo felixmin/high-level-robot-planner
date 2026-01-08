@@ -61,12 +61,11 @@ class TestExperimentConfigs:
 
             # Validate training (full training with 100 epochs)
             assert cfg.training.epochs == 100
-
+    
             # Validate cluster config (H100 single node)
             assert cfg.cluster.name == "lrz_h100"
             assert cfg.cluster.compute.num_nodes == 1
-            assert cfg.cluster.compute.gpus_per_node == 4
-
+            assert cfg.cluster.compute.gpus_per_node == 1
     def test_vla_7b_config(self, config_dir):
         """Test VLA 7B configuration loads correctly."""
         with initialize_config_dir(version_base=None, config_dir=config_dir):

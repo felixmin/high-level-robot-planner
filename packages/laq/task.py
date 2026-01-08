@@ -98,6 +98,7 @@ class LAQTask(pl.LightningModule):
             use_dinov3_encoder=model_config.get("use_dinov3_encoder", False),
             dinov3_model_name=model_config.get("dinov3_model_name", "facebook/dinov3-vits16-pretrain-lvd1689m"),
             dinov3_pool_to_grid=model_config.get("dinov3_pool_to_grid", None),
+            use_aux_loss=model_config.get("use_aux_loss", True),
         )
 
         # Storage for validation and training batches (for visualization)
@@ -192,10 +193,12 @@ class LAQTask(pl.LightningModule):
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
             self.log("train/loss", loss, prog_bar=True, sync_dist=True)
-            self.log("train/main_dino_loss", metrics["main_dino_loss"], sync_dist=True)
-            self.log("train/aux_pixel_loss", metrics["aux_pixel_loss"], sync_dist=True)
-            self.log("train/num_unique_codes", metrics["num_unique_codes"], prog_bar=True, sync_dist=True)
             self.log("train/lr", self.optimizers().param_groups[0]["lr"], prog_bar=True)
+            
+            # Dynamic logging of model metrics
+            for k, v in metrics.items():
+                is_prog_bar = (k == "num_unique_codes")
+                self.log(f"train/{k}", v, prog_bar=is_prog_bar, sync_dist=True)
 
         # Store first batch for visualization
         if batch_idx == 0 and self.training_batch is None:
@@ -230,9 +233,10 @@ class LAQTask(pl.LightningModule):
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
             self.log("val/loss", loss, prog_bar=True, sync_dist=True)
-            self.log("val/main_dino_loss", metrics["main_dino_loss"], sync_dist=True)
-            self.log("val/aux_pixel_loss", metrics["aux_pixel_loss"], sync_dist=True)
-            self.log("val/num_unique_codes", metrics["num_unique_codes"], sync_dist=True)
+            
+            # Dynamic logging of model metrics
+            for k, v in metrics.items():
+                self.log(f"val/{k}", v, sync_dist=True)
 
         # Store first batch for visualization
         if batch_idx == 0 and self.validation_batch is None:

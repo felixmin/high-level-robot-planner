@@ -71,6 +71,7 @@ class LatentActionQuantization(nn.Module):
         use_dinov3_encoder = False,
         dinov3_model_name = "facebook/dinov3-vits16-pretrain-lvd1689m",
         dinov3_pool_to_grid = None,  # Pool DINO features to this grid size (e.g., 8 for 8x8)
+        use_aux_loss = True,
     ):
         """
         einstein notations:
@@ -84,6 +85,7 @@ class LatentActionQuantization(nn.Module):
 
         super().__init__()
 
+        self.use_aux_loss = use_aux_loss
         self.code_seq_len = code_seq_len
         self.image_size = pair(image_size)
         self.patch_size = pair(patch_size)
@@ -439,30 +441,46 @@ class LatentActionQuantization(nn.Module):
         # --- 2. Aux Path: Pixel Decoding (Visualization) ---
         # Predict Pixels of next frame from Pixel context + Detached Action
         
-        # Use pixel-based projection for decoder context
-        dec_first_frame_tokens = self.decoder_context_projection(first_frame)
-        
-        # Detach action so Aux loss doesn't affect Encoder/VQ
-        aux_actions = tokens.detach()
-        
-        # Run Aux Decoder (via self.decode which is now mapped to Aux)
-        recon_video = self.decode(dec_first_frame_tokens, aux_actions)
-
-        recon_frames = rearrange(recon_video, 'b c 1 h w -> b c h w')
-
-        if return_recons_only:
-            return recon_frames
-
-        # Aux loss: pixel reconstruction (gradients don't flow to encoder/VQ)
-        aux_loss = F.mse_loss(rest_frames, recon_video)
-
-        total_loss = main_loss + aux_loss
-
         metrics = {
             "num_unique_codes": num_unique_indices,
             "main_dino_loss": main_loss.detach(),
-            "aux_pixel_loss": aux_loss.detach(),
         }
+        
+        total_loss = main_loss
+
+        # Run Aux decoder if enabled OR if we explicitly asked for reconstructions
+        if self.use_aux_loss or return_recons_only:
+            # Use pixel-based projection for decoder context
+            dec_first_frame_tokens = self.decoder_context_projection(first_frame)
+            
+            # Detach action so Aux loss doesn't affect Encoder/VQ
+            aux_actions = tokens.detach()
+            
+            # Run Aux Decoder (via self.decode which is now mapped to Aux)
+            recon_video = self.decode(dec_first_frame_tokens, aux_actions)
+
+            recon_frames = rearrange(recon_video, 'b c 1 h w -> b c h w')
+
+            if return_recons_only:
+                return recon_frames
+
+            # Aux loss: pixel reconstruction (gradients don't flow to encoder/VQ)
+            # Only compute if enabled (otherwise we just ran for return_recons_only, 
+            # but that branch returns early above)
+            if self.use_aux_loss:
+                aux_loss = F.mse_loss(rest_frames, recon_video)
+                total_loss = total_loss + aux_loss
+                metrics["aux_pixel_loss"] = aux_loss.detach()
+
+        elif not self.use_aux_loss:
+            # DDP COMPATIBILITY FIX:
+            # If we don't run the aux decoder, its parameters won't have gradients.
+            # DDP will crash unless we "use" them or set find_unused_parameters=True.
+            # We solve this by adding a 0.0 * param_sum term to the loss.
+            dummy_loss = 0.0 * sum(p.sum() for p in self.aux_decoder.parameters())
+            dummy_loss = dummy_loss + 0.0 * sum(p.sum() for p in self.decoder_context_projection.parameters())
+            dummy_loss = dummy_loss + 0.0 * sum(p.sum() for p in self.aux_to_pixels.parameters())
+            total_loss = total_loss + dummy_loss
 
         return total_loss, metrics
         
