@@ -19,6 +19,7 @@ from .scatter import (
     TopSequencesScatterStrategy,
     StateSequenceScatterStrategy,
 )
+from .flow import FlowVisualizationStrategy
 
 
 # Strategy type registry
@@ -34,6 +35,7 @@ STRATEGY_REGISTRY: Dict[str, Type[ValidationStrategy]] = {
     "action_sequence_scatter": ActionSequenceScatterStrategy,
     "top_sequences_scatter": TopSequencesScatterStrategy,
     "state_sequence_scatter": StateSequenceScatterStrategy,
+    "flow_visualization": FlowVisualizationStrategy,
 }
 
 

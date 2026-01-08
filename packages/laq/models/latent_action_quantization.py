@@ -1,6 +1,14 @@
+"""
+Latent Action Quantization (LAQ) Model.
+
+A VQ-VAE that encodes frame-to-frame transitions into discrete latent action codes.
+Supports optional optical flow supervision via RAFT teacher for motion-enriched latents.
+"""
+
 import logging
 import math
 from pathlib import Path
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -72,6 +80,8 @@ class LatentActionQuantization(nn.Module):
         dinov3_model_name = "facebook/dinov3-vits16-pretrain-lvd1689m",
         dinov3_pool_to_grid = None,  # Pool DINO features to this grid size (e.g., 8 for 8x8)
         use_aux_loss = True,
+        # Flow supervision config (optional - set to enable flow loss)
+        flow_config: Optional["FlowConfig"] = None,
     ):
         """
         einstein notations:
@@ -86,6 +96,7 @@ class LatentActionQuantization(nn.Module):
         super().__init__()
 
         self.use_aux_loss = use_aux_loss
+        self.flow_config = flow_config
         self.code_seq_len = code_seq_len
         self.image_size = pair(image_size)
         self.patch_size = pair(patch_size)
@@ -193,6 +204,31 @@ class LatentActionQuantization(nn.Module):
             nn.Linear(dim, channels * eff_patch_h * eff_patch_w),
             Rearrange('b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)', p1 = eff_patch_h, p2 = eff_patch_w)
         )
+
+        # --- Flow Decoder (Optional) ---
+        # Predicts optical flow from pixel context + latent action
+        if flow_config is not None:
+            from laq.models.flow import FlowDecoder, RAFTTeacher
+
+            logger.info(
+                f"Initializing flow supervision (model={flow_config.model}, "
+                f"depth={flow_config.decoder_depth}, weight={flow_config.loss_weight})"
+            )
+
+            self.flow_decoder = FlowDecoder(
+                dim=dim,
+                depth=flow_config.decoder_depth,
+                heads=heads,
+                dim_head=dim_head,
+                image_size=self.image_size,
+                effective_grid_size=self._effective_grid_size,
+                attn_dropout=attn_dropout,
+                ff_dropout=ff_dropout,
+            )
+            self.flow_teacher = RAFTTeacher(flow_config.model)
+        else:
+            self.flow_decoder = None
+            self.flow_teacher = None
 
         # Pre-compute action shape from code_seq_len (used in forward/inference)
         if math.sqrt(code_seq_len) % 1 == 0:
@@ -465,22 +501,41 @@ class LatentActionQuantization(nn.Module):
                 return recon_frames
 
             # Aux loss: pixel reconstruction (gradients don't flow to encoder/VQ)
-            # Only compute if enabled (otherwise we just ran for return_recons_only, 
+            # Only compute if enabled (otherwise we just ran for return_recons_only,
             # but that branch returns early above)
             if self.use_aux_loss:
                 aux_loss = F.mse_loss(rest_frames, recon_video)
                 total_loss = total_loss + aux_loss
                 metrics["aux_pixel_loss"] = aux_loss.detach()
 
-        elif not self.use_aux_loss:
-            # DDP COMPATIBILITY FIX:
-            # If we don't run the aux decoder, its parameters won't have gradients.
-            # DDP will crash unless we "use" them or set find_unused_parameters=True.
-            # We solve this by adding a 0.0 * param_sum term to the loss.
-            dummy_loss = 0.0 * sum(p.sum() for p in self.aux_decoder.parameters())
-            dummy_loss = dummy_loss + 0.0 * sum(p.sum() for p in self.decoder_context_projection.parameters())
-            dummy_loss = dummy_loss + 0.0 * sum(p.sum() for p in self.aux_to_pixels.parameters())
-            total_loss = total_loss + dummy_loss
+        # --- 3. Flow Path: Optical Flow Prediction (Optional) ---
+        # Predict optical flow from pixel context + latent action
+        # Unlike aux_loss (visualization only), flow loss DOES backprop to encoder
+        # to enrich latent representations with motion information
+        if self.flow_decoder is not None:
+            from laq.models.flow import compute_flow_loss
+
+            # Get pixel context (reuse from aux path if available, else compute)
+            if 'dec_first_frame_tokens' not in locals():
+                dec_first_frame_tokens = self.decoder_context_projection(first_frame)
+
+            # NO detach - gradients flow back to encoder/VQ to learn motion-aware representations
+            flow_actions = tokens
+
+            # Compute ground-truth flow from RAFT teacher
+            gt_flow = self.flow_teacher.compute_flow(first_frame, rest_frames)
+
+            # Predict flow from context + action
+            pred_flow = self.flow_decoder(
+                dec_first_frame_tokens,
+                flow_actions,
+                attn_bias,
+            )
+
+            # Flow loss - gradients improve encoder's motion representation
+            flow_loss = compute_flow_loss(pred_flow, gt_flow)
+            total_loss = total_loss + self.flow_config.loss_weight * flow_loss
+            metrics["flow_loss"] = flow_loss.detach()
 
         return total_loss, metrics
         

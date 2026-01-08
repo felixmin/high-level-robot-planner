@@ -19,3 +19,11 @@ attn_dropout: 0.0       # Attention dropout
 ff_dropout: 0.0         # Feed-forward dropout
 use_aux_loss: true      # Whether to use auxiliary pixel loss
 
+# Optional: Flow supervision config
+# Enriches latent space with motion information via RAFT knowledge distillation
+# To enable, set flow config in experiment (see laq_oxe_all_val_3.yaml)
+# flow:
+#   model: raft_small    # "raft_small" or "raft_large"
+#   loss_weight: 0.1     # Weight for flow loss in total loss
+#   decoder_depth: 8     # Transformer depth for flow decoder
+

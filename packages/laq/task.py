@@ -18,6 +18,7 @@ import lightning.pytorch as pl
 from omegaconf import DictConfig, OmegaConf
 
 from laq.models.latent_action_quantization import LatentActionQuantization
+from laq.models.flow import FlowConfig
 
 
 def separate_weight_decayable_params(
@@ -83,6 +84,16 @@ class LAQTask(pl.LightningModule):
         self.training_config = training_config
         self.use_ema = use_ema
 
+        # Build flow config if specified
+        flow_config = None
+        if "flow" in model_config and model_config.flow is not None:
+            flow_cfg = model_config.flow
+            flow_config = FlowConfig(
+                model=flow_cfg.model,
+                loss_weight=flow_cfg.loss_weight,
+                decoder_depth=flow_cfg.decoder_depth,
+            )
+
         # Initialize LAQ model
         self.model = LatentActionQuantization(
             dim=model_config.dim,
@@ -102,6 +113,7 @@ class LAQTask(pl.LightningModule):
             dinov3_model_name=model_config.get("dinov3_model_name", "facebook/dinov3-vits16-pretrain-lvd1689m"),
             dinov3_pool_to_grid=model_config.get("dinov3_pool_to_grid", None),
             use_aux_loss=model_config.get("use_aux_loss", True),
+            flow_config=flow_config,
         )
 
         # Storage for validation and training batches (for visualization)

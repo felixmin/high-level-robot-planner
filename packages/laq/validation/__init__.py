@@ -28,6 +28,7 @@ from .scatter import (
     TopSequencesScatterStrategy,
     StateSequenceScatterStrategy,
 )
+from .flow import FlowVisualizationStrategy
 
 __all__ = [
     # Core
@@ -53,4 +54,5 @@ __all__ = [
     "ActionSequenceScatterStrategy",
     "TopSequencesScatterStrategy",
     "StateSequenceScatterStrategy",
+    "FlowVisualizationStrategy",
 ]
