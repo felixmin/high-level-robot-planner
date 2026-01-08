@@ -69,6 +69,48 @@ class TestFlowConfig:
                 decoder_depth=0,
             )
 
+    def test_warmup_weight_at_zero(self):
+        """Test that weight is 0 at step 0 with warmup."""
+        config = FlowConfig(
+            model="raft_small",
+            loss_weight=1.0,
+            decoder_depth=4,
+            warmup_steps=1000,
+        )
+        assert config.get_weight(0) == 0.0
+
+    def test_warmup_weight_at_half(self):
+        """Test that weight is 0.5 at halfway through warmup."""
+        config = FlowConfig(
+            model="raft_small",
+            loss_weight=1.0,
+            decoder_depth=4,
+            warmup_steps=1000,
+        )
+        assert config.get_weight(500) == 0.5
+
+    def test_warmup_weight_at_end(self):
+        """Test that weight is full after warmup completes."""
+        config = FlowConfig(
+            model="raft_small",
+            loss_weight=1.0,
+            decoder_depth=4,
+            warmup_steps=1000,
+        )
+        assert config.get_weight(1000) == 1.0
+        assert config.get_weight(2000) == 1.0  # Stays at max
+
+    def test_no_warmup(self):
+        """Test that weight is full immediately with no warmup."""
+        config = FlowConfig(
+            model="raft_small",
+            loss_weight=0.5,
+            decoder_depth=4,
+            warmup_steps=0,
+        )
+        assert config.get_weight(0) == 0.5
+        assert config.get_weight(100) == 0.5
+
 
 class TestFlowDecoder:
     """Test FlowDecoder architecture."""
@@ -300,9 +342,10 @@ class TestHydraConfigWithFlow:
             assert "flow" in cfg.experiment.description.lower()
 
             # Validate flow config
-            assert cfg.model.flow.model == "raft_small"
-            assert cfg.model.flow.loss_weight == 0.1
+            assert cfg.model.flow.model == "raft_large"
+            assert cfg.model.flow.loss_weight == 1.0
             assert cfg.model.flow.decoder_depth == 4
+            assert cfg.model.flow.warmup_steps == 10000
 
             # Validate aux loss enabled
             assert cfg.model.use_aux_loss is True

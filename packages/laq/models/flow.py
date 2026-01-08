@@ -36,6 +36,7 @@ class FlowConfig:
     model: FlowModelType
     loss_weight: float
     decoder_depth: int
+    warmup_steps: int = 0  # Steps to linearly ramp up flow loss (0 = no warmup)
 
     def __post_init__(self):
         if self.model not in ("raft_small", "raft_large"):
@@ -44,6 +45,19 @@ class FlowConfig:
             raise ValueError(f"flow.loss_weight must be positive, got {self.loss_weight}")
         if self.decoder_depth <= 0:
             raise ValueError(f"flow.decoder_depth must be positive, got {self.decoder_depth}")
+        if self.warmup_steps < 0:
+            raise ValueError(f"flow.warmup_steps must be non-negative, got {self.warmup_steps}")
+
+    def get_weight(self, step: int) -> float:
+        """Get effective loss weight at given training step.
+
+        Linearly ramps from 0 to loss_weight over warmup_steps.
+        """
+        if self.warmup_steps == 0:
+            return self.loss_weight
+
+        warmup_factor = min(1.0, step / self.warmup_steps)
+        return self.loss_weight * warmup_factor
 
 
 class RAFTTeacher(nn.Module):

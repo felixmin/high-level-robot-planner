@@ -92,6 +92,7 @@ class LAQTask(pl.LightningModule):
                 model=flow_cfg.model,
                 loss_weight=flow_cfg.loss_weight,
                 decoder_depth=flow_cfg.decoder_depth,
+                warmup_steps=flow_cfg.get("warmup_steps", 0),
             )
 
         # Initialize LAQ model

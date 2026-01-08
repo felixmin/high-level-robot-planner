@@ -534,8 +534,10 @@ class LatentActionQuantization(nn.Module):
 
             # Flow loss - gradients improve encoder's motion representation
             flow_loss = compute_flow_loss(pred_flow, gt_flow)
-            total_loss = total_loss + self.flow_config.loss_weight * flow_loss
+            flow_weight = self.flow_config.get_weight(step)
+            total_loss = total_loss + flow_weight * flow_loss
             metrics["flow_loss"] = flow_loss.detach()
+            metrics["flow_weight"] = flow_weight  # Track warmup progress
 
         return total_loss, metrics
         
