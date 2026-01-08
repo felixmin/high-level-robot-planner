@@ -257,15 +257,33 @@ class FlowDecoder(nn.Module):
 def compute_flow_loss(
     pred_flow: torch.Tensor,
     gt_flow: torch.Tensor,
+    normalize: bool = True,
 ) -> torch.Tensor:
     """
     Compute MSE loss between predicted and ground-truth flow.
 
+    Flow is normalized by image dimensions to put values in ~[-1, 1] range,
+    making the loss scale comparable to other losses (DINO, pixel).
+
     Args:
         pred_flow: Predicted flow [B, 2, H, W]
         gt_flow: Ground-truth flow from RAFT [B, 2, H, W]
+        normalize: If True, normalize flow by image size before loss
 
     Returns:
         loss: Scalar MSE loss
     """
+    if normalize:
+        # Normalize flow by image dimensions to get ~[-1, 1] range
+        # Flow channel 0 = dx (horizontal), normalize by W
+        # Flow channel 1 = dy (vertical), normalize by H
+        _, _, H, W = gt_flow.shape
+
+        # Create normalization tensor [1, 2, 1, 1] for broadcasting
+        norm = torch.tensor([W, H], device=gt_flow.device, dtype=gt_flow.dtype)
+        norm = norm.view(1, 2, 1, 1)
+
+        pred_flow = pred_flow / norm
+        gt_flow = gt_flow / norm
+
     return F.mse_loss(pred_flow, gt_flow)

@@ -145,12 +145,27 @@ class TestRAFTTeacher:
 class TestComputeFlowLoss:
     """Test flow loss computation."""
 
-    def test_mse_loss(self):
-        """Test that flow loss is MSE."""
+    def test_mse_loss_normalized(self):
+        """Test that flow loss is normalized MSE."""
         pred_flow = torch.randn(2, 2, 64, 64)
         gt_flow = torch.randn(2, 2, 64, 64)
 
-        loss = compute_flow_loss(pred_flow, gt_flow)
+        loss = compute_flow_loss(pred_flow, gt_flow, normalize=True)
+
+        # Manually compute normalized MSE
+        H, W = 64, 64
+        norm = torch.tensor([W, H]).view(1, 2, 1, 1)
+        pred_norm = pred_flow / norm
+        gt_norm = gt_flow / norm
+        expected = torch.nn.functional.mse_loss(pred_norm, gt_norm)
+        assert torch.allclose(loss, expected)
+
+    def test_mse_loss_unnormalized(self):
+        """Test that unnormalized flow loss is raw MSE."""
+        pred_flow = torch.randn(2, 2, 64, 64)
+        gt_flow = torch.randn(2, 2, 64, 64)
+
+        loss = compute_flow_loss(pred_flow, gt_flow, normalize=False)
 
         expected = torch.nn.functional.mse_loss(pred_flow, gt_flow)
         assert torch.allclose(loss, expected)
@@ -160,6 +175,18 @@ class TestComputeFlowLoss:
         flow = torch.randn(2, 2, 64, 64)
         loss = compute_flow_loss(flow, flow)
         assert loss.item() == 0.0
+
+    def test_normalization_reduces_scale(self):
+        """Test that normalization brings flow to smaller scale."""
+        # Large pixel displacements
+        pred_flow = torch.randn(2, 2, 256, 256) * 100  # ~[-100, 100] pixels
+        gt_flow = torch.randn(2, 2, 256, 256) * 100
+
+        loss_unnorm = compute_flow_loss(pred_flow, gt_flow, normalize=False)
+        loss_norm = compute_flow_loss(pred_flow, gt_flow, normalize=True)
+
+        # Normalized loss should be much smaller (by factor of ~256^2)
+        assert loss_norm < loss_unnorm / 1000
 
 
 class TestLAQWithFlow:

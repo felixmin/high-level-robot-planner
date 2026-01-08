@@ -30,7 +30,7 @@ model:
   # Flow supervision: predict optical flow from latent + context
   flow:
     model: raft_small
-    loss_weight: 0.1
+    loss_weight: 1.0  # Flow is normalized, so weight ~1.0 is appropriate
     decoder_depth: 4  # Lighter than main decoder
 
 # Data settings
