@@ -347,8 +347,9 @@ class TestHydraConfigWithFlow:
             assert cfg.model.flow.decoder_depth == 4
             assert cfg.model.flow.warmup_steps == 10000
 
-            # Validate aux loss enabled
-            assert cfg.model.use_aux_loss is True
+            # Validate decoder flags
+            assert cfg.model.use_dino_decoder is True
+            assert cfg.model.use_aux_decoder is True
 
             # Validate flow visualization strategy
             assert cfg.training.validation.strategies.flow_visualization.enabled is True

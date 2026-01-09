@@ -25,7 +25,11 @@ model:
   dinov3_pool_to_grid: 8
   code_seq_len: 1
   codebook_size: 2
-  use_aux_loss: true  # Enable auxiliary pixel loss
+  # Training decoders
+  use_dino_decoder: true   # DINO token prediction (main training objective)
+  use_pixel_decoder: false # Pixel prediction with gradients (disabled)
+  # Interpretability decoder
+  use_aux_decoder: true    # Pixel prediction for visualization (detached gradients)
 
   # Flow supervision: predict optical flow from latent + context
   flow:

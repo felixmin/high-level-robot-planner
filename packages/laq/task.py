@@ -121,7 +121,11 @@ class LAQTask(pl.LightningModule):
             use_dinov3_encoder=model_config.get("use_dinov3_encoder", False),
             dinov3_model_name=model_config.get("dinov3_model_name", "facebook/dinov3-vits16-pretrain-lvd1689m"),
             dinov3_pool_to_grid=model_config.get("dinov3_pool_to_grid", None),
-            use_aux_loss=model_config.get("use_aux_loss", True),
+            # Training decoder flags
+            use_dino_decoder=model_config.get("use_dino_decoder", True),
+            use_pixel_decoder=model_config.get("use_pixel_decoder", False),
+            # Interpretability decoder flag
+            use_aux_decoder=model_config.get("use_aux_decoder", True),
             flow_config=flow_config,
             codebook_replace_schedule=codebook_replace_schedule,
         )
@@ -358,7 +362,7 @@ class LAQTask(pl.LightningModule):
     def generate_reconstructions(
         self,
         batch: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> Optional[torch.Tensor]:
         """
         Generate reconstructions for visualization.
 
@@ -366,7 +370,7 @@ class LAQTask(pl.LightningModule):
             batch: Frame pairs [B, C, 2, H, W]
 
         Returns:
-            Reconstructions [B, C, H, W]
+            Reconstructions [B, C, H, W], or None if aux_decoder is disabled
         """
         self.eval()
         with torch.no_grad():

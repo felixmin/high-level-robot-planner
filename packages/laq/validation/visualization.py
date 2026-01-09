@@ -105,30 +105,35 @@ class BasicVisualizationStrategy(ValidationStrategy):
         if wandb_logger is None:
             return
 
-        # Get train samples - either from cache or by sampling from dataloader
-        train_frames = cache.train_frames
-        train_metadata = cache.train_metadata
-
-        if train_frames is None or len(train_frames) == 0:
-            # Sample fresh from train dataloader
-            train_frames, train_metadata = self._sample_from_train_dataloader(
-                trainer, self.num_train_samples
-            )
-            if train_frames is not None:
-                # Cache for bucket visualization
-                cache.train_frames = train_frames
-                cache.train_metadata = train_metadata
+        # Sample fresh batch from train dataloader
+        train_frames, train_metadata = self._sample_from_train_dataloader(
+            trainer, self.num_train_samples * 2  # Sample extra for both fixed and random
+        )
 
         if train_frames is None or len(train_frames) == 0:
             return
 
-        # Create and log training reconstruction grid
-        train_grid = self._create_recon_grid(train_frames, pl_module)
-        if train_grid is not None:
+        # === Fixed training samples (same across validations for progress tracking) ===
+        if cache.train_frames is None or len(cache.train_frames) == 0:
+            # First validation: cache a fixed set of training samples
+            cache.train_frames = train_frames[:self.num_train_samples]
+            cache.train_metadata = train_metadata[:self.num_train_samples] if train_metadata else None
+
+        fixed_grid = self._create_recon_grid(cache.train_frames, pl_module)
+        if fixed_grid is not None:
             wandb_logger.log_image(
-                key="train/reconstructions",
-                images=[train_grid],
-                caption=[f"Step {trainer.global_step} (training samples)"],
+                key="train/fixed_reconstructions",
+                images=[fixed_grid],
+                caption=[f"Step {trainer.global_step} (fixed training samples)"],
+            )
+
+        # === Random training samples (different each validation for diversity) ===
+        random_grid = self._create_recon_grid(train_frames[:self.num_train_samples], pl_module)
+        if random_grid is not None:
+            wandb_logger.log_image(
+                key="train/random_reconstructions",
+                images=[random_grid],
+                caption=[f"Step {trainer.global_step} (random training samples)"],
             )
 
         # === Per-bucket training visualization ===
@@ -346,7 +351,10 @@ class BasicVisualizationStrategy(ValidationStrategy):
         frames: torch.Tensor,
         pl_module: pl.LightningModule,
     ) -> Optional[torch.Tensor]:
-        """Create reconstruction grid."""
+        """Create reconstruction grid.
+
+        Returns None if aux_decoder is disabled (no reconstructions available).
+        """
         if len(frames) == 0:
             return None
 
@@ -358,6 +366,10 @@ class BasicVisualizationStrategy(ValidationStrategy):
                 return_recons_only=True,
             )
         pl_module.train()
+
+        # If aux_decoder is disabled, recons will be None
+        if recons is None:
+            return None
 
         # Create grid: [frame_t, frame_t+offset, reconstruction]
         frame_t = frames[:, :, 0].cpu()

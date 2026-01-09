@@ -44,7 +44,9 @@ class TestLAQInitialization:
         assert hasattr(laq_model, 'enc_spatial_transformer')
         assert hasattr(laq_model, 'enc_temporal_transformer')
         assert hasattr(laq_model, 'vq')
-        assert hasattr(laq_model, 'dec_spatial_transformer')
+        # Decoders are now conditional - check they exist as attributes
+        assert hasattr(laq_model, 'dino_decoder')
+        assert hasattr(laq_model, 'aux_decoder')
         assert hasattr(laq_model, 'aux_to_pixels')
 
         print(f"✓ LAQ model initialized successfully")
@@ -56,7 +58,8 @@ class TestLAQInitialization:
 
         assert isinstance(laq_model.enc_spatial_transformer, Transformer)
         assert isinstance(laq_model.enc_temporal_transformer, Transformer)
-        assert isinstance(laq_model.dec_spatial_transformer, Transformer)
+        # DINO decoder is enabled by default
+        assert isinstance(laq_model.dino_decoder, Transformer)
         assert isinstance(laq_model.vq, NSVQ)
 
         print(f"✓ LAQ components verified")

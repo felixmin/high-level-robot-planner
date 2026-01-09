@@ -2,13 +2,19 @@
 Latent Action Quantization (LAQ) Model.
 
 A VQ-VAE that encodes frame-to-frame transitions into discrete latent action codes.
-Supports optional optical flow supervision via RAFT teacher for motion-enriched latents.
+Supports modular decoder objectives: DINO, Pixel, Flow (training) and Aux (interpretability).
+
+Decoder Types:
+- DINO decoder: Predicts next frame's DINO tokens (renamed from dec_spatial_transformer)
+- Pixel decoder: Predicts next frame's pixels with gradients flowing to encoder
+- Flow decoder: Predicts optical flow via RAFT knowledge distillation
+- Aux decoder: Predicts pixels for visualization only (gradients detached from encoder)
 """
 
 import logging
 import math
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -39,14 +45,17 @@ class LatentActionQuantization(nn.Module):
     Latent Action Quantization (LAQ) model.
 
     Encodes frame pairs into discrete latent action codes using VQ-VAE style
-    quantization. Uses transformer-based encoder/decoder with optional DINO
-    features for improved representations.
+    quantization. Uses transformer-based encoder/decoder with modular objectives.
 
-    Training architecture:
+    Architecture:
     - Encoder: Processes frame pairs through spatial/temporal transformers
     - VQ (NSVQ): Quantizes latent representations to discrete codes
-    - Main Decoder: Predicts next frame's DINO tokens (main learning objective)
-    - Aux Decoder: Predicts next frame's pixels (for visualization, detached gradients)
+    - Training Decoders (at least one required):
+      - DINO decoder: Predicts next frame's DINO tokens
+      - Pixel decoder: Predicts next frame's pixels (gradients to encoder)
+      - Flow decoder: Predicts optical flow (gradients to encoder)
+    - Interpretability Decoder (optional):
+      - Aux decoder: Predicts pixels for visualization (gradients detached)
 
     Returns:
         (loss, metrics_dict) where metrics_dict contains diagnostic values
@@ -79,7 +88,11 @@ class LatentActionQuantization(nn.Module):
         use_dinov3_encoder = False,
         dinov3_model_name = "facebook/dinov3-vits16-pretrain-lvd1689m",
         dinov3_pool_to_grid = None,  # Pool DINO features to this grid size (e.g., 8 for 8x8)
-        use_aux_loss = True,
+        # Training decoder flags (at least one must be True, or flow_config must be set)
+        use_dino_decoder = True,
+        use_pixel_decoder = False,
+        # Interpretability decoder flag (optional, for visualization only)
+        use_aux_decoder = True,
         # Flow supervision config (optional - set to enable flow loss)
         flow_config: Optional["FlowConfig"] = None,
         # Codebook replacement schedule (optional - uses default if not provided)
@@ -97,8 +110,23 @@ class LatentActionQuantization(nn.Module):
 
         super().__init__()
 
-        self.use_aux_loss = use_aux_loss
+        # Store decoder flags
+        self.use_dino_decoder = use_dino_decoder
+        self.use_pixel_decoder = use_pixel_decoder
+        self.use_aux_decoder = use_aux_decoder
         self.flow_config = flow_config
+
+        # Validate at least one training decoder is enabled
+        training_decoders = self._get_enabled_training_decoders()
+        if not training_decoders:
+            raise ValueError(
+                "At least one training decoder must be enabled. "
+                "Set use_dino_decoder=True, use_pixel_decoder=True, or provide flow_config."
+            )
+        logger.info(f"Enabled training decoders: {training_decoders}")
+        if use_aux_decoder:
+            logger.info("Aux decoder enabled for interpretability")
+
         self.codebook_replace_schedule = (
             codebook_replace_schedule
             if codebook_replace_schedule is not None
@@ -192,25 +220,42 @@ class LatentActionQuantization(nn.Module):
             image_size=image_size,
             grid_size=self._effective_grid_size
         )
-            
-        # --- Main Decoder (DINO-to-DINO) ---
-        # Predicts next frame's DINO embeddings
-        self.dec_spatial_transformer = Transformer(depth = spatial_depth, **transformer_with_action_kwargs)
-        
-        # --- Auxiliary Decoder (Pixels-to-Pixels) ---
-        # Predicts next frame's Pixels for visualization (gradients stopped at latent z)
-        self.aux_decoder = Transformer(depth = spatial_depth, **transformer_with_action_kwargs)
-        
-        # Decoder pixel projection - must match effective grid size
+
+        # Compute pixel projection parameters (shared by pixel decoders)
         eff_h, eff_w = self._effective_grid_size
         eff_patch_h = image_height // eff_h
         eff_patch_w = image_width // eff_w
-        
-        # Projector for the Aux Decoder output
-        self.aux_to_pixels = nn.Sequential(
-            nn.Linear(dim, channels * eff_patch_h * eff_patch_w),
-            Rearrange('b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)', p1 = eff_patch_h, p2 = eff_patch_w)
-        )
+
+        # --- DINO Decoder (Training) ---
+        # Predicts next frame's DINO embeddings
+        if use_dino_decoder:
+            self.dino_decoder = Transformer(depth=spatial_depth, **transformer_with_action_kwargs)
+        else:
+            self.dino_decoder = None
+
+        # --- Pixel Decoder (Training) ---
+        # Predicts next frame's pixels with gradients flowing to encoder
+        if use_pixel_decoder:
+            self.pixel_decoder = Transformer(depth=spatial_depth, **transformer_with_action_kwargs)
+            self.pixel_to_pixels = nn.Sequential(
+                nn.Linear(dim, channels * eff_patch_h * eff_patch_w),
+                Rearrange('b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)', p1=eff_patch_h, p2=eff_patch_w)
+            )
+        else:
+            self.pixel_decoder = None
+            self.pixel_to_pixels = None
+
+        # --- Aux Decoder (Interpretability) ---
+        # Predicts next frame's pixels for visualization (gradients detached from encoder)
+        if use_aux_decoder:
+            self.aux_decoder = Transformer(depth=spatial_depth, **transformer_with_action_kwargs)
+            self.aux_to_pixels = nn.Sequential(
+                nn.Linear(dim, channels * eff_patch_h * eff_patch_w),
+                Rearrange('b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)', p1=eff_patch_h, p2=eff_patch_w)
+            )
+        else:
+            self.aux_decoder = None
+            self.aux_to_pixels = None
 
         # --- Flow Decoder (Optional) ---
         # Predicts optical flow from pixel context + latent action
@@ -246,6 +291,25 @@ class LatentActionQuantization(nn.Module):
             raise ValueError(
                 f"code_seq_len must be a square number or 2, got {code_seq_len}"
             )
+
+    def _get_enabled_training_decoders(self) -> List[str]:
+        """
+        Get list of enabled training decoders.
+
+        Training decoders contribute gradients to the encoder/VQ.
+        At least one must be enabled for meaningful training.
+
+        Returns:
+            List of enabled decoder names (e.g., ["dino", "flow"])
+        """
+        decoders = []
+        if self.use_dino_decoder:
+            decoders.append("dino")
+        if self.use_pixel_decoder:
+            decoders.append("pixel")
+        if self.flow_config is not None:
+            decoders.append("flow")
+        return decoders
 
     def _should_replace_codebook(self, step: int) -> bool:
         """
@@ -353,41 +417,40 @@ class LatentActionQuantization(nn.Module):
     ):
         """
         Decodes latent actions + context frame into reconstructed video.
-        
-        This uses the AUXILIARY PIXEL DECODER path.
-        Use this for visualization and inference.
+
+        This uses the AUXILIARY PIXEL DECODER path for visualization/inference.
+        Returns None if aux_decoder is disabled.
 
         Args:
             tokens: Continuous embeddings of the first frame (PIXEL CONTEXT) [B, 1, h, w, d]
             actions: Continuous embeddings of the latent action [B, 1, h', w', d].
 
         Returns:
-            recon_video: Reconstructed pixel values [B, C, 1, H, W]
+            recon_video: Reconstructed pixel values [B, C, 1, H, W], or None if aux_decoder disabled
         """
+        if self.aux_decoder is None:
+            return None
+
         b = tokens.shape[0]
         h, w = self.patch_height_width
 
         if tokens.ndim == 3:
-            tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h = h, w = w)
+            tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h=h, w=w)
 
         video_shape = tuple(tokens.shape[:-1])
-
 
         tokens = rearrange(tokens, 'b t h w d -> (b t) (h w) d')
         actions = rearrange(actions, 'b t h w d -> (b t) (h w) d')
 
-        attn_bias = self.spatial_rel_pos_bias(h, w, device = tokens.device)
+        attn_bias = self.spatial_rel_pos_bias(h, w, device=tokens.device)
 
         # Use AUX decoder for pixel reconstruction
-        tokens = self.aux_decoder(tokens, attn_bias = attn_bias, video_shape = video_shape, context=actions)
-        
+        tokens = self.aux_decoder(tokens, attn_bias=attn_bias, video_shape=video_shape, context=actions)
 
-        tokens = rearrange(tokens, '(b t) (h w) d -> b t h w d', b = b, h = h , w = w)
-
-        rest_frames_tokens = tokens
+        tokens = rearrange(tokens, '(b t) (h w) d -> b t h w d', b=b, h=h, w=w)
 
         # Use AUX projector
-        recon_video = self.aux_to_pixels(rest_frames_tokens)
+        recon_video = self.aux_to_pixels(tokens)
 
         return recon_video
     
@@ -445,88 +508,111 @@ class LatentActionQuantization(nn.Module):
 
         action_h, action_w = self.action_shape
         tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h=action_h, w=action_w)
-        
-        # --- 1. Main Path: DINO Decoding (Learning) ---
-        # Predict DINO tokens of next frame from DINO context of first frame + Action
-        
-        # Prepare inputs for Main Decoder
-        main_context = enc_first_frame_tokens # DINO context [B, 1, h, w, d]
-        main_query = tokens # Action [B, 1, h, w, d]
-        
-        # Helper for main decoder pass (similar to decode() but uses dec_spatial_transformer)
-        b_main = main_context.shape[0]
-        h_main, w_main = self.patch_height_width
-        
-        # Flatten for transformer
-        main_context_flat = rearrange(main_context, 'b t h w d -> (b t) (h w) d')
-        main_query_flat = rearrange(main_query, 'b t h w d -> (b t) (h w) d')
-        
-        video_shape = tuple(main_context.shape[:-1])
-        attn_bias = self.spatial_rel_pos_bias(h_main, w_main, device=main_context.device)
-        
-        # Run Main Decoder
-        pred_dino_tokens = self.dec_spatial_transformer(
-            main_context_flat, 
-            attn_bias=attn_bias, 
-            video_shape=video_shape, 
-            context=main_query_flat
-        )
-        
-        # Reshape back
-        pred_dino_tokens = rearrange(pred_dino_tokens, '(b t) (h w) d -> b t h w d', b=b_main, h=h_main, w=w_main)
-        
-        # Main Loss: MSE between Predicted DINO tokens and True DINO tokens (enc_rest_frames_tokens)
-        # Target must be detached to act as ground truth
-        target_dino_tokens = enc_rest_frames_tokens.detach()
-        main_loss = F.mse_loss(pred_dino_tokens, target_dino_tokens)
 
+        # Initialize loss and metrics
+        total_loss = torch.tensor(0.0, device=device, requires_grad=True)
+        metrics = {"num_unique_codes": num_unique_indices}
 
-        # --- 2. Aux Path: Pixel Decoding (Visualization) ---
-        # Predict Pixels of next frame from Pixel context + Detached Action
-        
-        metrics = {
-            "num_unique_codes": num_unique_indices,
-            "main_dino_loss": main_loss.detach(),
-        }
-        
-        total_loss = main_loss
+        # Precompute attention bias (shared by all decoders)
+        h_dec, w_dec = self.patch_height_width
+        attn_bias = self.spatial_rel_pos_bias(h_dec, w_dec, device=device)
 
-        # Run Aux decoder if enabled OR if we explicitly asked for reconstructions
-        if self.use_aux_loss or return_recons_only:
+        # --- 1. DINO Decoder Path (Training) ---
+        # Predict DINO/encoder tokens of next frame from encoder context + action
+        if self.dino_decoder is not None:
+            dino_context = enc_first_frame_tokens  # [B, 1, h, w, d]
+            video_shape = tuple(dino_context.shape[:-1])
+
+            # Flatten for transformer
+            dino_context_flat = rearrange(dino_context, 'b t h w d -> (b t) (h w) d')
+            dino_action_flat = rearrange(tokens, 'b t h w d -> (b t) (h w) d')
+
+            # Run DINO decoder
+            pred_dino_tokens = self.dino_decoder(
+                dino_context_flat,
+                attn_bias=attn_bias,
+                video_shape=video_shape,
+                context=dino_action_flat
+            )
+
+            # Reshape back
+            pred_dino_tokens = rearrange(
+                pred_dino_tokens, '(b t) (h w) d -> b t h w d',
+                b=b, h=h_dec, w=w_dec
+            )
+
+            # DINO loss: MSE to target encoder tokens
+            target_dino_tokens = enc_rest_frames_tokens.detach()
+            dino_loss = F.mse_loss(pred_dino_tokens, target_dino_tokens)
+            total_loss = total_loss + dino_loss
+            metrics["dino_loss"] = dino_loss.detach()
+
+        # --- 2. Pixel Decoder Path (Training) ---
+        # Predict pixels of next frame with gradients flowing to encoder
+        if self.pixel_decoder is not None:
             # Use pixel-based projection for decoder context
-            dec_first_frame_tokens = self.decoder_context_projection(first_frame)
-            
-            # Detach action so Aux loss doesn't affect Encoder/VQ
-            aux_actions = tokens.detach()
-            
-            # Run Aux Decoder (via self.decode which is now mapped to Aux)
-            recon_video = self.decode(dec_first_frame_tokens, aux_actions)
+            pixel_context = self.decoder_context_projection(first_frame)
+            video_shape = tuple(pixel_context.shape[:-1])
 
+            # Flatten for transformer
+            pixel_context_flat = rearrange(pixel_context, 'b t h w d -> (b t) (h w) d')
+            pixel_action_flat = rearrange(tokens, 'b t h w d -> (b t) (h w) d')
+
+            # Run pixel decoder (gradients flow to encoder)
+            pred_pixel_tokens = self.pixel_decoder(
+                pixel_context_flat,
+                attn_bias=attn_bias,
+                video_shape=video_shape,
+                context=pixel_action_flat
+            )
+
+            # Reshape and project to pixels
+            pred_pixel_tokens = rearrange(
+                pred_pixel_tokens, '(b t) (h w) d -> b t h w d',
+                b=b, h=h_dec, w=w_dec
+            )
+            pred_pixels = self.pixel_to_pixels(pred_pixel_tokens)
+
+            # Pixel loss with gradients to encoder
+            pixel_loss = F.mse_loss(rest_frames, pred_pixels)
+            total_loss = total_loss + pixel_loss
+            metrics["pixel_loss"] = pixel_loss.detach()
+
+        # --- 3. Aux Decoder Path (Interpretability) ---
+        # Predict pixels for visualization (gradients detached from encoder)
+        if self.aux_decoder is not None or return_recons_only:
+            if self.aux_decoder is None:
+                # Aux decoder disabled but reconstructions requested - return None
+                if return_recons_only:
+                    return None
+
+            # Use pixel-based projection for decoder context
+            aux_context = self.decoder_context_projection(first_frame)
+
+            # Detach action so aux loss doesn't affect encoder/VQ
+            aux_actions = tokens.detach()
+
+            # Run aux decoder (via self.decode)
+            recon_video = self.decode(aux_context, aux_actions)
             recon_frames = rearrange(recon_video, 'b c 1 h w -> b c h w')
 
             if return_recons_only:
                 return recon_frames
 
-            # Aux loss: pixel reconstruction (gradients don't flow to encoder/VQ)
-            # Only compute if enabled (otherwise we just ran for return_recons_only,
-            # but that branch returns early above)
-            if self.use_aux_loss:
-                aux_loss = F.mse_loss(rest_frames, recon_video)
-                total_loss = total_loss + aux_loss
-                metrics["aux_pixel_loss"] = aux_loss.detach()
+            # Aux loss: pixel reconstruction (only trains aux decoder, not encoder)
+            aux_loss = F.mse_loss(rest_frames, recon_video)
+            total_loss = total_loss + aux_loss
+            metrics["aux_loss"] = aux_loss.detach()
 
-        # --- 3. Flow Path: Optical Flow Prediction (Optional) ---
-        # Predict optical flow from pixel context + latent action
-        # Unlike aux_loss (visualization only), flow loss DOES backprop to encoder
-        # to enrich latent representations with motion information
+        # --- 4. Flow Decoder Path (Training) ---
+        # Predict optical flow with gradients flowing to encoder
         if self.flow_decoder is not None:
             from laq.models.flow import compute_flow_loss
 
-            # Get pixel context (reuse from aux path if available, else compute)
-            if 'dec_first_frame_tokens' not in locals():
-                dec_first_frame_tokens = self.decoder_context_projection(first_frame)
+            # Use pixel-based projection for decoder context
+            flow_context = self.decoder_context_projection(first_frame)
 
-            # NO detach - gradients flow back to encoder/VQ to learn motion-aware representations
+            # NO detach - gradients flow to encoder for motion-aware representations
             flow_actions = tokens
 
             # Compute ground-truth flow from RAFT teacher
@@ -534,17 +620,17 @@ class LatentActionQuantization(nn.Module):
 
             # Predict flow from context + action
             pred_flow = self.flow_decoder(
-                dec_first_frame_tokens,
+                flow_context,
                 flow_actions,
                 attn_bias,
             )
 
-            # Flow loss - gradients improve encoder's motion representation
+            # Flow loss with gradients to encoder
             flow_loss = compute_flow_loss(pred_flow, gt_flow)
             flow_weight = self.flow_config.get_weight(step)
             total_loss = total_loss + flow_weight * flow_loss
             metrics["flow_loss"] = flow_loss.detach()
-            metrics["flow_weight"] = flow_weight  # Track warmup progress
+            metrics["flow_weight"] = flow_weight
 
         return total_loss, metrics
         
@@ -565,7 +651,7 @@ class LatentActionQuantization(nn.Module):
 
         Returns:
             If return_only_codebook_ids: codebook indices [B, code_seq_len]
-            Otherwise: reconstructed frames [B, C, H, W]
+            Otherwise: reconstructed frames [B, C, H, W], or None if aux_decoder disabled
         """
         if video.ndim not in {4, 5}:
             raise ValueError(f"Expected 4D or 5D input, got {video.ndim}D")
@@ -590,6 +676,10 @@ class LatentActionQuantization(nn.Module):
 
         if return_only_codebook_ids:
             return indices
+
+        # Aux decoder required for pixel reconstruction
+        if self.aux_decoder is None:
+            return None
 
         action_h, action_w = self.action_shape
         tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h=action_h, w=action_w)

@@ -211,8 +211,8 @@ class TestLAQWithDINO:
 
         assert loss.item() >= 0
         assert metrics["num_unique_codes"] > 0
-        assert "main_dino_loss" in metrics
-        assert "aux_pixel_loss" in metrics
+        assert "dino_loss" in metrics
+        assert "aux_loss" in metrics
 
         print(f"✓ LAQ+DINO forward: loss={loss.item():.4f}, unique={metrics['num_unique_codes']}")
 

@@ -17,7 +17,13 @@ code_seq_len: 4         # Length of quantized action sequence
 channels: 3             # RGB channels
 attn_dropout: 0.0       # Attention dropout
 ff_dropout: 0.0         # Feed-forward dropout
-use_aux_loss: true      # Whether to use auxiliary pixel loss
+
+# Training decoder flags (at least one must be enabled, or flow must be configured)
+use_dino_decoder: true  # Predict next frame's encoder tokens (DINO or pixel-projected)
+use_pixel_decoder: false # Predict next frame's pixels with gradients to encoder
+
+# Interpretability decoder (optional, for visualization only)
+use_aux_decoder: true   # Predict pixels for visualization (gradients detached from encoder)
 
 # Codebook replacement schedule
 # Replace unused codebook entries at diminishing frequency to improve utilization
