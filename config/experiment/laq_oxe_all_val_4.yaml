@@ -50,7 +50,7 @@ training:
     type: none
   validation:
     check_interval: 1000
-    limit_batches: 50
+    limit_batches: 500
     max_cached_samples: 512
     num_fixed_samples: 8
     num_random_samples: 8
