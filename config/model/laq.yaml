@@ -19,6 +19,22 @@ attn_dropout: 0.0       # Attention dropout
 ff_dropout: 0.0         # Feed-forward dropout
 use_aux_loss: true      # Whether to use auxiliary pixel loss
 
+# Codebook replacement schedule
+# Replace unused codebook entries at diminishing frequency to improve utilization
+# Format: list of [interval, until_step] pairs
+# - interval: replace every N steps
+# - until_step: stop this interval at this step
+# Example: [[10, 100], [100, 1000]] means:
+#   - Replace every 10 steps for first 100 steps
+#   - Replace every 100 steps for steps 100-1000
+codebook_replace_schedule:
+  - [10, 100]      # Every 10 steps for first 100 steps
+  - [100, 1000]    # Every 100 steps for steps 100-1000
+  - [500, 5000]    # Every 500 steps for steps 1000-5000
+  - [1000, 10000]  # Every 1000 steps for steps 10000-100000
+  - [5000, 50000]  # Every 5000 steps for steps 100000-500000
+  - [10000, 100000] # Every 10000 steps for steps 100000-1000000
+
 # Optional: Flow supervision config
 # Enriches latent space with motion information via RAFT knowledge distillation
 # To enable, set flow config in experiment (see laq_oxe_all_val_3.yaml)

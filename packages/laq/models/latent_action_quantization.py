@@ -51,10 +51,10 @@ class LatentActionQuantization(nn.Module):
     Returns:
         (loss, metrics_dict) where metrics_dict contains diagnostic values
     """
-    # Codebook replacement schedule: Replace unused codebook entries at diminishing frequency
+    # Default codebook replacement schedule: Replace unused codebook entries at diminishing frequency
     # This helps codebook utilization early in training without overhead later
     # Format: (interval, until_step) - replace every `interval` steps until `until_step`
-    CODEBOOK_REPLACE_SCHEDULE = [
+    DEFAULT_CODEBOOK_REPLACE_SCHEDULE = [
         (10, 100),    # Every 10 steps for first 100 steps
         (100, 1000),  # Every 100 steps for steps 100-1000
         (500, 5000),  # Every 500 steps for steps 1000-5000
@@ -82,6 +82,8 @@ class LatentActionQuantization(nn.Module):
         use_aux_loss = True,
         # Flow supervision config (optional - set to enable flow loss)
         flow_config: Optional["FlowConfig"] = None,
+        # Codebook replacement schedule (optional - uses default if not provided)
+        codebook_replace_schedule: Optional[list] = None,
     ):
         """
         einstein notations:
@@ -97,6 +99,11 @@ class LatentActionQuantization(nn.Module):
 
         self.use_aux_loss = use_aux_loss
         self.flow_config = flow_config
+        self.codebook_replace_schedule = (
+            codebook_replace_schedule
+            if codebook_replace_schedule is not None
+            else self.DEFAULT_CODEBOOK_REPLACE_SCHEDULE
+        )
         self.code_seq_len = code_seq_len
         self.image_size = pair(image_size)
         self.patch_size = pair(patch_size)
@@ -244,11 +251,11 @@ class LatentActionQuantization(nn.Module):
         """
         Check if unused codebook entries should be replaced at this step.
 
-        Uses CODEBOOK_REPLACE_SCHEDULE for diminishing frequency replacement:
+        Uses codebook_replace_schedule for diminishing frequency replacement:
         - More frequent early in training to ensure good codebook utilization
         - Less frequent later to reduce overhead
         """
-        for interval, until_step in self.CODEBOOK_REPLACE_SCHEDULE:
+        for interval, until_step in self.codebook_replace_schedule:
             if step < until_step and step % interval == 0:
                 return True
         return False

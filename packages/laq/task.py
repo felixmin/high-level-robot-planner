@@ -95,6 +95,14 @@ class LAQTask(pl.LightningModule):
                 warmup_steps=flow_cfg.get("warmup_steps", 0),
             )
 
+        # Build codebook replacement schedule if specified
+        codebook_replace_schedule = None
+        if "codebook_replace_schedule" in model_config and model_config.codebook_replace_schedule is not None:
+            # Convert from list of lists to list of tuples
+            codebook_replace_schedule = [
+                tuple(entry) for entry in model_config.codebook_replace_schedule
+            ]
+
         # Initialize LAQ model
         self.model = LatentActionQuantization(
             dim=model_config.dim,
@@ -115,6 +123,7 @@ class LAQTask(pl.LightningModule):
             dinov3_pool_to_grid=model_config.get("dinov3_pool_to_grid", None),
             use_aux_loss=model_config.get("use_aux_loss", True),
             flow_config=flow_config,
+            codebook_replace_schedule=codebook_replace_schedule,
         )
 
         # Storage for validation and training batches (for visualization)
