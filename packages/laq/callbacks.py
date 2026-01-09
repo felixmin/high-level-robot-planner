@@ -218,19 +218,20 @@ class ValidationStrategyCallback(Callback):
                 latents = pl_module.model.vq.codebooks[codes.to(device)].cpu()
 
         # Route each sample to matching bucket(s) AND global cache
+        # Note: add_sample() internally handles is_full() for frame storage,
+        # but always captures codes to history_codes for histogram strategies
         for i, meta in enumerate(metadata_list):
             frame = frames[i:i+1].detach().cpu()
             code = codes[i:i+1] if codes is not None else None
             latent = latents[i:i+1] if latents is not None else None
 
-            # Add to global cache (with stratified balancing)
-            if not self.global_cache.is_full():
-                self.global_cache.add_sample(frame, meta, code, latent)
+            # Add to global cache
+            self.global_cache.add_sample(frame, meta, code, latent)
 
             # Route to matching buckets
             for bucket_name, bucket_cfg in self.bucket_configs.items():
                 cache = self.bucket_caches[bucket_name]
-                if not cache.is_full() and bucket_cfg.matches(meta):
+                if bucket_cfg.matches(meta):
                     cache.add_sample(frame, meta, code, latent)
 
     def on_validation_epoch_end(

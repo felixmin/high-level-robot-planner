@@ -68,7 +68,7 @@ class MetadataScatterStrategy(ValidationStrategy):
             Tuple of (filtered_metadata, codes_list, valid_indices)
         """
         all_metadata = cache.get_all_metadata()
-        all_codes = cache.get_all_codes()
+        all_codes = cache.get_codes()  # Use bounded codes for metadata correspondence
 
         if not all_metadata or all_codes is None:
             return [], [], []

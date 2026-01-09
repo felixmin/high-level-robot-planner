@@ -279,7 +279,7 @@ class ClusteringStrategy(ValidationStrategy):
         metrics = {}
 
         all_frames = cache.get_all_frames()
-        all_codes = cache.get_all_codes()
+        all_codes = cache.get_codes()  # Use bounded codes for frame correspondence
 
         if all_codes is None or len(all_codes) < self.num_clusters:
             return metrics
@@ -408,6 +408,7 @@ class CodebookHistogramStrategy(ValidationStrategy):
         """Generate codebook usage histogram."""
         metrics = {}
 
+        # Use all_codes for true distribution across all validation samples
         all_codes = cache.get_all_codes()
         if all_codes is None or len(all_codes) == 0:
             return metrics
@@ -523,6 +524,7 @@ class LatentSequenceHistogramStrategy(ValidationStrategy):
         """Generate sequence usage histogram."""
         metrics = {}
 
+        # Use all_codes for true distribution across all validation samples
         all_codes = cache.get_all_codes()
         if all_codes is None or len(all_codes) == 0:
             return metrics
@@ -535,11 +537,13 @@ class LatentSequenceHistogramStrategy(ValidationStrategy):
 
         # Metrics
         unique_seqs = len(counter)
+        total_samples = len(all_codes)
 
         # Calculate entropy of sequence distribution
         counts = torch.tensor(list(counter.values()), dtype=torch.float)
         metrics[f"val/sequence_entropy{metric_suffix}"] = compute_entropy(counts)
         metrics[f"val/unique_sequences{metric_suffix}"] = unique_seqs
+        metrics[f"val/total_val_samples{metric_suffix}"] = total_samples
 
         pl_module.log_dict(metrics, sync_dist=True)
 
@@ -638,6 +642,7 @@ class AllSequencesHistogramStrategy(ValidationStrategy):
         """Generate all sequences histogram."""
         metrics = {}
 
+        # Use all_codes for true distribution across all validation samples
         all_codes = cache.get_all_codes()
         if all_codes is None or len(all_codes) == 0:
             return metrics

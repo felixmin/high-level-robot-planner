@@ -58,11 +58,22 @@ class BucketConfig:
 
 @dataclass
 class ValidationCache:
-    """Cache for validation data across batches."""
+    """Cache for validation data across batches.
+
+    Dual storage for codes:
+    - codes: Bounded storage matching frames (for strategies needing frame correspondence)
+    - all_codes: Unbounded storage for ALL validation codes (lightweight, ~100KB for 3k samples)
+
+    This allows histogram strategies to see the true distribution across all validation
+    samples, while keeping frame storage bounded for memory safety.
+    """
     frames: List[torch.Tensor] = field(default_factory=list)
     latents: List[torch.Tensor] = field(default_factory=list)
     codes: List[torch.Tensor] = field(default_factory=list)
     losses: List[float] = field(default_factory=list)
+
+    # Unbounded code storage for histogram strategies (lightweight - just indices)
+    all_codes: List[torch.Tensor] = field(default_factory=list)
 
     # Metadata for each sample (dataset_type, scene_id, etc.)
     metadata: List[Dict[str, Any]] = field(default_factory=list)
@@ -91,6 +102,7 @@ class ValidationCache:
         self.codes.clear()
         self.losses.clear()
         self.metadata.clear()
+        self.all_codes.clear()
         self._sample_count = 0
 
     def is_full(self) -> bool:
@@ -114,6 +126,11 @@ class ValidationCache:
             latent: Optional latent representation
             prune: If True, prune metadata to essential keys only (RAM safety)
         """
+        # Always capture codes to all_codes (unbounded) for histogram strategies
+        if code is not None:
+            self.all_codes.append(code.cpu() if code.is_cuda else code)
+
+        # Frame storage is bounded by max_samples
         if self.is_full():
             return
 
@@ -144,6 +161,11 @@ class ValidationCache:
             latents: Optional batch of latent representations
             prune: If True, prune metadata to essential keys only (RAM safety)
         """
+        # Always capture ALL codes to all_codes (unbounded) for histogram strategies
+        if codes is not None:
+            self.all_codes.append(codes.cpu() if codes.is_cuda else codes)
+
+        # Frame storage is bounded by max_samples
         remaining = self.max_samples - self._sample_count
         if remaining <= 0:
             return
@@ -179,11 +201,21 @@ class ValidationCache:
             return None
         return torch.cat(self.latents, dim=0)
 
-    def get_all_codes(self) -> Optional[torch.Tensor]:
-        """Concatenate all cached codes."""
+    def get_codes(self) -> Optional[torch.Tensor]:
+        """Concatenate cached codes (bounded by max_samples, has frame correspondence)."""
         if not self.codes:
             return None
         return torch.cat(self.codes, dim=0)
+
+    def get_all_codes(self) -> Optional[torch.Tensor]:
+        """Concatenate all codes (unbounded, all validation samples).
+
+        Use this for histogram strategies that need the true distribution
+        across all validation samples, not just the bounded subset.
+        """
+        if not self.all_codes:
+            return None
+        return torch.cat(self.all_codes, dim=0)
 
     def get_all_metadata(self) -> List[Dict[str, Any]]:
         """Flatten all metadata lists."""
