@@ -513,9 +513,15 @@ class LatentActionQuantization(nn.Module):
         total_loss = torch.tensor(0.0, device=device, requires_grad=True)
         metrics = {"num_unique_codes": num_unique_indices}
 
-        # Precompute attention bias (shared by all decoders)
+        # Precompute shared values for decoders
         h_dec, w_dec = self.patch_height_width
         attn_bias = self.spatial_rel_pos_bias(h_dec, w_dec, device=device)
+
+        # Precompute pixel context if needed by any pixel-based decoder
+        # (pixel_decoder, aux_decoder, or flow_decoder)
+        pixel_context = None
+        if self.pixel_decoder is not None or self.aux_decoder is not None or self.flow_decoder is not None:
+            pixel_context = self.decoder_context_projection(first_frame)
 
         # --- 1. DINO Decoder Path (Training) ---
         # Predict DINO/encoder tokens of next frame from encoder context + action
@@ -550,8 +556,6 @@ class LatentActionQuantization(nn.Module):
         # --- 2. Pixel Decoder Path (Training) ---
         # Predict pixels of next frame with gradients flowing to encoder
         if self.pixel_decoder is not None:
-            # Use pixel-based projection for decoder context
-            pixel_context = self.decoder_context_projection(first_frame)
             video_shape = tuple(pixel_context.shape[:-1])
 
             # Flatten for transformer
@@ -586,17 +590,25 @@ class LatentActionQuantization(nn.Module):
                 if return_recons_only:
                     return None
 
-            # Use pixel-based projection for decoder context
-            aux_context = self.decoder_context_projection(first_frame)
-
             # Detach action so aux loss doesn't affect encoder/VQ
             aux_actions = tokens.detach()
 
-            # Run aux decoder (via self.decode)
-            recon_video = self.decode(aux_context, aux_actions)
-            recon_frames = rearrange(recon_video, 'b c 1 h w -> b c h w')
+            # Run aux decoder inline (avoid redundant computation in self.decode)
+            video_shape = tuple(pixel_context.shape[:-1])
+            aux_context_flat = rearrange(pixel_context, 'b t h w d -> (b t) (h w) d')
+            aux_action_flat = rearrange(aux_actions, 'b t h w d -> (b t) (h w) d')
+
+            aux_tokens = self.aux_decoder(
+                aux_context_flat,
+                attn_bias=attn_bias,
+                video_shape=video_shape,
+                context=aux_action_flat
+            )
+            aux_tokens = rearrange(aux_tokens, '(b t) (h w) d -> b t h w d', b=b, h=h_dec, w=w_dec)
+            recon_video = self.aux_to_pixels(aux_tokens)
 
             if return_recons_only:
+                recon_frames = rearrange(recon_video, 'b c 1 h w -> b c h w')
                 return recon_frames
 
             # Aux loss: pixel reconstruction (only trains aux decoder, not encoder)
@@ -609,9 +621,6 @@ class LatentActionQuantization(nn.Module):
         if self.flow_decoder is not None:
             from laq.models.flow import compute_flow_loss
 
-            # Use pixel-based projection for decoder context
-            flow_context = self.decoder_context_projection(first_frame)
-
             # NO detach - gradients flow to encoder for motion-aware representations
             flow_actions = tokens
 
@@ -620,7 +629,7 @@ class LatentActionQuantization(nn.Module):
 
             # Predict flow from context + action
             pred_flow = self.flow_decoder(
-                flow_context,
+                pixel_context,
                 flow_actions,
                 attn_bias,
             )

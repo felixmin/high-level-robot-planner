@@ -63,6 +63,10 @@ class LatentTransferStrategy(ValidationStrategy):
         """Run latent transfer analysis."""
         metrics = {}
 
+        # Skip if aux_decoder is disabled (required for decoding)
+        if pl_module.model.aux_decoder is None:
+            return metrics
+
         all_frames = cache.get_all_frames()
         if all_frames is None or len(all_frames) < 4:
             return metrics

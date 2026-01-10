@@ -408,18 +408,19 @@ class LAQTask(pl.LightningModule):
         self,
         first_frames: torch.Tensor,
         latent_actions: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> Optional[torch.Tensor]:
         """
         Decode first frames with given latent actions.
 
         This enables latent transfer: apply action from one pair to another scene.
+        Returns None if aux_decoder is disabled.
 
         Args:
             first_frames: First frames [B, C, 1, H, W] or [B, C, H, W]
             latent_actions: Latent actions from encoder
 
         Returns:
-            Reconstructed next frames [B, C, 1, H, W]
+            Reconstructed next frames [B, C, 1, H, W], or None if aux_decoder disabled
         """
         import math
         from einops import rearrange
