@@ -71,11 +71,12 @@ class RAFTTeacher(nn.Module):
     Uses official transforms for proper input normalization.
     """
 
-    def __init__(self, model_name: FlowModelType):
+    def __init__(self, model_name: FlowModelType, chunk_size: int = 64):
         super().__init__()
         self._model_name = model_name
         self._model: Optional[nn.Module] = None
         self._transforms = None
+        self._chunk_size = chunk_size
 
     def _load_model(self, device: torch.device) -> nn.Module:
         """Lazy-load RAFT model on first use."""
@@ -141,18 +142,26 @@ class RAFTTeacher(nn.Module):
             if hasattr(torch, "autocast")
             else nullcontext()
         )
+        chunk_size = self._chunk_size if self._chunk_size > 0 else img1.shape[0]
+        flow_chunks: list[torch.Tensor] = []
+
         with autocast_off:
-            # Apply official RAFT transforms (handles normalization)
-            img1_t, img2_t = self._transforms(img1, img2)
-            img1_t = img1_t.contiguous()
-            img2_t = img2_t.contiguous()
+            for start in range(0, img1.shape[0], chunk_size):
+                end = start + chunk_size
+                img1_chunk = img1[start:end]
+                img2_chunk = img2[start:end]
 
-            # RAFT returns list of flow predictions at different refinement levels
-            # Take the last (most refined) prediction
-            flow_predictions = model(img1_t, img2_t)
+                # Apply official RAFT transforms (handles normalization)
+                img1_t, img2_t = self._transforms(img1_chunk, img2_chunk)
+                img1_t = img1_t.contiguous()
+                img2_t = img2_t.contiguous()
 
-        # Return flow in full precision for loss computation
-        return flow_predictions[-1].float()
+                # RAFT returns list of flow predictions at different refinement levels
+                # Take the last (most refined) prediction
+                flow_predictions = model(img1_t, img2_t)
+                flow_chunks.append(flow_predictions[-1].float())
+
+        return torch.cat(flow_chunks, dim=0)
 
     def state_dict(self, *args, **kwargs):
         """Override to prevent RAFT weights from being saved."""
