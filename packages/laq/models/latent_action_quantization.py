@@ -85,6 +85,7 @@ class LatentActionQuantization(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         code_seq_len = 1,
+        latent_ablation: str = "none",
         use_dinov3_encoder = False,
         dinov3_model_name = "facebook/dinov3-vits16-pretrain-lvd1689m",
         dinov3_pool_to_grid = None,  # Pool DINO features to this grid size (e.g., 8 for 8x8)
@@ -109,6 +110,12 @@ class LatentActionQuantization(nn.Module):
         """
 
         super().__init__()
+
+        if latent_ablation not in ("none", "permute_batch"):
+            raise ValueError(
+                f"latent_ablation must be one of ['none', 'permute_batch'], got {latent_ablation!r}"
+            )
+        self.latent_ablation = latent_ablation
 
         # Store decoder flags
         self.use_dino_decoder = use_dino_decoder
@@ -509,6 +516,10 @@ class LatentActionQuantization(nn.Module):
         action_h, action_w = self.action_shape
         tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h=action_h, w=action_w)
 
+        if self.latent_ablation == "permute_batch" and b > 1:
+            perm = torch.randperm(b, device=tokens.device)
+            tokens = tokens[perm]
+
         # Initialize loss and metrics
         total_loss = torch.tensor(0.0, device=device, requires_grad=True)
         metrics = {"num_unique_codes": num_unique_indices}
@@ -700,4 +711,3 @@ class LatentActionQuantization(nn.Module):
         recon_frames = rearrange(recon_video, 'b c 1 h w -> b c h w')
 
         return recon_frames
-

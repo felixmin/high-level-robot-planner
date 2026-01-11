@@ -118,6 +118,7 @@ class LAQTask(pl.LightningModule):
             channels=model_config.get("channels", 3),
             attn_dropout=model_config.get("attn_dropout", 0.0),
             ff_dropout=model_config.get("ff_dropout", 0.0),
+            latent_ablation=model_config.get("latent_ablation", "none"),
             use_dinov3_encoder=model_config.get("use_dinov3_encoder", False),
             dinov3_model_name=model_config.get("dinov3_model_name", "facebook/dinov3-vits16-pretrain-lvd1689m"),
             dinov3_pool_to_grid=model_config.get("dinov3_pool_to_grid", None),
