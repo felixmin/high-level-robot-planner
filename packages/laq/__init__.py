@@ -20,7 +20,8 @@ from laq.validation import (
     ValidationCache,
     BasicVisualizationStrategy,
     LatentTransferStrategy,
-    ClusteringStrategy,
+    CodebookEmbeddingStrategy,
+    SequenceExamplesStrategy,
     create_validation_strategies,
 )
 
@@ -38,7 +39,8 @@ __all__ = [
     "ValidationCache",
     "BasicVisualizationStrategy",
     "LatentTransferStrategy",
-    "ClusteringStrategy",
+    "CodebookEmbeddingStrategy",
+    "SequenceExamplesStrategy",
     "create_validation_strategies",
 ]
 

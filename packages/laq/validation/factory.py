@@ -8,10 +8,11 @@ from .core import ValidationStrategy
 from .visualization import BasicVisualizationStrategy
 from .analysis import (
     LatentTransferStrategy,
-    ClusteringStrategy,
     CodebookHistogramStrategy,
     LatentSequenceHistogramStrategy,
     AllSequencesHistogramStrategy,
+    CodebookEmbeddingStrategy,
+    SequenceExamplesStrategy,
 )
 from .scatter import (
     ActionTokenScatterStrategy,
@@ -27,10 +28,11 @@ STRATEGY_REGISTRY: Dict[str, Type[ValidationStrategy]] = {
     "basic": BasicVisualizationStrategy,
     "basic_visualization": BasicVisualizationStrategy,
     "latent_transfer": LatentTransferStrategy,
-    "clustering": ClusteringStrategy,
     "codebook_histogram": CodebookHistogramStrategy,
     "sequence_histogram": LatentSequenceHistogramStrategy,
     "all_sequences_histogram": AllSequencesHistogramStrategy,
+    "codebook_embedding": CodebookEmbeddingStrategy,
+    "sequence_examples": SequenceExamplesStrategy,
     "action_token_scatter": ActionTokenScatterStrategy,
     "action_sequence_scatter": ActionSequenceScatterStrategy,
     "top_sequences_scatter": TopSequencesScatterStrategy,

@@ -63,10 +63,11 @@ training:
       all_sequences_histogram:
         enabled: true
         every_n_validations: 5
-      clustering:
+      sequence_examples:
         enabled: true
         every_n_validations: 5
-        num_samples: 256
+        top_k_sequences: 16
+        examples_per_sequence: 4
 
       # Latent transfer on language_table
       latent_transfer:

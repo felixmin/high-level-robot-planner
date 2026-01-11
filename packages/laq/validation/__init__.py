@@ -16,10 +16,11 @@ from .factory import create_validation_strategies, STRATEGY_REGISTRY
 from .visualization import BasicVisualizationStrategy
 from .analysis import (
     LatentTransferStrategy,
-    ClusteringStrategy,
     CodebookHistogramStrategy,
     LatentSequenceHistogramStrategy,
     AllSequencesHistogramStrategy,
+    CodebookEmbeddingStrategy,
+    SequenceExamplesStrategy,
 )
 from .scatter import (
     MetadataScatterStrategy,
@@ -45,10 +46,11 @@ __all__ = [
     # Strategies
     "BasicVisualizationStrategy",
     "LatentTransferStrategy",
-    "ClusteringStrategy",
     "CodebookHistogramStrategy",
     "LatentSequenceHistogramStrategy",
     "AllSequencesHistogramStrategy",
+    "CodebookEmbeddingStrategy",
+    "SequenceExamplesStrategy",
     "MetadataScatterStrategy",
     "ActionTokenScatterStrategy",
     "ActionSequenceScatterStrategy",

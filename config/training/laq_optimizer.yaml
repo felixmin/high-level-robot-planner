@@ -91,13 +91,12 @@ validation:
       every_n_validations: 2  # Run every 10th validation
       num_pairs: 256  # Number of pairs to test transfer on
 
-    # Clustering analysis: analyze latent action distribution
-    clustering:
+    # Sequence examples: visualize frame pairs grouped by exact code sequence
+    sequence_examples:
       enabled: true
-      every_n_validations: 3  # Run every 20th validation
-      num_samples: 1000  # Samples to cluster
-      num_clusters: 16  # Number of k-means clusters
-      num_examples_per_cluster: 4  # Frame pairs to visualize per cluster
+      every_n_validations: 3
+      top_k_sequences: 16  # Number of most frequent sequences to visualize
+      examples_per_sequence: 4  # Frame pairs to show per sequence
 
 # Checkpointing
 checkpoint:

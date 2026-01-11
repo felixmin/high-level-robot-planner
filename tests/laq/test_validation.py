@@ -11,7 +11,8 @@ from laq.validation import (
     ValidationStrategy,
     BasicVisualizationStrategy,
     LatentTransferStrategy,
-    ClusteringStrategy,
+    CodebookEmbeddingStrategy,
+    SequenceExamplesStrategy,
     create_validation_strategies,
     prune_metadata,
     ESSENTIAL_METADATA_KEYS,
@@ -141,7 +142,7 @@ class TestCreateValidationStrategies:
         config = {
             "basic": {"enabled": True},
             "latent_transfer": {"enabled": True, "every_n_validations": 5},
-            "clustering": {"enabled": True, "every_n_validations": 10},
+            "sequence_examples": {"enabled": True, "every_n_validations": 3},
         }
         strategies = create_validation_strategies(config)
 
@@ -150,14 +151,14 @@ class TestCreateValidationStrategies:
         names = {s.name for s in strategies}
         assert "basic" in names
         assert "latent_transfer" in names
-        assert "clustering" in names
+        assert "sequence_examples" in names
 
     def test_create_only_basic(self):
         """Test creating only basic strategy."""
         config = {
             "basic": {"enabled": True},
             "latent_transfer": {"enabled": False},
-            "clustering": {"enabled": False},
+            "sequence_examples": {"enabled": False},
         }
         strategies = create_validation_strategies(config)
 
@@ -216,21 +217,69 @@ class TestLatentTransferStrategy:
         assert metrics == {}
 
 
-class TestClusteringStrategy:
-    """Test ClusteringStrategy."""
+class TestCodebookEmbeddingStrategy:
+    """Test CodebookEmbeddingStrategy."""
 
     def test_needs_caching(self):
-        """Test that clustering strategy needs caching."""
-        strategy = ClusteringStrategy()
+        """Test that codebook embedding strategy needs caching."""
+        strategy = CodebookEmbeddingStrategy()
         assert strategy.needs_caching()
+
+    def test_needs_codes(self):
+        """Test that codebook embedding strategy needs codes."""
+        strategy = CodebookEmbeddingStrategy()
+        assert strategy.needs_codes()
+
+    def test_default_params(self):
+        """Test default parameters."""
+        strategy = CodebookEmbeddingStrategy()
+        assert strategy.method == "tsne"
+        assert strategy.perplexity == 30
+        assert strategy.pca_components == 50
+        assert strategy.every_n_validations == 10
+
+    def test_custom_params(self):
+        """Test custom parameters."""
+        strategy = CodebookEmbeddingStrategy(
+            method="umap",
+            perplexity=50,
+            pca_components=0,
+            every_n_validations=5,
+        )
+        assert strategy.method == "umap"
+        assert strategy.perplexity == 50
+        assert strategy.pca_components == 0
+        assert strategy.every_n_validations == 5
+
+
+class TestSequenceExamplesStrategy:
+    """Test SequenceExamplesStrategy."""
+
+    def test_needs_caching(self):
+        """Test that sequence examples strategy needs caching."""
+        strategy = SequenceExamplesStrategy()
+        assert strategy.needs_caching()
+
+    def test_needs_codes(self):
+        """Test that sequence examples strategy needs codes."""
+        strategy = SequenceExamplesStrategy()
+        assert strategy.needs_codes()
+
+    def test_default_params(self):
+        """Test default parameters."""
+        strategy = SequenceExamplesStrategy()
+        assert strategy.top_k_sequences == 16
+        assert strategy.examples_per_sequence == 4
+        assert strategy.every_n_validations == 3
 
     def test_run_with_insufficient_data(self):
         """Test run with insufficient data returns empty metrics."""
-        strategy = ClusteringStrategy(num_clusters=16)
+        strategy = SequenceExamplesStrategy(min_samples=16)
         cache = ValidationCache()
 
-        # Only add 5 codes (need at least num_clusters)
+        # Only add 5 codes (need at least min_samples)
         cache.codes.append(torch.randint(0, 8, (5, 4)))
+        cache.frames.append(torch.randn(5, 3, 2, 64, 64))
 
         pl_module = MagicMock()
         trainer = MagicMock()
@@ -340,7 +389,7 @@ class TestStrategyBuckets:
 
     def test_strategy_single_bucket(self):
         """Test strategy with single bucket."""
-        strategy = ClusteringStrategy(
+        strategy = SequenceExamplesStrategy(
             buckets=["language_table"],
         )
         assert strategy.buckets == ["language_table"]
@@ -431,10 +480,11 @@ class TestCompositionPattern:
             "basic",
             "basic_visualization",
             "latent_transfer",
-            "clustering",
             "codebook_histogram",
             "sequence_histogram",
             "all_sequences_histogram",
+            "codebook_embedding",
+            "sequence_examples",
             "action_token_scatter",
             "action_sequence_scatter",
             "top_sequences_scatter",

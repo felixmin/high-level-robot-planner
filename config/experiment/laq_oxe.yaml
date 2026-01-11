@@ -45,9 +45,11 @@ training:
       latent_transfer:
         enabled: true
         every_n_validations: 3
-      clustering:
+      sequence_examples:
         enabled: true
         every_n_validations: 3
+        top_k_sequences: 16
+        examples_per_sequence: 4
       codebook_histogram:
         enabled: true
         every_n_validations: 3

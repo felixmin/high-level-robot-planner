@@ -46,7 +46,7 @@ training:
       latent_transfer:
         enabled: true
         every_n_validations: 1
-      clustering:
+      sequence_examples:
         enabled: false
       codebook_histogram:
         enabled: true

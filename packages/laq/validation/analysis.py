@@ -235,143 +235,6 @@ class LatentTransferStrategy(ValidationStrategy):
         plt.close(fig)
 
 
-class ClusteringStrategy(ValidationStrategy):
-    """
-    Analyze latent action distribution via clustering.
-
-    - Collect latent codes from validation set
-    - Run k-means clustering
-    - Log cluster statistics and example frame pairs per cluster
-    """
-
-    def __init__(
-        self,
-        name: str = "clustering",
-        enabled: bool = True,
-        every_n_validations: int = 20,
-        num_samples: int = 1000,
-        num_clusters: int = 16,
-        num_examples_per_cluster: int = 4,
-        min_samples: int = 16,  # Need at least num_clusters samples
-        **kwargs,
-    ):
-        super().__init__(
-            name=name,
-            enabled=enabled,
-            every_n_validations=every_n_validations,
-            min_samples=min_samples,
-            **kwargs,  # Pass buckets, etc.
-        )
-        self.num_samples = num_samples
-        self.num_clusters = num_clusters
-        self.num_examples_per_cluster = num_examples_per_cluster
-
-    def needs_caching(self) -> bool:
-        return True
-
-    def needs_codes(self) -> bool:
-        return True
-
-    def run(
-        self,
-        cache: ValidationCache,
-        pl_module: pl.LightningModule,
-        trainer: pl.Trainer,
-        metric_suffix: str = "",
-    ) -> Dict[str, Any]:
-        """Run clustering analysis."""
-        metrics = {}
-
-        all_frames = cache.get_all_frames()
-        all_codes = cache.get_codes()  # Use bounded codes for frame correspondence
-
-        if all_codes is None or len(all_codes) < self.num_clusters:
-            return metrics
-
-        # Limit samples
-        n = min(self.num_samples, len(all_codes))
-        indices = torch.randperm(len(all_codes))[:n]
-        codes = all_codes[indices]
-        frames = all_frames[indices] if all_frames is not None else None
-
-        # Flatten codes for clustering (if multi-token)
-        codes_flat = codes.reshape(len(codes), -1).float()
-
-        # K-means clustering
-        try:
-            from sklearn.cluster import KMeans
-
-            kmeans = KMeans(n_clusters=self.num_clusters, n_init=10, random_state=42)
-            cluster_labels = kmeans.fit_predict(codes_flat.cpu().numpy())
-            cluster_labels = torch.from_numpy(cluster_labels)
-
-            # Compute cluster sizes
-            cluster_sizes = torch.bincount(cluster_labels, minlength=self.num_clusters)
-
-            # Log metrics with suffix
-            metrics[f"val/cluster_entropy{metric_suffix}"] = compute_entropy(cluster_sizes.float())
-            metrics[f"val/num_empty_clusters{metric_suffix}"] = (cluster_sizes == 0).sum().item()
-            metrics[f"val/max_cluster_size{metric_suffix}"] = cluster_sizes.max().item()
-            metrics[f"val/min_cluster_size{metric_suffix}"] = cluster_sizes[cluster_sizes > 0].min().item() if (cluster_sizes > 0).any() else 0
-
-            pl_module.log_dict(metrics, sync_dist=True)
-            
-            # Visualize examples from each cluster
-            if frames is not None:
-                wandb_logger = self._get_wandb_logger(trainer)
-                if wandb_logger is not None:
-                    self._visualize_clusters(
-                        frames, cluster_labels, wandb_logger, trainer.current_epoch
-                    )
-            
-        except ImportError:
-            print("sklearn not available for clustering analysis")
-
-        return metrics
-
-    def _visualize_clusters(
-        self,
-        frames: torch.Tensor,
-        cluster_labels: torch.Tensor,
-        wandb_logger,
-        epoch: int,
-    ):
-        """Visualize example frame pairs from each cluster."""
-        grids = []
-        
-        for cluster_id in range(self.num_clusters):
-            mask = cluster_labels == cluster_id
-            cluster_frames = frames[mask]
-            
-            if len(cluster_frames) == 0:
-                continue
-            
-            # Get examples
-            n_examples = min(self.num_examples_per_cluster, len(cluster_frames))
-            examples = cluster_frames[:n_examples]
-            
-            # Create mini-grid: [frame_t, frame_t+offset]
-            frame_t = examples[:, :, 0]
-            frame_t_plus = examples[:, :, 1]
-            
-            imgs = torch.stack([frame_t, frame_t_plus], dim=1)
-            imgs = rearrange(imgs, 'b r c h w -> (b r) c h w')
-            imgs = imgs.clamp(0.0, 1.0)
-            
-            grid = make_grid(imgs, nrow=2, normalize=False, padding=2)
-            grids.append(grid)
-        
-        if grids:
-            # Combine all cluster grids
-            combined = torch.cat(grids, dim=2)  # Horizontal concat
-            
-            wandb_logger.log_image(
-                key="val/cluster_examples",
-                images=[combined],
-                caption=[f"Epoch {epoch}: Examples from {len(grids)} clusters"],
-            )
-
-
 class CodebookHistogramStrategy(ValidationStrategy):
     """
     Visualize codebook usage distribution as a histogram.
@@ -680,12 +543,12 @@ class AllSequencesHistogramStrategy(ValidationStrategy):
             # Alternatively use plot/fill_between for very dense data
             # ax.plot(x, counts, color='teal')
             # ax.fill_between(x, counts, color='teal', alpha=0.3)
-            
+
             ax.set_xlabel('Sequence Rank')
             ax.set_ylabel('Count')
             ax.set_title(f'Distribution of All {len(counts)} Unique Sequences (Step {global_step})')
             ax.set_yscale('log') # Log scale helps see the tail
-            
+
             # Add stats
             ax.text(0.95, 0.95, f'Total Unique: {len(counts)}',
                    transform=ax.transAxes, ha='right', va='top',
@@ -708,3 +571,409 @@ class AllSequencesHistogramStrategy(ValidationStrategy):
             plt.close(fig)
         except Exception as e:
             print(f"Warning: all_sequences_histogram visualization failed: {e}")
+
+
+class CodebookEmbeddingStrategy(ValidationStrategy):
+    """
+    Visualize codebook geometry via t-SNE dimensionality reduction.
+
+    Projects the learned codebook embedding vectors to 2D to reveal
+    whether the codebook has learned distinct semantic clusters or
+    is just a uniform sphere (which might imply poor learning).
+
+    Each point is a codebook entry (one row of vq.codebooks).
+    Points are colored by usage frequency from cached validation codes.
+    """
+
+    def __init__(
+        self,
+        name: str = "codebook_embedding",
+        enabled: bool = True,
+        every_n_validations: int = 10,
+        method: str = "tsne",  # "tsne" or "umap" (umap requires umap-learn)
+        perplexity: int = 30,  # t-SNE perplexity parameter
+        pca_components: int = 50,  # PCA preprocessing for speed/stability (0 to disable)
+        min_samples: int = 10,
+        **kwargs,
+    ):
+        super().__init__(
+            name=name,
+            enabled=enabled,
+            every_n_validations=every_n_validations,
+            min_samples=min_samples,
+            **kwargs,
+        )
+        self.method = method
+        self.perplexity = perplexity
+        self.pca_components = pca_components
+
+    def needs_caching(self) -> bool:
+        return True  # Need codes to compute usage frequencies
+
+    def needs_codes(self) -> bool:
+        return True
+
+    def run(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+        metric_suffix: str = "",
+    ) -> Dict[str, Any]:
+        """Generate codebook embedding visualization."""
+        metrics = {}
+
+        # Get codebook embeddings from model
+        # Shape: [num_embeddings, embedding_dim] e.g. [256, 32]
+        codebook = pl_module.model.vq.codebooks.detach().cpu().numpy()
+        num_embeddings = codebook.shape[0]
+        embedding_dim = codebook.shape[1]
+
+        # Compute usage counts from cached codes
+        all_codes = cache.get_all_codes()
+        if all_codes is None or len(all_codes) == 0:
+            # No codes to compute usage, use zeros (unknown usage)
+            usage_counts = torch.zeros(num_embeddings)
+        else:
+            # Flatten all codes and count occurrences per codebook entry
+            codes_flat = all_codes.flatten().long()
+            usage_counts = torch.bincount(codes_flat, minlength=num_embeddings).float()
+
+        usage_counts_np = usage_counts.numpy()
+
+        # Apply dimensionality reduction
+        try:
+            embeddings_2d = self._reduce_dimensions(codebook, embedding_dim)
+        except Exception as e:
+            print(f"Warning: codebook_embedding dimensionality reduction failed: {e}")
+            return metrics
+
+        # Create visualization
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is not None:
+            self._create_scatter(
+                embeddings_2d,
+                usage_counts_np,
+                wandb_logger,
+                trainer.global_step,
+                num_embeddings,
+            )
+
+        return metrics
+
+    def _reduce_dimensions(self, codebook, embedding_dim):
+        """Apply t-SNE (or UMAP) with optional PCA preprocessing."""
+        import numpy as np
+
+        n_samples = len(codebook)
+
+        # t-SNE requires at least 2 samples and perplexity < n_samples
+        # Skip dimensionality reduction for very small codebooks
+        if n_samples < 2:
+            raise ValueError(f"Codebook too small for visualization: {n_samples} entries")
+
+        data = codebook
+
+        # PCA preprocessing for speed/stability when embedding_dim is large
+        if self.pca_components > 0 and embedding_dim > self.pca_components:
+            from sklearn.decomposition import PCA
+            n_components = min(self.pca_components, n_samples - 1, embedding_dim)
+            if n_components > 0:
+                pca = PCA(n_components=n_components, random_state=42)
+                data = pca.fit_transform(data)
+
+        if self.method == "tsne":
+            from sklearn.manifold import TSNE
+            # t-SNE requires perplexity < n_samples and perplexity >= 1
+            # For very small codebooks, fall back to PCA if t-SNE can't run
+            max_perplexity = max(1, n_samples - 1)
+            effective_perplexity = min(self.perplexity, max_perplexity)
+            if effective_perplexity < 5 and n_samples < 10:
+                # t-SNE won't work well, use simple PCA projection
+                from sklearn.decomposition import PCA
+                pca = PCA(n_components=2, random_state=42)
+                embeddings_2d = pca.fit_transform(codebook)
+            else:
+                effective_perplexity = max(5, effective_perplexity)
+                tsne = TSNE(
+                    n_components=2,
+                    perplexity=effective_perplexity,
+                    random_state=42,
+                    n_iter=1000,
+                )
+                embeddings_2d = tsne.fit_transform(data)
+        elif self.method == "umap":
+            try:
+                from umap import UMAP
+                # UMAP also needs n_neighbors < n_samples
+                n_neighbors = min(15, n_samples - 1)
+                if n_neighbors < 2:
+                    # Fall back to PCA
+                    from sklearn.decomposition import PCA
+                    pca = PCA(n_components=2, random_state=42)
+                    embeddings_2d = pca.fit_transform(codebook)
+                else:
+                    reducer = UMAP(n_components=2, n_neighbors=n_neighbors, random_state=42)
+                    embeddings_2d = reducer.fit_transform(data)
+            except ImportError:
+                print("Warning: umap-learn not installed, falling back to t-SNE")
+                # Temporarily switch method to avoid recursion
+                original_method = self.method
+                self.method = "tsne"
+                try:
+                    embeddings_2d = self._reduce_dimensions(codebook, embedding_dim)
+                finally:
+                    self.method = original_method
+        else:
+            raise ValueError(f"Unknown method: {self.method}. Use 'tsne' or 'umap'.")
+
+        return embeddings_2d
+
+    def _create_scatter(
+        self,
+        embeddings_2d,
+        usage_counts,
+        wandb_logger,
+        global_step: int,
+        num_embeddings: int,
+    ):
+        """Create and log scatter plot of codebook embeddings."""
+        import numpy as np
+
+        try:
+            fig, ax = plt.subplots(figsize=(10, 10))
+
+            # Use log1p for visibility (many tokens may have 0 usage)
+            colors = np.log1p(usage_counts)
+
+            scatter = ax.scatter(
+                embeddings_2d[:, 0],
+                embeddings_2d[:, 1],
+                c=colors,
+                cmap="viridis",
+                alpha=0.7,
+                s=20,
+                edgecolors="none",
+            )
+
+            cbar = plt.colorbar(scatter, ax=ax)
+            cbar.set_label("log(usage + 1)")
+
+            # Add statistics
+            used_tokens = (usage_counts > 0).sum()
+            total_usage = usage_counts.sum()
+            ax.set_title(
+                f"Codebook Embedding Space ({self.method.upper()})\n"
+                f"Step {global_step} | Used: {used_tokens}/{num_embeddings} tokens"
+            )
+            ax.set_xlabel("Dimension 1")
+            ax.set_ylabel("Dimension 2")
+
+            plt.tight_layout()
+
+            # Convert to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png", dpi=100)
+            buf.seek(0)
+            img = Image.open(buf)
+
+            wandb_logger.log_image(
+                key="val/codebook_embedding",
+                images=[img],
+                caption=[
+                    f"Step {global_step}: {self.method.upper()} of {num_embeddings} codebook vectors, "
+                    f"colored by usage ({int(total_usage)} total codes)"
+                ],
+            )
+
+            plt.close(fig)
+        except Exception as e:
+            print(f"Warning: codebook_embedding visualization failed: {e}")
+
+
+class SequenceExamplesStrategy(ValidationStrategy):
+    """
+    Visualize frame pairs grouped by exact code sequence identity.
+
+    Replaces the flawed ClusteringStrategy approach (k-means on token indices)
+    with mathematically sound grouping: samples are bucketed by their
+    exact token sequence (e.g., all samples with code [3, 1, 2] together).
+
+    This answers: "What does sequence X represent?" by showing the actual
+    frame transitions that produced that sequence.
+    """
+
+    def __init__(
+        self,
+        name: str = "sequence_examples",
+        enabled: bool = True,
+        every_n_validations: int = 3,
+        top_k_sequences: int = 16,  # Number of most frequent sequences to visualize
+        examples_per_sequence: int = 4,  # Frame pairs to show per sequence
+        min_samples: int = 16,
+        **kwargs,
+    ):
+        super().__init__(
+            name=name,
+            enabled=enabled,
+            every_n_validations=every_n_validations,
+            min_samples=min_samples,
+            **kwargs,
+        )
+        self.top_k_sequences = top_k_sequences
+        self.examples_per_sequence = examples_per_sequence
+
+    def needs_caching(self) -> bool:
+        return True
+
+    def needs_codes(self) -> bool:
+        return True
+
+    def run(
+        self,
+        cache: ValidationCache,
+        pl_module: pl.LightningModule,
+        trainer: pl.Trainer,
+        metric_suffix: str = "",
+    ) -> Dict[str, Any]:
+        """Generate sequence examples visualization."""
+        metrics = {}
+
+        # Get bounded codes and frames (they have correspondence)
+        codes = cache.get_codes()
+        frames = cache.get_all_frames()
+
+        if codes is None or frames is None:
+            return metrics
+
+        if len(codes) < self.min_samples:
+            return metrics
+
+        # Convert codes to sequence tuples for exact matching
+        # codes shape: [N, code_seq_len] where values are codebook indices
+        sequences = [tuple(c.tolist()) for c in codes]
+
+        # Count sequence frequencies from bounded codes only
+        # This ensures consistency: the count shown matches what's visualizable
+        counter = Counter(sequences)
+
+        # Get top-K most frequent sequences
+        top_sequences = counter.most_common(self.top_k_sequences)
+
+        if not top_sequences:
+            return metrics
+
+        # Visualize
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is not None:
+            self._visualize_sequences(
+                frames,
+                sequences,
+                top_sequences,
+                wandb_logger,
+                trainer.global_step,
+            )
+
+        return metrics
+
+    def _visualize_sequences(
+        self,
+        frames: torch.Tensor,
+        sequences: List[tuple],
+        top_sequences: List[tuple],
+        wandb_logger,
+        global_step: int,
+    ):
+        """Create visualization grid for top sequences."""
+        grids = []
+        captions = []
+
+        for seq, count in top_sequences:
+            # Find all samples with this exact sequence
+            indices = [i for i, s in enumerate(sequences) if s == seq]
+
+            if len(indices) == 0:
+                # Sequence from all_codes not present in bounded cache
+                continue
+
+            # Sample up to examples_per_sequence frames
+            n_examples = min(self.examples_per_sequence, len(indices))
+            sample_indices = indices[:n_examples]
+
+            # Get frame pairs for this sequence
+            example_frames = frames[sample_indices]  # [n_examples, C, 2, H, W]
+
+            # Create mini-grid: [frame_t, frame_t+offset] for each example
+            frame_t = example_frames[:, :, 0]  # [n_examples, C, H, W]
+            frame_t_plus = example_frames[:, :, 1]  # [n_examples, C, H, W]
+
+            # Interleave: [t0, t0+, t1, t1+, ...]
+            imgs = torch.stack([frame_t, frame_t_plus], dim=1)  # [n, 2, C, H, W]
+            imgs = rearrange(imgs, "b r c h w -> (b r) c h w")
+            imgs = imgs.clamp(0.0, 1.0)
+
+            grid = make_grid(imgs, nrow=2, normalize=False, padding=2)
+            grids.append(grid)
+
+            # Format sequence as string: "3-1-2" for readability
+            seq_str = "-".join(map(str, seq))
+            captions.append(f"[{seq_str}] (n={count})")
+
+        if not grids:
+            return
+
+        # Create figure with individual sequence grids
+        try:
+            n_sequences = len(grids)
+            # Determine layout: aim for roughly square grid of sequence panels
+            n_cols = min(4, n_sequences)
+            n_rows = (n_sequences + n_cols - 1) // n_cols
+
+            # Each grid has shape [C, H, W] after make_grid
+            # We'll create a subplot for each sequence
+            fig, axes = plt.subplots(
+                n_rows, n_cols,
+                figsize=(5 * n_cols, 5 * n_rows),
+                squeeze=False,
+            )
+
+            for idx, (grid, caption) in enumerate(zip(grids, captions)):
+                row = idx // n_cols
+                col = idx % n_cols
+                ax = axes[row, col]
+
+                # Convert grid tensor to numpy for imshow
+                grid_np = grid.permute(1, 2, 0).numpy()  # [H, W, C]
+                ax.imshow(grid_np)
+                ax.set_title(caption, fontsize=10, family="monospace")
+                ax.axis("off")
+
+            # Hide empty subplots
+            for idx in range(len(grids), n_rows * n_cols):
+                row = idx // n_cols
+                col = idx % n_cols
+                axes[row, col].axis("off")
+
+            plt.suptitle(
+                f"Top {len(grids)} Sequences by Frequency (Step {global_step})",
+                fontsize=12,
+            )
+            plt.tight_layout()
+
+            # Convert to image
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+            buf.seek(0)
+            img = Image.open(buf)
+
+            wandb_logger.log_image(
+                key="val/sequence_examples",
+                images=[img],
+                caption=[
+                    f"Step {global_step}: Frame pairs grouped by exact code sequence"
+                ],
+            )
+
+            plt.close(fig)
+        except Exception as e:
+            print(f"Warning: sequence_examples visualization failed: {e}")
