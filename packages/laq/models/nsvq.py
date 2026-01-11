@@ -38,7 +38,6 @@ class NSVQ(torch.nn.Module):
         self.image_size = image_size
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        self.device = device
         self.discarding_threshold = discarding_threshold
         self.eps = 1e-12
         self.dim = dim
@@ -53,7 +52,9 @@ class NSVQ(torch.nn.Module):
         if initialization == 'normal':
             codebooks = torch.randn(self.num_embeddings, self.embedding_dim, device=device)
         elif initialization == 'uniform':
-            codebooks = uniform_dist.Uniform(-1 / self.num_embeddings, 1 / self.num_embeddings).sample([self.num_embeddings, self.embedding_dim])
+            codebooks = uniform_dist.Uniform(-1 / self.num_embeddings, 1 / self.num_embeddings).sample(
+                [self.num_embeddings, self.embedding_dim]
+            ).to(device)
         else:
             raise ValueError("initialization should be one of the 'normal' and 'uniform' strings")
 
@@ -172,6 +173,7 @@ class NSVQ(torch.nn.Module):
         batch_size = input_data_first.shape[0]
         
         input_data_first = input_data_first.contiguous()
+        input_data_last = input_data_last.contiguous()
         
         input_data_first = self.encode(input_data_first, batch_size) # b * 1 * 32
         input_data_last = self.encode(input_data_last, batch_size) # b * 1 * 32
@@ -187,7 +189,7 @@ class NSVQ(torch.nn.Module):
         hard_quantized_input = self.codebooks[min_indices]
         
         # Use input_data.device to ensure random vector is on the correct device
-        random_vector = normal_dist.Normal(0, 1).sample(input_data.shape).to(input_data.device)
+        random_vector = torch.randn_like(input_data)
 
         norm_quantization_residual = (input_data - hard_quantized_input).square().sum(dim=1, keepdim=True).sqrt()
         norm_random_vector = random_vector.square().sum(dim=1, keepdim=True).sqrt()
@@ -293,9 +295,9 @@ class NSVQ(torch.nn.Module):
                 else:
                     used_codebooks = used
 
-                self.codebooks[unused_indices] *= 0
-                self.codebooks[unused_indices] += used_codebooks[range(unused_count)] + 0.02 * torch.randn(
-                    (unused_count, self.embedding_dim), device=self.codebooks.device).clone()
+                self.codebooks[unused_indices] = used_codebooks[:unused_count] + 0.02 * torch.randn(
+                    (unused_count, self.embedding_dim), device=self.codebooks.device
+                )
 
             logger.info("Replaced %d codebooks (min_count=%.4f)", unused_count, min_count)
             self.codebooks_used.zero_()
@@ -315,11 +317,9 @@ class NSVQ(torch.nn.Module):
                 quantized_input (vector quantized version of input data used for inference (evaluation) | shape: (NxD) )
         """
 
-        #input_data = self.project_in(input_data)
         input_data_first = input_data_first.detach().clone()
         input_data_last = input_data_last.detach().clone()
         codebooks = self.codebooks.detach().clone()
-        ###########################################
         
         batch_size = input_data_first.shape[0]
         # compute the distances between input and codebooks vectors
