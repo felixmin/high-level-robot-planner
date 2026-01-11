@@ -76,6 +76,8 @@ class RAFTTeacher(nn.Module):
         self._model_name = model_name
         self._model: Optional[nn.Module] = None
         self._transforms = None
+        # Sub-batch RAFT inference to avoid cuDNN grid_sample failures at large batch sizes
+        # (RAFT's internal correlation lookups can hit unsupported cuDNN paths when B is big).
         self._chunk_size = chunk_size
 
     def _load_model(self, device: torch.device) -> nn.Module:
@@ -146,6 +148,8 @@ class RAFTTeacher(nn.Module):
         flow_chunks: list[torch.Tensor] = []
 
         with autocast_off:
+            # Process in smaller chunks to keep RAFT internals/correlation volumes within
+            # cuDNN-supported limits.
             for start in range(0, img1.shape[0], chunk_size):
                 end = start + chunk_size
                 img1_chunk = img1[start:end]
