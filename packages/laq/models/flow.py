@@ -12,6 +12,7 @@ Components:
 
 import logging
 from dataclasses import dataclass
+from contextlib import nullcontext
 from typing import Literal, Optional
 
 import torch
@@ -67,8 +68,7 @@ class RAFTTeacher(nn.Module):
     Not registered as a submodule to avoid checkpoint pollution.
     Weights are always loaded fresh from torchvision on first use.
 
-    Uses half precision (float16) for efficiency and official transforms
-    for proper input normalization.
+    Uses official transforms for proper input normalization.
     """
 
     def __init__(self, model_name: FlowModelType):
@@ -116,8 +116,6 @@ class RAFTTeacher(nn.Module):
         """
         Compute optical flow between two frames.
 
-        Uses autocast for mixed precision when on CUDA for efficiency.
-
         Args:
             frame1: First frame [B, C, 1, H, W] in [0, 1] range
             frame2: Second frame [B, C, 1, H, W] in [0, 1] range
@@ -135,14 +133,20 @@ class RAFTTeacher(nn.Module):
         img1 = (img1 * 255.0).clamp(0, 255).to(torch.uint8)
         img2 = (img2 * 255.0).clamp(0, 255).to(torch.uint8)
 
-        # Apply official RAFT transforms (handles normalization)
-        img1_t, img2_t = self._transforms(img1, img2)
-        img1_t = img1_t.contiguous()
-        img2_t = img2_t.contiguous()
-
-        # Use autocast for mixed precision on CUDA (faster, less VRAM)
+        # Run RAFT teacher in full precision to avoid AMP-related cuDNN/grid_sample issues
+        # (this also overrides any outer autocast context, e.g. from Lightning AMP).
         device_type = "cuda" if frame1.is_cuda else "cpu"
-        with torch.autocast(device_type=device_type, enabled=frame1.is_cuda):
+        autocast_off = (
+            torch.autocast(device_type=device_type, enabled=False)
+            if hasattr(torch, "autocast")
+            else nullcontext()
+        )
+        with autocast_off:
+            # Apply official RAFT transforms (handles normalization)
+            img1_t, img2_t = self._transforms(img1, img2)
+            img1_t = img1_t.contiguous()
+            img2_t = img2_t.contiguous()
+
             # RAFT returns list of flow predictions at different refinement levels
             # Take the last (most refined) prediction
             flow_predictions = model(img1_t, img2_t)
