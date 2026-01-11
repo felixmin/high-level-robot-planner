@@ -85,6 +85,7 @@ class LatentActionQuantization(nn.Module):
         attn_dropout = 0.,
         ff_dropout = 0.,
         code_seq_len = 1,
+        vq_discarding_threshold: float = 0.1,
         latent_ablation: str = "none",
         use_dinov3_encoder = False,
         dinov3_model_name = "facebook/dinov3-vits16-pretrain-lvd1689m",
@@ -222,6 +223,7 @@ class LatentActionQuantization(nn.Module):
             dim=dim,
             num_embeddings=codebook_size,
             embedding_dim=quant_dim,
+            discarding_threshold=vq_discarding_threshold,
             code_seq_len=code_seq_len,
             patch_size=patch_size,
             image_size=image_size,
@@ -508,7 +510,7 @@ class LatentActionQuantization(nn.Module):
 
         if step != 0 and self._should_replace_codebook(step):
             logger.debug(f"Replacing unused codebook entries at step {step}")
-            self.vq.replace_unused_codebooks(tokens.shape[0])
+            self.vq.replace_unused_codebooks()
 
         if return_only_codebook_ids:
             return indices

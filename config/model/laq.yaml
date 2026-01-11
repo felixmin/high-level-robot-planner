@@ -7,6 +7,7 @@ name: laq_vit
 dim: 1024                # Transformer embedding dimension
 quant_dim: 32           # Quantization dimension
 codebook_size: 8        # Number of codebook entries
+vq_discarding_threshold: 0.1  # Replacement cutoff as fraction of average usage (see NSVQ.replace_unused_codebooks)
 image_size: 256         # Input image size
 patch_size: 32          # Patch size for ViT
 spatial_depth: 8        # Number of spatial transformer layers

@@ -115,6 +115,7 @@ class LAQTask(pl.LightningModule):
             dim_head=model_config.dim_head,
             heads=model_config.heads,
             code_seq_len=model_config.code_seq_len,
+            vq_discarding_threshold=model_config.get("vq_discarding_threshold", 0.1),
             channels=model_config.get("channels", 3),
             attn_dropout=model_config.get("attn_dropout", 0.0),
             ff_dropout=model_config.get("ff_dropout", 0.0),

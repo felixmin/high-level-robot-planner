@@ -1,9 +1,12 @@
 ## https://github.com/MHVali/Noise-Substitution-in-Vector-Quantization/blob/main/NSVQ.py
 ## NSVQ: Noise Substitution in Vector Quantization for Machine Learning in IEEE Access journal, January 2022
 
+import logging
 import torch
 import torch.distributions.normal as normal_dist
 import torch.distributions.uniform as uniform_dist
+
+logger = logging.getLogger(__name__)
 
 ## add project_in, project_out layer 
 ## FYI vector_quantize_pytorch
@@ -22,7 +25,10 @@ class NSVQ(torch.nn.Module):
         
         ########## change the following inputs based on your application ##########
         
-        4. discarding_threshold = Percentage threshold for discarding unused codebooks
+        4. discarding_threshold = Replacement cutoff as a fraction of average usage.
+            When replacing unused entries, we compute the average usage per codebook
+            entry over the replacement window and replace entries whose usage is
+            below (discarding_threshold * average_usage).
         
         5. initialization = Initial distribution for codebooks
         
@@ -53,8 +59,13 @@ class NSVQ(torch.nn.Module):
 
         self.codebooks = torch.nn.Parameter(codebooks, requires_grad=True)
 
-        # Counter variable which contains the number of times each codebook is used
-        self.codebooks_used = torch.zeros(self.num_embeddings, dtype=torch.int32, device=device)
+        # Counter variable which contains the number of times each codebook is used.
+        # Register as a buffer so it moves with the module across devices.
+        self.register_buffer(
+            "codebooks_used",
+            torch.zeros(self.num_embeddings, dtype=torch.int32, device=device),
+            persistent=False,
+        )
         
         self.project_in = torch.nn.Linear(dim, embedding_dim)
         self.project_out = torch.nn.Linear(embedding_dim, dim) 
@@ -185,20 +196,24 @@ class NSVQ(torch.nn.Module):
         vq_error = (norm_quantization_residual / norm_random_vector + self.eps) * random_vector
 
         if codebook_training_only:
-            print(f"codebook error: {norm_quantization_residual.norm()}")
+            logger.debug("codebook error: %s", norm_quantization_residual.norm())
             quantized_input = hard_quantized_input
         else:
             quantized_input = input_data + vq_error
 
-        # claculating the perplexity (average usage of codebook entries)
+        # calculating the perplexity (average usage of codebook entries)
         encodings = torch.zeros(input_data.shape[0], self.num_embeddings, device=input_data.device)
         encodings.scatter_(1, min_indices.reshape([-1, 1]), 1)
         avg_probs = torch.mean(encodings, dim=0)
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + self.eps)))
 
         with torch.no_grad():
-            min_indices_cpu = min_indices.cpu()
-            self.codebooks_used[min_indices_cpu] += 1
+            # Correctly handle duplicate indices (advanced indexing would undercount).
+            self.codebooks_used.scatter_add_(
+                0,
+                min_indices,
+                torch.ones_like(min_indices, dtype=self.codebooks_used.dtype),
+            )
 
         # use the first returned tensor "quantized_input" for training phase (Notice that you do not have to use the
         # tensor "quantized_input" for inference (evaluation) phase)
@@ -208,50 +223,73 @@ class NSVQ(torch.nn.Module):
         quantized_input = self.decode(quantized_input, batch_size)
         return quantized_input, perplexity, self.codebooks_used.cpu().numpy(), min_indices.reshape(batch_size, -1)
 
-    def replace_unused_codebooks(self, num_batches):
+    def _get_replacement_indices(self):
+        """
+        Compute which codebook entries are considered unused/used for replacement.
+
+        Replacement criterion (size-aware):
+          - Let `total = sum(codebooks_used)` within the current replacement window.
+          - Let `expected = total / num_embeddings` (average usage per entry).
+          - Mark entry i as "unused" if `codebooks_used[i] < discarding_threshold * expected`.
+
+        This scales naturally with codebook size: for large codebooks, the average usage
+        per entry is lower, so the cutoff is lower as well.
+
+        Returns:
+            unused_indices: 1D LongTensor of indices to replace
+            used_indices: 1D LongTensor of indices considered active
+            min_count: Float cutoff used for the split
+        """
+        counts = self.codebooks_used
+
+        total = int(counts.sum().item())
+
+        if total <= 0 or self.num_embeddings <= 0:
+            # No information in the window; treat everything as unused.
+            all_idx = torch.arange(self.num_embeddings, dtype=torch.long, device=counts.device)
+            empty = torch.empty((0,), dtype=torch.long, device=counts.device)
+            return all_idx, empty, 0.0
+
+        expected = total / float(self.num_embeddings)
+        min_count = float(self.discarding_threshold) * expected
+
+        counts_f = counts.to(dtype=torch.float32)
+        used_indices = torch.where(counts_f >= min_count)[0].to(dtype=torch.long)
+        unused_indices = torch.where(counts_f < min_count)[0].to(dtype=torch.long)
+
+        return unused_indices, used_indices, min_count
+
+    def replace_unused_codebooks(self):
 
         """
-        This function is used to replace the inactive codebook entries with the active ones, to make all codebooks
-        entries to be used for training. The function has to be called periodically with the periods of "num_batches".
-        For more details, the function waits for "num_batches" training batches and then discards the codebook entries
-        which are used less than a specified percentage (self.discard_threshold) during this period, and replace them
-        with the codebook entries which were used (active).
+        Replace inactive codebook entries with (noisy) copies of active ones.
 
-        Recommendation: Call this function after a specific number of training batches. In the beginning the number of
-         replaced codebooks might increase. However, the main trend must be decreasing after some training time.
-         If it is not the case for you, increase the "num_batches" or decrease the "discarding_threshold" to make
-         the trend for number of replacements decreasing. Stop calling the function at the latest stages of training
-         in order not to introduce new codebook entries which would not have the right time to be tuned and optimized
-         until the end of training.
-
-        Play with "self.discard_threshold" value and the period ("num_batches") you call the function. A common trend
-        could be to select the self.discard_threshold from the range [0.01-0.1] and the num_batches from the set
-        {100,500,1000,...}. For instance, as a commonly used case, if we set the self.discard_threshold=0.01 and
-        num_batches=100, it means that you want to discard the codebook entries which are used less than 1 percent
-        during 100 training batches. Remember you have to set the values for "self.discard_threshold" and "num_batches"
-        in a logical way, such that the number of discarded codebook entries have to be in a decreasing trend during
-        the training phase.
-
-        :param num_batches: period of training batches that you want to replace inactive codebooks with the active ones
+        The replacement criterion is size-aware:
+          - Let total = total assignments in the replacement window.
+          - Let expected = total / num_embeddings (average usage per entry).
+          - Replace entries with usage < discarding_threshold * expected.
 
         """
 
         with torch.no_grad():
-
-            unused_indices = torch.where((self.codebooks_used.cpu() / num_batches) < self.discarding_threshold)[0]
-            used_indices = torch.where((self.codebooks_used.cpu() / num_batches) >= self.discarding_threshold)[0]
+            unused_indices, used_indices, min_count = self._get_replacement_indices()
 
             unused_count = unused_indices.shape[0]
             used_count = used_indices.shape[0]
 
             if used_count == 0:
-                print(f'####### used_indices equals zero / shuffling whole codebooks ######')
+                logger.info("No active codebooks; shuffling entire codebook")
                 self.codebooks += self.eps * torch.randn(self.codebooks.size(), device=self.codebooks.device).clone()
+            elif unused_count == 0:
+                # Everything is considered active in this window; nothing to replace.
+                pass
             else:
                 used = self.codebooks[used_indices].clone()
                 if used_count < unused_count:
                     used_codebooks = used.repeat(int((unused_count / (used_count + self.eps)) + 1), 1)
-                    used_codebooks = used_codebooks[torch.randperm(used_codebooks.shape[0])]
+                    used_codebooks = used_codebooks[
+                        torch.randperm(used_codebooks.shape[0], device=used_codebooks.device)
+                    ]
                 else:
                     used_codebooks = used
 
@@ -259,8 +297,8 @@ class NSVQ(torch.nn.Module):
                 self.codebooks[unused_indices] += used_codebooks[range(unused_count)] + 0.02 * torch.randn(
                     (unused_count, self.embedding_dim), device=self.codebooks.device).clone()
 
-            print(f'************* Replaced ' + str(unused_count) + f' codebooks *************')
-            self.codebooks_used[:] = 0.0    
+            logger.info("Replaced %d codebooks (min_count=%.4f)", unused_count, min_count)
+            self.codebooks_used.zero_()
 
     def inference(self, input_data_first, input_data_last, user_action_token_num=None):
 
@@ -301,7 +339,7 @@ class NSVQ(torch.nn.Module):
         min_indices = torch.argmin(distances, dim=1)
         
         if user_action_token_num is not None:
-            if type(user_action_token_num) == list:
+            if isinstance(user_action_token_num, list):
                 min_indices = torch.tensor(user_action_token_num, device=input_data.device)
             else:                
                 min_indices = torch.tensor([[user_action_token_num]], device=input_data.device).repeat(input_data.shape[0], 1)
@@ -313,7 +351,10 @@ class NSVQ(torch.nn.Module):
         return quantized_input, min_indices.reshape(batch_size, -1)
     
     def codebook_reinit(self):
-        self.codebooks = torch.nn.Parameter(torch.randn(self.num_embeddings, self.embedding_dim, device=self.device), requires_grad=True)
-        self.codebooks_used = torch.zeros(self.num_embeddings, dtype=torch.int32, device=self.device)
+        self.codebooks = torch.nn.Parameter(
+            torch.randn(self.num_embeddings, self.embedding_dim, device=self.codebooks.device),
+            requires_grad=True,
+        )
+        self.codebooks_used.zero_()
         
         
