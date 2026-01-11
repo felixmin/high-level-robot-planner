@@ -137,6 +137,8 @@ class RAFTTeacher(nn.Module):
 
         # Apply official RAFT transforms (handles normalization)
         img1_t, img2_t = self._transforms(img1, img2)
+        img1_t = img1_t.contiguous()
+        img2_t = img2_t.contiguous()
 
         # Use autocast for mixed precision on CUDA (faster, less VRAM)
         device_type = "cuda" if frame1.is_cuda else "cpu"
