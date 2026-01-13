@@ -32,6 +32,7 @@ from foundation.online_laq import LAQTaskCodeProvider
 from foundation.qwen3vl_setup import prepare_action_token_training
 from foundation.vla_inputs import ChatConfig
 from foundation.vla_module import VLATokenLightningModule, VLAOptimizerConfig
+from foundation.image_adapters import oxe_first_frames_to_pil
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
@@ -115,6 +116,7 @@ def main(cfg: DictConfig):
             weight_decay=float(cfg.training.optimizer.weight_decay),
         ),
         action_token_ids=action_token_ids,
+        frames_to_images=oxe_first_frames_to_pil,
     )
 
     checkpoint_dir = output_dir / "checkpoints"
