@@ -19,9 +19,3 @@ action_tokens:
 
 chat:
   system_prompt: "You are a robot policy. Reply only with action tokens."
-
-# Optional freezing knobs (implemented later as we add real Qwen integration)
-freeze:
-  vision: false
-  lm_first_n_layers: 0
-
