@@ -27,6 +27,7 @@ from common.logging import set_seed
 from common.data import OXEDataModule
 
 from foundation.action_tokens import ActionTokenConfig
+from foundation.constrained_decode import ActionTokenIds
 from foundation.online_laq import LAQTaskCodeProvider
 from foundation.qwen3vl_setup import prepare_action_token_training
 from foundation.vla_inputs import ChatConfig
@@ -91,7 +92,17 @@ def main(cfg: DictConfig):
     processor = Qwen3VLProcessor.from_pretrained(model_name)
 
     action_cfg = ActionTokenConfig(**OmegaConf.to_container(cfg.model.action_tokens, resolve=True))
-    prepare_action_token_training(model=vla_model, processor=processor, action_tokens=action_cfg)
+    token_id_map = prepare_action_token_training(
+        model=vla_model, processor=processor, action_tokens=action_cfg
+    )
+
+    action_token_ids = ActionTokenIds(
+        action_start_id=token_id_map[action_cfg.action_start],
+        action_end_id=token_id_map[action_cfg.action_end],
+        action_code_ids=[token_id_map[action_cfg.token_fmt.format(i=i)] for i in range(action_cfg.codebook_size)],
+        eos_token_id=int(getattr(processor.tokenizer, "eos_token_id", 0)),
+        code_seq_len=action_cfg.code_seq_len,
+    )
 
     module = VLATokenLightningModule(
         vla_model=vla_model,
@@ -103,6 +114,7 @@ def main(cfg: DictConfig):
             lr=float(cfg.training.optimizer.lr),
             weight_decay=float(cfg.training.optimizer.weight_decay),
         ),
+        action_token_ids=action_token_ids,
     )
 
     checkpoint_dir = output_dir / "checkpoints"

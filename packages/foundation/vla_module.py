@@ -22,8 +22,9 @@ import lightning.pytorch as pl
 import torch
 
 from foundation.action_tokens import ActionTokenConfig
+from foundation.constrained_decode import ActionTokenIds, make_prefix_allowed_tokens_fn
 from foundation.online_laq import LatentCodeProvider, extract_oxe_language, oxe_frames_to_laq_video
-from foundation.vla_inputs import ChatConfig, build_inputs_with_prompt_mask
+from foundation.vla_inputs import ChatConfig, build_inputs_with_prompt_mask, build_prompt_inputs
 
 
 @dataclass
@@ -43,6 +44,7 @@ class VLATokenLightningModule(pl.LightningModule):
         chat: Optional[ChatConfig] = None,
         optimizer: Optional[VLAOptimizerConfig] = None,
         frames_to_images: Optional[Callable[[torch.Tensor], List[Any]]] = None,
+        action_token_ids: Optional[ActionTokenIds] = None,
     ):
         super().__init__()
         self.vla_model = vla_model
@@ -51,6 +53,7 @@ class VLATokenLightningModule(pl.LightningModule):
         self.action_tokens = action_tokens
         self.chat = chat or ChatConfig(system_prompt=None)
         self.optimizer_cfg = optimizer or VLAOptimizerConfig()
+        self.action_token_ids = action_token_ids
 
         # Convert OXE batch frames into image objects for the VLM processor.
         # In production this will likely return PIL Images; in tests we can inject a stub.
@@ -124,7 +127,71 @@ class VLATokenLightningModule(pl.LightningModule):
         loss = outputs.loss if hasattr(outputs, "loss") else outputs[0]
 
         self.log("val/loss", loss, prog_bar=True, sync_dist=True)
+
+        if (
+            self.action_token_ids is not None
+            and hasattr(self.vla_model, "generate")
+            and batch_idx == 0
+        ):
+            acc = self._compute_token_accuracy(frames=frames, instructions=instructions, gt_codes=codes)
+            self.log("val/token_accuracy", acc, prog_bar=True, sync_dist=True)
+
         return loss
+
+    @torch.no_grad()
+    def _compute_token_accuracy(
+        self, *, frames: torch.Tensor, instructions: list[str], gt_codes: torch.Tensor
+    ) -> torch.Tensor:
+        images = self.frames_to_images(frames)
+        prompt_inputs = build_prompt_inputs(
+            processor=self.processor,
+            images=images,
+            instructions=instructions,
+            chat=self.chat,
+            device=self.device,
+        )
+
+        attention_mask = prompt_inputs.get("attention_mask")
+        if attention_mask is None:
+            raise KeyError("processor output must include attention_mask")
+        prompt_lens = attention_mask.sum(dim=1).to(torch.long)
+
+        token_ids = self.action_token_ids
+        assert token_ids is not None
+        prefix_fn = make_prefix_allowed_tokens_fn(token_ids)
+
+        max_new = token_ids.code_seq_len + 3  # <ACTION> + codes + </ACTION>
+        generated = self.vla_model.generate(
+            **prompt_inputs,
+            max_new_tokens=max_new,
+            do_sample=False,
+            prefix_allowed_tokens_fn=prefix_fn,
+        )
+
+        # Map code token id -> code index
+        code_id_to_index = {tid: i for i, tid in enumerate(token_ids.action_code_ids)}
+
+        correct = 0
+        total = 0
+
+        for i in range(generated.shape[0]):
+            start = int(prompt_lens[i].item())
+            gen_suffix = generated[i, start:].tolist()
+            pred_code_ids = [t for t in gen_suffix if t in code_id_to_index]
+            pred_codes = [code_id_to_index[t] for t in pred_code_ids[: token_ids.code_seq_len]]
+
+            gt = gt_codes[i].tolist()
+            # pad missing predictions with -1
+            if len(pred_codes) < len(gt):
+                pred_codes = pred_codes + ([-1] * (len(gt) - len(pred_codes)))
+
+            for p, g in zip(pred_codes[: len(gt)], gt, strict=True):
+                total += 1
+                if p == g:
+                    correct += 1
+
+        acc = 0.0 if total == 0 else (correct / total)
+        return torch.tensor(acc, device=self.device, dtype=torch.float32)
 
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]

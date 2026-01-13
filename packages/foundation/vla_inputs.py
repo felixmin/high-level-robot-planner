@@ -134,3 +134,35 @@ def build_inputs_with_prompt_mask(
     full_inputs["labels"] = labels
     return full_inputs
 
+
+def build_prompt_inputs(
+    *,
+    processor: Any,
+    images: Sequence[Any],
+    instructions: Sequence[str],
+    chat: ChatConfig,
+    device: torch.device,
+) -> Dict[str, torch.Tensor]:
+    """Build prompt-only inputs (no labels, used for generation)."""
+    if len(images) != len(instructions):
+        raise ValueError("images and instructions must have the same length")
+
+    prompt_messages = [
+        build_messages(img, instr, None, chat=chat)
+        for img, instr in zip(images, instructions, strict=True)
+    ]
+    prompt_texts = [
+        processor.apply_chat_template(m, tokenize=False, add_generation_prompt=True)
+        for m in prompt_messages
+    ]
+
+    inputs = processor(
+        text=prompt_texts,
+        images=list(images),
+        return_tensors="pt",
+        padding=True,
+    )
+    return {
+        k: (v.to(device) if isinstance(v, torch.Tensor) else v)
+        for k, v in inputs.items()
+    }
