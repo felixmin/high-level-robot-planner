@@ -1,0 +1,17 @@
+# @package _global_
+
+# Stage 2: Cosmos-Reason2 (Qwen3-VL) token-based VLA, debug settings.
+
+defaults:
+  - /model@model: foundation_cosmos2_tokens
+  - /data@data: latent_labeled
+  - /training@training: vla_lightning_debug
+  - /cluster@cluster: local_dev
+
+experiment:
+  name: vla_cosmos2_tokens_debug
+  description: "Debug run: Cosmos-Reason2 token-based latent action prediction"
+
+logging:
+  tags: ["debug", "foundation", "cosmos2", "tokens"]
+  log_model: false

@@ -98,10 +98,37 @@ class VLATokenLightningModule(pl.LightningModule):
         self.log("train/loss", loss, prog_bar=True, sync_dist=True)
         return loss
 
+    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+        if isinstance(batch, dict):
+            frames = batch["frames"]
+            instructions = extract_oxe_language(batch)
+        else:
+            raise TypeError("Expected dict batch with keys from OXEDataModule (frames, language, ...)")
+
+        video = oxe_frames_to_laq_video(frames)
+        codes = self.code_provider.codes_from_video(video)
+
+        targets = [self.action_tokens.format_target(row.tolist()) for row in codes]
+        images = self.frames_to_images(frames)
+
+        inputs = build_inputs_with_prompt_mask(
+            processor=self.processor,
+            images=images,
+            instructions=instructions,
+            targets=targets,
+            chat=self.chat,
+            device=self.device,
+        )
+
+        outputs = self.vla_model(**inputs)
+        loss = outputs.loss if hasattr(outputs, "loss") else outputs[0]
+
+        self.log("val/loss", loss, prog_bar=True, sync_dist=True)
+        return loss
+
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]
         optimizer = torch.optim.AdamW(
             params, lr=self.optimizer_cfg.lr, weight_decay=self.optimizer_cfg.weight_decay
         )
         return optimizer
-

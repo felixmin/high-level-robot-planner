@@ -94,6 +94,21 @@ class TestExperimentConfigs:
             assert cfg.cluster.compute.num_nodes == 4
             assert cfg.cluster.compute.gpus_per_node == 4
 
+    def test_vla_cosmos2_tokens_debug_config(self, config_dir):
+        """Test Cosmos-Reason2 token-based VLA debug configuration loads correctly."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(
+                config_name="config", overrides=["experiment=vla_cosmos2_tokens_debug"]
+            )
+
+            assert cfg.experiment.name == "vla_cosmos2_tokens_debug"
+            assert "cosmos" in cfg.experiment.description.lower()
+            assert cfg.model.name == "vla_cosmos2_tokens"
+            assert cfg.model.vla.model_name == "nvidia/Cosmos-Reason2-2B"
+            assert cfg.model.action_tokens.codebook_size == 8
+            assert cfg.model.action_tokens.code_seq_len == 4
+            assert cfg.cluster.name == "local"
+
 
 class TestConfigComposition:
     """Test configuration composition and overrides."""
@@ -147,7 +162,10 @@ class TestConfigComposition:
 class TestExperimentConsistency:
     """Test that all experiments load without errors."""
 
-    @pytest.mark.parametrize("experiment", ["laq_debug", "laq_full", "laq_normal", "vla_7b"])
+    @pytest.mark.parametrize(
+        "experiment",
+        ["laq_debug", "laq_full", "laq_normal", "vla_7b", "vla_cosmos2_tokens_debug"],
+    )
     def test_all_experiments_load(self, config_dir, experiment):
         """Test that all available experiments load successfully."""
         with initialize_config_dir(version_base=None, config_dir=config_dir):
@@ -185,4 +203,3 @@ class TestExperimentConsistency:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

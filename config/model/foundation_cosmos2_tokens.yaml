@@ -1,0 +1,27 @@
+# Stage 2 (Foundation) token-based VLA using Cosmos-Reason2 (Qwen3-VL).
+
+name: vla_cosmos2_tokens
+
+vla:
+  model_name: nvidia/Cosmos-Reason2-2B
+  torch_dtype: bf16  # bf16, fp16, fp32
+  attn_implementation: sdpa
+
+laq:
+  checkpoint: ""  # required at runtime (Stage 1 LAQ checkpoint)
+
+action_tokens:
+  codebook_size: 8
+  code_seq_len: 4
+  action_start: "<ACTION>"
+  action_end: "</ACTION>"
+  token_fmt: "<ACT_{i}>"
+
+chat:
+  system_prompt: "You are a robot policy. Reply only with action tokens."
+
+# Optional freezing knobs (implemented later as we add real Qwen integration)
+freeze:
+  vision: false
+  lm_first_n_layers: 0
+

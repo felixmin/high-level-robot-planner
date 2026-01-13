@@ -1,0 +1,21 @@
+# Stage 2 debug training settings (single GPU, quick smoke runs)
+
+max_steps: 20
+max_epochs: 1
+accumulate_grad_batches: 1
+precision: bf16-mixed
+gradient_clip_val: 1.0
+
+optimizer:
+  lr: 1.0e-5
+  weight_decay: 0.01
+
+validation:
+  check_val_every_n_epoch: 1
+
+checkpoint:
+  monitor: val/loss
+  mode: min
+  save_top_k: 1
+  save_last: true
+
