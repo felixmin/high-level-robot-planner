@@ -10,8 +10,7 @@ compute:
 
 slurm:
   enabled: true
-  partition: mcml-hgx-h100-94x4
-  qos: mcml
+  partition: lrz-hgx-h100-94x4
   account: null  # Set if needed
   
 distributed:
@@ -33,4 +32,3 @@ container:
   image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/lapa.sqsh
   mounts:
     - /dss/dssmcmlfs01:/data
-

@@ -5,6 +5,11 @@ Submit training jobs to Slurm by generating sbatch scripts.
 This script runs on the login node (no torch required) and generates
 sbatch scripts that run inside Enroot containers on compute nodes.
 
+Note:
+    This is intended for cluster submissions (Slurm + container execution).
+    For local runs, invoke the training script directly, e.g.:
+        python scripts/2_train_laq.py experiment=...
+
 Usage:
     # Submit single job
     python scripts/submit_job.py experiment=laq_oxe_debug
@@ -92,6 +97,8 @@ def generate_sbatch_script(
     script: str,
     overrides: list,
     partition: str,
+    qos: str | None,
+    account: str | None,
     gpus: int,
     time: str,
     mem: str,
@@ -111,7 +118,8 @@ def generate_sbatch_script(
     script_content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH --partition={partition}
-#SBATCH --qos=mcml
+{f"#SBATCH --qos={qos}" if qos else ""}
+{f"#SBATCH --account={account}" if account else ""}
 #SBATCH --gres=gpu:{gpus}
 #SBATCH --cpus-per-task={cpus}
 #SBATCH --mem={mem}
@@ -165,19 +173,29 @@ def main():
     )
     parser.add_argument(
         "--partition", "-p",
-        default="mcml-hgx-h100-94x4",
-        help="Slurm partition"
+        default=None,
+        help="Slurm partition (default: from cluster config)"
+    )
+    parser.add_argument(
+        "--qos",
+        default=None,
+        help="Slurm QoS (default: from cluster config)"
+    )
+    parser.add_argument(
+        "--account",
+        default=None,
+        help="Slurm account (default: from cluster config)"
     )
     parser.add_argument(
         "--gpus", "-g",
         type=int,
-        default=1,
-        help="Number of GPUs"
+        default=None,
+        help="Number of GPUs (default: from cluster config)"
     )
     parser.add_argument(
         "--time", "-t",
-        default="24:00:00",
-        help="Time limit (HH:MM:SS)"
+        default=None,
+        help="Time limit (HH:MM:SS) (default: from cluster config)"
     )
     parser.add_argument(
         "--mem",
@@ -187,8 +205,8 @@ def main():
     parser.add_argument(
         "--cpus",
         type=int,
-        default=8,
-        help="CPUs per task"
+        default=None,
+        help="CPUs per task (default: from cluster config)"
     )
     parser.add_argument(
         "--container",
@@ -203,11 +221,34 @@ def main():
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name="config", overrides=overrides)
 
-    # Container image (lam.sqsh has all dependencies pre-installed)
-    container_image = args.container or os.environ.get(
-        "HLRP_CONTAINER_IMAGE",
-        "/dss/dsshome1/00/go98qik2/workspace/containers/lam.sqsh"
-    )
+    slurm_enabled = bool(OmegaConf.select(cfg, "cluster.slurm.enabled"))
+    if not slurm_enabled:
+        cluster_name = OmegaConf.select(cfg, "cluster.name") or "<unknown>"
+        raise SystemExit(
+            "Cluster config has `cluster.slurm.enabled: false` "
+            f"(cluster={cluster_name}).\n"
+            "Run the training script locally, or submit with a Slurm-enabled cluster, e.g.:\n"
+            "  python scripts/submit_job.py experiment=... cluster=lrz_h100"
+        )
+
+    # Resolve Slurm defaults from Hydra config unless explicitly set via CLI.
+    partition = args.partition or OmegaConf.select(cfg, "cluster.slurm.partition") or "mcml-hgx-h100-94x4"
+    qos = args.qos if args.qos is not None else OmegaConf.select(cfg, "cluster.slurm.qos")
+    account = args.account if args.account is not None else OmegaConf.select(cfg, "cluster.slurm.account")
+
+    # Resolve compute defaults from Hydra config unless explicitly set via CLI.
+    gpus = args.gpus if args.gpus is not None else (OmegaConf.select(cfg, "cluster.compute.gpus_per_node") or 1)
+    cpus = args.cpus if args.cpus is not None else (OmegaConf.select(cfg, "cluster.compute.cpus_per_task") or 8)
+    time_limit = args.time or OmegaConf.select(cfg, "cluster.compute.time_limit") or "24:00:00"
+
+    # Container image is required for Slurm submissions.
+    container_image = args.container or OmegaConf.select(cfg, "cluster.container.image")
+    if not container_image:
+        cluster_name = OmegaConf.select(cfg, "cluster.name") or "<unknown>"
+        raise SystemExit(
+            "Missing container image. Set `cluster.container.image` in the cluster config "
+            f"(cluster={cluster_name}) or pass `--container /path/to/image.sqsh`."
+        )
 
     # Memory: use CLI arg > cluster config > default 200G
     if args.mem is not None:
@@ -236,11 +277,15 @@ def main():
             print(f"    {param}: {values}")
 
     print(f"\nSlurm settings:")
-    print(f"  Partition: {args.partition}")
-    print(f"  GPUs: {args.gpus}")
-    print(f"  Time: {args.time}")
+    print(f"  Partition: {partition}")
+    if qos:
+        print(f"  QoS: {qos}")
+    if account:
+        print(f"  Account: {account}")
+    print(f"  GPUs: {gpus}")
+    print(f"  Time: {time_limit}")
     print(f"  Memory: {mem}")
-    print(f"  CPUs: {args.cpus}")
+    print(f"  CPUs: {cpus}")
     print(f"  Container: {container_image}")
 
     # Create logs directory
@@ -274,11 +319,13 @@ def main():
         sbatch_content = generate_sbatch_script(
             script=args.script,
             overrides=combined_overrides,
-            partition=args.partition,
-            gpus=args.gpus,
-            time=args.time,
+            partition=partition,
+            qos=qos,
+            account=account,
+            gpus=gpus,
+            time=time_limit,
             mem=mem,
-            cpus=args.cpus,
+            cpus=cpus,
             container_image=container_image,
             job_name=job_name,
         )

@@ -1,37 +1,34 @@
-# LRZ H100 Multi-Node Configuration
-# 4+ nodes with 4x H100 GPUs each
+# MCML H100 Single Node Configuration
+# Single node on MCML H100 partition
 
-name: lrz_h100_multinode
+name: mcml_h100
 
 compute:
-  num_nodes: 4
-  gpus_per_node: 4
-  cpus_per_task: 18
-  mem_gb: 500
-  time_limit: "48:00:00"
+  num_nodes: 1
+  gpus_per_node: 1
+  time_limit: "15:00:00"
 
 slurm:
   enabled: true
-  partition: lrz-hgx-h100-94x4
+  partition: mcml-hgx-h100-94x4
   qos: mcml
-  account: null
+  account: null  # Set if needed
   
 distributed:
   backend: nccl
   precision: bf16-mixed
-  strategy: fsdp  # FSDP for multi-node
+  strategy: ddp  # DDP for single node, FSDP for large models
   
-  # NCCL settings (critical for multi-node)
-  nccl_socket_ifname: ib0
-  nccl_debug: WARN
-  nccl_ib_timeout: 22
-  nccl_ib_retry_cnt: 7
+  # NCCL settings
+  nccl_socket_ifname: ib0  # InfiniBand
+  nccl_debug: WARN  # Set to INFO for debugging
 
 storage:
   data_root: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/datasets
   checkpoint_dir: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/checkpoints
   log_dir: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/logs
 
+# Container settings
 container:
   image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/lapa.sqsh
   mounts:

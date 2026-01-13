@@ -11,16 +11,16 @@ This guide explains how to submit training jobs to the LRZ cluster using `script
 
 ```bash
 # Submit a single job
-python scripts/submit_job.py experiment=laq_oxe_debug
+python scripts/submit_job.py experiment=laq_oxe_debug cluster=lrz_h100
 
 # Submit with custom time limit
 python scripts/submit_job.py --time 04:00:00 experiment=laq_full
 
 # Dry run (preview without submitting)
-python scripts/submit_job.py --dry-run experiment=laq_oxe_debug
+python scripts/submit_job.py --dry-run experiment=laq_oxe_debug cluster=lrz_h100
 
 # Submit a sweep (multiple jobs)
-python scripts/submit_job.py experiment=laq_lr_sweep
+python scripts/submit_job.py experiment=laq_lr_sweep cluster=lrz_h100
 ```
 
 ---
@@ -36,6 +36,16 @@ The `submit_job.py` script:
 
 This approach bypasses Hydra's submitit launcher (which requires torch imports) by generating sbatch scripts directly.
 
+## Local Runs (No Slurm)
+
+For local development/training, run the training script directly (no `sbatch`, no container directives):
+
+```bash
+python scripts/2_train_laq.py experiment=laq_debug
+```
+
+Use `scripts/submit_job.py` only when you want Slurm scheduling + enroot container execution on the cluster.
+
 ---
 
 ## Single Job Submission
@@ -43,7 +53,7 @@ This approach bypasses Hydra's submitit launcher (which requires torch imports) 
 ### Basic Usage
 
 ```bash
-python scripts/submit_job.py experiment=laq_oxe_debug
+python scripts/submit_job.py experiment=laq_oxe_debug cluster=lrz_h100
 ```
 
 ### With Overrides
@@ -58,7 +68,6 @@ python scripts/submit_job.py experiment=laq_full \
 
 ```bash
 python scripts/submit_job.py \
-    --partition mcml-hgx-h100-94x4 \
     --gpus 4 \
     --time 08:00:00 \
     --mem 128G \
@@ -107,7 +116,7 @@ experiment:
 ### Submit Sweep
 
 ```bash
-python scripts/submit_job.py experiment=laq_lr_sweep
+python scripts/submit_job.py experiment=laq_lr_sweep cluster=lrz_h100
 ```
 
 **Output:**
@@ -162,12 +171,14 @@ sweep:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--script`, `-s` | `2_train_laq` | Training script (without .py) |
-| `--partition`, `-p` | `mcml-hgx-h100-94x4` | Slurm partition |
-| `--gpus`, `-g` | `1` | Number of GPUs |
-| `--time`, `-t` | `24:00:00` | Time limit (HH:MM:SS) |
-| `--mem` | `64G` | Memory per node |
-| `--cpus` | `8` | CPUs per task |
-| `--container` | `lam.sqsh` | Container image path |
+| `--partition`, `-p` | cluster config | Slurm partition |
+| `--qos` | cluster config | Slurm QoS |
+| `--account` | cluster config | Slurm account |
+| `--gpus`, `-g` | cluster config | Number of GPUs |
+| `--time`, `-t` | cluster config | Time limit (HH:MM:SS) |
+| `--mem` | cluster config / `200G` | Memory per node |
+| `--cpus` | cluster config / `8` | CPUs per task |
+| `--container` | cluster config | Container image path (required if not in config) |
 | `--dry-run` | `false` | Print script without submitting |
 
 ---
@@ -187,10 +198,6 @@ The default container is `lam.sqsh` which has all dependencies pre-installed:
 ```bash
 # Via CLI
 python scripts/submit_job.py --container /path/to/custom.sqsh experiment=laq_debug
-
-# Via environment variable
-export HLRP_CONTAINER_IMAGE=/path/to/custom.sqsh
-python scripts/submit_job.py experiment=laq_debug
 ```
 
 ---
@@ -243,12 +250,12 @@ Each job generates a script like:
 ```bash
 #!/bin/bash
 #SBATCH --job-name=hlrp_laq_lr_sweep_lr1e4_seed42
-#SBATCH --partition=mcml-hgx-h100-94x4
+#SBATCH --partition=lrz-hgx-h100-94x4
 #SBATCH --qos=mcml
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --mem=200G
+#SBATCH --time=15:00:00
 #SBATCH --output=/dss/.../outputs/logs/%j.out
 #SBATCH --error=/dss/.../outputs/logs/%j.err
 #SBATCH --container-image=/dss/.../containers/lam.sqsh
@@ -263,7 +270,7 @@ export NCCL_DEBUG=WARN
 nvidia-smi
 
 # Run training with overrides
-python scripts/2_train_laq.py experiment=laq_lr_sweep training.optimizer.lr=1e-4 seed=42
+python scripts/2_train_laq.py experiment=laq_lr_sweep cluster=lrz_h100 training.optimizer.lr=1e-4 seed=42
 ```
 
 ---
