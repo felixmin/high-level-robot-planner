@@ -10,30 +10,29 @@ Usage:
     python scripts/4_train_foundation.py experiment=vla_cosmos2_tokens_debug model.laq.checkpoint=/path/to/laq.ckpt
 """
 
-import sys
 import logging
+import sys
 from pathlib import Path
+
+import hydra
+import lightning.pytorch as pl
+import torch
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
+from omegaconf import DictConfig, OmegaConf
 
 workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
-import hydra
-from omegaconf import DictConfig, OmegaConf
-import lightning.pytorch as pl
-import torch
-from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
-
-from common.unified_logging import setup_unified_logging
-from common.logging import set_seed
 from common.data import OXEDataModule
-
+from common.logging import set_seed
+from common.unified_logging import setup_unified_logging
 from foundation.action_tokens import ActionTokenConfig
 from foundation.constrained_decode import ActionTokenIds
+from foundation.image_adapters import oxe_first_frames_to_pil
 from foundation.online_laq import LAQTaskCodeProvider
 from foundation.qwen3vl_setup import prepare_action_token_training
 from foundation.vla_inputs import ChatConfig
 from foundation.vla_module import VLATokenLightningModule, VLAOptimizerConfig
-from foundation.image_adapters import oxe_first_frames_to_pil
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
@@ -79,7 +78,13 @@ def main(cfg: DictConfig):
         )
     from laq import LAQTask
 
-    laq_task = LAQTask.load_from_checkpoint(laq_ckpt)
+    try:
+        laq_task = LAQTask.load_from_checkpoint(laq_ckpt)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Failed to load LAQ checkpoint '{laq_ckpt}'. "
+            "Provide a checkpoint trained with the current LAQ codebase."
+        ) from exc
     laq_provider = LAQTaskCodeProvider(laq_task)
 
     # VLA model: Qwen3-VL (Cosmos-Reason2 weights)
