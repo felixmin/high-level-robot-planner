@@ -45,4 +45,3 @@ def oxe_first_frames_to_pil(frames: torch.Tensor) -> List[Image.Image]:
         arr = np.asarray(first_np[i])
         images.append(Image.fromarray(arr, mode="RGB"))
     return images
-

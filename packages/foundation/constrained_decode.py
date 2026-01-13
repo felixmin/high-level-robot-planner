@@ -34,7 +34,9 @@ class ActionTokenIds:
             return [self.action_start_id]
 
         # After starting: count codes after the last <ACTION>
-        last_start = max(i for i, t in enumerate(generated_ids) if t == self.action_start_id)
+        last_start = max(
+            i for i, t in enumerate(generated_ids) if t == self.action_start_id
+        )
         suffix = generated_ids[last_start + 1 :]
 
         # If we've already emitted </ACTION>, force EOS.
@@ -62,4 +64,3 @@ def make_prefix_allowed_tokens_fn(token_ids: ActionTokenIds):
         return token_ids.next_allowed_ids(input_ids.tolist())
 
     return _fn
-

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, List
+from typing import List
 
 import torch
 
@@ -24,7 +24,9 @@ class FakeProcessor:
     def __init__(self):
         self.tokenizer = SimpleNamespace(eos_token_id=2)
 
-    def apply_chat_template(self, messages, tokenize: bool, add_generation_prompt: bool):
+    def apply_chat_template(
+        self, messages, tokenize: bool, add_generation_prompt: bool
+    ):
         parts: List[str] = []
         for msg in messages:
             for item in msg.get("content", []):
@@ -42,9 +44,9 @@ class FakeProcessor:
         max_len = max(lengths)
         input_ids = torch.zeros((len(text), max_len), dtype=torch.long)
         attention_mask = torch.zeros_like(input_ids)
-        for i, l in enumerate(lengths):
-            input_ids[i, :l] = torch.arange(1, l + 1, dtype=torch.long)
-            attention_mask[i, :l] = 1
+        for i, length in enumerate(lengths):
+            input_ids[i, :length] = torch.arange(1, length + 1, dtype=torch.long)
+            attention_mask[i, :length] = 1
         return {"input_ids": input_ids, "attention_mask": attention_mask}
 
 
@@ -57,7 +59,15 @@ class DummyVLAWithGenerate(torch.nn.Module):
         # Just return a finite loss.
         return SimpleNamespace(loss=input_ids.float().mean())
 
-    def generate(self, input_ids, attention_mask, max_new_tokens, do_sample, prefix_allowed_tokens_fn, **kwargs):
+    def generate(
+        self,
+        input_ids,
+        attention_mask,
+        max_new_tokens,
+        do_sample,
+        prefix_allowed_tokens_fn,
+        **kwargs,
+    ):
         b, t = input_ids.shape
         # Emit the correct sequence for every sample.
         suffix = torch.tensor(

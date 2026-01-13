@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import List
 
 import torch
 
 from foundation.action_tokens import ActionTokenConfig
-from foundation.online_laq import LatentCodeProvider
 from foundation.vla_inputs import ChatConfig
 from foundation.vla_module import VLATokenLightningModule, VLAOptimizerConfig
 
@@ -25,7 +24,9 @@ class DummyCodeProvider:
 
 
 class FakeProcessor:
-    def apply_chat_template(self, messages, tokenize: bool, add_generation_prompt: bool):
+    def apply_chat_template(
+        self, messages, tokenize: bool, add_generation_prompt: bool
+    ):
         parts: List[str] = []
         for msg in messages:
             for item in msg.get("content", []):
@@ -44,9 +45,9 @@ class FakeProcessor:
         max_len = max(lengths)
         input_ids = torch.zeros((len(text), max_len), dtype=torch.long)
         attention_mask = torch.zeros_like(input_ids)
-        for i, l in enumerate(lengths):
-            input_ids[i, :l] = torch.arange(1, l + 1, dtype=torch.long)
-            attention_mask[i, :l] = 1
+        for i, length in enumerate(lengths):
+            input_ids[i, :length] = torch.arange(1, length + 1, dtype=torch.long)
+            attention_mask[i, :length] = 1
         return {"input_ids": input_ids, "attention_mask": attention_mask}
 
 
@@ -81,4 +82,3 @@ def test_vla_module_training_step_cpu_smoke():
     loss = module.training_step(batch, batch_idx=0)
     assert torch.is_tensor(loss)
     assert provider.last_video_shape == (2, 3, 2, 16, 16)
-

@@ -19,4 +19,3 @@ def test_oxe_first_frames_to_pil_from_b23hw():
     assert len(images) == 2
     assert images[1].mode == "RGB"
     assert images[1].size == (16, 16)
-

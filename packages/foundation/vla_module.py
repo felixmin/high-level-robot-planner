@@ -15,16 +15,23 @@ provider can be injected (use fakes for CPU tests).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, List, Optional
 
 import lightning.pytorch as pl
 import torch
 
 from foundation.action_tokens import ActionTokenConfig
 from foundation.constrained_decode import ActionTokenIds, make_prefix_allowed_tokens_fn
-from foundation.online_laq import LatentCodeProvider, extract_oxe_language, oxe_frames_to_laq_video
-from foundation.vla_inputs import ChatConfig, build_inputs_with_prompt_mask, build_prompt_inputs
+from foundation.online_laq import (
+    LatentCodeProvider,
+    extract_oxe_language,
+    oxe_frames_to_laq_video,
+)
+from foundation.vla_inputs import (
+    ChatConfig,
+    build_inputs_with_prompt_mask,
+    build_prompt_inputs,
+)
 
 
 @dataclass
@@ -57,7 +64,9 @@ class VLATokenLightningModule(pl.LightningModule):
 
         # Convert OXE batch frames into image objects for the VLM processor.
         # In production this will likely return PIL Images; in tests we can inject a stub.
-        self.frames_to_images = frames_to_images or (lambda frames: [object() for _ in range(frames.shape[0])])
+        self.frames_to_images = frames_to_images or (
+            lambda frames: [object() for _ in range(frames.shape[0])]
+        )
 
         if self.code_provider.codebook_size != self.action_tokens.codebook_size:
             raise ValueError(
@@ -71,15 +80,41 @@ class VLATokenLightningModule(pl.LightningModule):
             )
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        if isinstance(batch, dict):
-            frames = batch["frames"]
-            instructions = extract_oxe_language(batch)
-        else:
-            raise TypeError("Expected dict batch with keys from OXEDataModule (frames, language, ...)")
+        loss, _codes, _frames, _instructions = self._loss_from_batch(batch)
+
+        self.log("train/loss", loss, prog_bar=True, sync_dist=True)
+        return loss
+
+    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+        loss, codes, frames, instructions = self._loss_from_batch(batch)
+
+        self.log("val/loss", loss, prog_bar=True, sync_dist=True)
+
+        if (
+            self.action_token_ids is not None
+            and hasattr(self.vla_model, "generate")
+            and batch_idx == 0
+        ):
+            acc = self._compute_token_accuracy(
+                frames=frames, instructions=instructions, gt_codes=codes
+            )
+            self.log("val/token_accuracy", acc, prog_bar=True, sync_dist=True)
+
+        return loss
+
+    def _loss_from_batch(
+        self, batch: Any
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str]]:
+        if not isinstance(batch, dict):
+            raise TypeError(
+                "Expected dict batch with keys from OXEDataModule (frames, language, ...)"
+            )
+
+        frames = batch["frames"]
+        instructions = extract_oxe_language(batch)
 
         video = oxe_frames_to_laq_video(frames)
         codes = self.code_provider.codes_from_video(video)  # [B, S]
-
         if codes.shape[0] != frames.shape[0]:
             raise ValueError("Batch size mismatch between frames and codes")
 
@@ -97,46 +132,7 @@ class VLATokenLightningModule(pl.LightningModule):
 
         outputs = self.vla_model(**inputs)
         loss = outputs.loss if hasattr(outputs, "loss") else outputs[0]
-
-        self.log("train/loss", loss, prog_bar=True, sync_dist=True)
-        return loss
-
-    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        if isinstance(batch, dict):
-            frames = batch["frames"]
-            instructions = extract_oxe_language(batch)
-        else:
-            raise TypeError("Expected dict batch with keys from OXEDataModule (frames, language, ...)")
-
-        video = oxe_frames_to_laq_video(frames)
-        codes = self.code_provider.codes_from_video(video)
-
-        targets = [self.action_tokens.format_target(row.tolist()) for row in codes]
-        images = self.frames_to_images(frames)
-
-        inputs = build_inputs_with_prompt_mask(
-            processor=self.processor,
-            images=images,
-            instructions=instructions,
-            targets=targets,
-            chat=self.chat,
-            device=self.device,
-        )
-
-        outputs = self.vla_model(**inputs)
-        loss = outputs.loss if hasattr(outputs, "loss") else outputs[0]
-
-        self.log("val/loss", loss, prog_bar=True, sync_dist=True)
-
-        if (
-            self.action_token_ids is not None
-            and hasattr(self.vla_model, "generate")
-            and batch_idx == 0
-        ):
-            acc = self._compute_token_accuracy(frames=frames, instructions=instructions, gt_codes=codes)
-            self.log("val/token_accuracy", acc, prog_bar=True, sync_dist=True)
-
-        return loss
+        return loss, codes, frames, instructions
 
     @torch.no_grad()
     def _compute_token_accuracy(
@@ -178,7 +174,9 @@ class VLATokenLightningModule(pl.LightningModule):
             start = int(prompt_lens[i].item())
             gen_suffix = generated[i, start:].tolist()
             pred_code_ids = [t for t in gen_suffix if t in code_id_to_index]
-            pred_codes = [code_id_to_index[t] for t in pred_code_ids[: token_ids.code_seq_len]]
+            pred_codes = [
+                code_id_to_index[t] for t in pred_code_ids[: token_ids.code_seq_len]
+            ]
 
             gt = gt_codes[i].tolist()
             # pad missing predictions with -1
@@ -196,6 +194,8 @@ class VLATokenLightningModule(pl.LightningModule):
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]
         optimizer = torch.optim.AdamW(
-            params, lr=self.optimizer_cfg.lr, weight_decay=self.optimizer_cfg.weight_decay
+            params,
+            lr=self.optimizer_cfg.lr,
+            weight_decay=self.optimizer_cfg.weight_decay,
         )
         return optimizer

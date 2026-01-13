@@ -77,4 +77,3 @@ def test_extract_code_token_ids_excludes_wrappers():
 
     seq = [111, action_start, *code_ids, action_end, 222]
     assert extract_code_token_ids(seq, token_id_map, cfg) == code_ids
-

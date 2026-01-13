@@ -32,4 +32,3 @@ def test_oxe_frames_to_laq_video_from_b32hw_float():
 def test_oxe_frames_to_laq_video_rejects_bad_shape():
     with pytest.raises(ValueError):
         oxe_frames_to_laq_video(torch.zeros((2, 3, 4)))
-

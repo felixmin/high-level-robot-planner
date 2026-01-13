@@ -8,7 +8,7 @@ to generate discrete latent action codes during Stage 2 training.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Protocol
 
 import torch
 
@@ -89,7 +89,9 @@ class LAQTaskCodeProvider(torch.nn.Module):
         video = video.to(self.device)
         indices = self._laq_task.model(video, return_only_codebook_ids=True)
         if indices.ndim != 2:
-            raise ValueError(f"Expected indices [B, S], got shape {tuple(indices.shape)}")
+            raise ValueError(
+                f"Expected indices [B, S], got shape {tuple(indices.shape)}"
+            )
         return indices.to(torch.long)
 
 

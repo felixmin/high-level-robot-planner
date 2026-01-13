@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """
 Script 4: Train Foundation VLA Model
 
@@ -62,7 +63,9 @@ def main(cfg: DictConfig):
 
     # Data: OXE streaming frame pairs + language
     if not hasattr(cfg.data, "dataset_name") and not hasattr(cfg.data, "datasets"):
-        raise ValueError("Stage 2 currently expects OXE-style data config (dataset_name or datasets).")
+        raise ValueError(
+            "Stage 2 currently expects OXE-style data config (dataset_name or datasets)."
+        )
 
     data_config = {k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
     datamodule = OXEDataModule(**data_config)
@@ -71,7 +74,9 @@ def main(cfg: DictConfig):
     # LAQ: frozen label generator
     laq_ckpt = cfg.model.laq.checkpoint
     if not laq_ckpt:
-        raise ValueError("Set `model.laq.checkpoint=/path/to/laq.ckpt` for online LAQ labeling.")
+        raise ValueError(
+            "Set `model.laq.checkpoint=/path/to/laq.ckpt` for online LAQ labeling."
+        )
     from laq import LAQTask
 
     laq_task = LAQTask.load_from_checkpoint(laq_ckpt)
@@ -92,7 +97,9 @@ def main(cfg: DictConfig):
     )
     processor = Qwen3VLProcessor.from_pretrained(model_name)
 
-    action_cfg = ActionTokenConfig(**OmegaConf.to_container(cfg.model.action_tokens, resolve=True))
+    action_cfg = ActionTokenConfig(
+        **OmegaConf.to_container(cfg.model.action_tokens, resolve=True)
+    )
     token_id_map = prepare_action_token_training(
         model=vla_model, processor=processor, action_tokens=action_cfg
     )
@@ -100,7 +107,10 @@ def main(cfg: DictConfig):
     action_token_ids = ActionTokenIds(
         action_start_id=token_id_map[action_cfg.action_start],
         action_end_id=token_id_map[action_cfg.action_end],
-        action_code_ids=[token_id_map[action_cfg.token_fmt.format(i=i)] for i in range(action_cfg.codebook_size)],
+        action_code_ids=[
+            token_id_map[action_cfg.token_fmt.format(i=i)]
+            for i in range(action_cfg.codebook_size)
+        ],
         eos_token_id=int(getattr(processor.tokenizer, "eos_token_id", 0)),
         code_seq_len=action_cfg.code_seq_len,
     )

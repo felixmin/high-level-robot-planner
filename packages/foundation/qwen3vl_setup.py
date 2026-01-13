@@ -31,4 +31,3 @@ def prepare_action_token_training(
 
     resize(len(processor.tokenizer))
     return token_id_map
-

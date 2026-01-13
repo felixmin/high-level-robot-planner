@@ -61,11 +61,12 @@ class TestExperimentConfigs:
 
             # Validate training (full training with 100 epochs)
             assert cfg.training.epochs == 100
-    
+
             # Validate cluster config (H100 single node)
             assert cfg.cluster.name == "lrz_h100"
             assert cfg.cluster.compute.num_nodes == 1
             assert cfg.cluster.compute.gpus_per_node == 1
+
     def test_vla_7b_config(self, config_dir):
         """Test VLA 7B configuration loads correctly."""
         with initialize_config_dir(version_base=None, config_dir=config_dir):
@@ -122,8 +123,8 @@ class TestConfigComposition:
                     "experiment=laq_debug",
                     "data.batch_size=16",
                     "training.optimizer.lr=5e-5",
-                    "seed=123"
-                ]
+                    "seed=123",
+                ],
             )
 
             # Verify overrides
@@ -142,8 +143,8 @@ class TestConfigComposition:
                 overrides=[
                     "experiment=laq_debug",
                     "model.dim=512",
-                    "training.optimizer.betas=[0.95,0.999]"
-                ]
+                    "training.optimizer.betas=[0.95,0.999]",
+                ],
             )
 
             assert cfg.model.dim == 512

@@ -70,7 +70,9 @@ def add_action_tokens(tokenizer: object, config: ActionTokenConfig) -> Dict[str,
     return {tok: int(convert_tokens_to_ids(tok)) for tok in tokens}
 
 
-def get_action_token_ids(tokenizer: object, config: ActionTokenConfig) -> Dict[str, int]:
+def get_action_token_ids(
+    tokenizer: object, config: ActionTokenConfig
+) -> Dict[str, int]:
     convert_tokens_to_ids = getattr(tokenizer, "convert_tokens_to_ids", None)
     if convert_tokens_to_ids is None:
         raise TypeError("tokenizer must implement convert_tokens_to_ids")
@@ -88,8 +90,12 @@ def allowed_action_token_ids(
     return [int(token_id_map[t]) for t in tokens]
 
 
-def is_code_token_id(token_id: int, token_id_map: Mapping[str, int], config: ActionTokenConfig) -> bool:
-    return token_id in {token_id_map[t] for t in config.code_tokens() if t in token_id_map}
+def is_code_token_id(
+    token_id: int, token_id_map: Mapping[str, int], config: ActionTokenConfig
+) -> bool:
+    return token_id in {
+        token_id_map[t] for t in config.code_tokens() if t in token_id_map
+    }
 
 
 def extract_code_token_ids(
@@ -98,4 +104,3 @@ def extract_code_token_ids(
     """Filter a token-id sequence down to action code token ids (excludes wrappers)."""
     code_ids = {token_id_map[t] for t in config.code_tokens() if t in token_id_map}
     return [int(t) for t in token_ids if int(t) in code_ids]
-

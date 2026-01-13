@@ -44,4 +44,3 @@ def test_prepare_action_token_training_adds_tokens_and_resizes():
 
     assert set(token_id_map.keys()) == set(cfg.all_tokens())
     assert model.last_resize == len(processor.tokenizer)
-

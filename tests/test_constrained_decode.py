@@ -44,4 +44,3 @@ def test_prefix_allowed_tokens_fn_signature():
             return list(self._xs)
 
     assert fn(0, _T([1, 2, 3])) == [10]
-

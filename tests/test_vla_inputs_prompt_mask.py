@@ -14,7 +14,10 @@ class _FakeBatch:
     attention_mask: torch.Tensor
 
     def items(self):
-        return {"input_ids": self.input_ids, "attention_mask": self.attention_mask}.items()
+        return {
+            "input_ids": self.input_ids,
+            "attention_mask": self.attention_mask,
+        }.items()
 
 
 class FakeProcessor:
@@ -27,7 +30,12 @@ class FakeProcessor:
     def __init__(self, image_tokens_per_image: int = 5):
         self.image_tokens_per_image = image_tokens_per_image
 
-    def apply_chat_template(self, messages: List[Dict[str, Any]], tokenize: bool, add_generation_prompt: bool):
+    def apply_chat_template(
+        self,
+        messages: List[Dict[str, Any]],
+        tokenize: bool,
+        add_generation_prompt: bool,
+    ):
         parts: List[str] = []
         for msg in messages:
             for item in msg.get("content", []):
@@ -39,7 +47,14 @@ class FakeProcessor:
             parts.append("<assistant>")
         return " ".join([p for p in parts if p])
 
-    def __call__(self, *, text: Sequence[str], images: Sequence[Any], return_tensors: str, padding: bool):
+    def __call__(
+        self,
+        *,
+        text: Sequence[str],
+        images: Sequence[Any],
+        return_tensors: str,
+        padding: bool,
+    ):
         assert return_tensors == "pt"
         assert padding is True
 
@@ -54,9 +69,9 @@ class FakeProcessor:
         input_ids = torch.zeros((len(text), max_len), dtype=torch.long)
         attention_mask = torch.zeros_like(input_ids)
 
-        for i, l in enumerate(lengths):
-            input_ids[i, :l] = torch.arange(1, l + 1, dtype=torch.long)
-            attention_mask[i, :l] = 1
+        for i, length in enumerate(lengths):
+            input_ids[i, :length] = torch.arange(1, length + 1, dtype=torch.long)
+            attention_mask[i, :length] = 1
 
         return {"input_ids": input_ids, "attention_mask": attention_mask}
 
@@ -65,7 +80,10 @@ def test_build_inputs_with_prompt_mask_masks_prompt_and_padding():
     processor = FakeProcessor(image_tokens_per_image=3)
     images = [object(), object()]
     instructions = ["pick up block", "push button"]
-    targets = ["<ACTION> <ACT_0> <ACT_1> <ACT_2> <ACT_3> </ACTION>", "<ACTION> <ACT_7> <ACT_7> <ACT_7> <ACT_7> </ACTION>"]
+    targets = [
+        "<ACTION> <ACT_0> <ACT_1> <ACT_2> <ACT_3> </ACTION>",
+        "<ACTION> <ACT_7> <ACT_7> <ACT_7> <ACT_7> </ACTION>",
+    ]
 
     batch = build_inputs_with_prompt_mask(
         processor=processor,
@@ -88,15 +106,26 @@ def test_build_inputs_with_prompt_mask_masks_prompt_and_padding():
     prompt_texts = [
         processor.apply_chat_template(
             [
-                {"role": "system", "content": [{"type": "text", "text": "You are a robot."}]},
-                {"role": "user", "content": [{"type": "image", "image": images[i]}, {"type": "text", "text": instructions[i]}]},
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "You are a robot."}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": images[i]},
+                        {"type": "text", "text": instructions[i]},
+                    ],
+                },
             ],
             tokenize=False,
             add_generation_prompt=True,
         )
         for i in range(len(images))
     ]
-    prompt_inputs = processor(text=prompt_texts, images=images, return_tensors="pt", padding=True)
+    prompt_inputs = processor(
+        text=prompt_texts, images=images, return_tensors="pt", padding=True
+    )
     prompt_lens = prompt_inputs["attention_mask"].sum(dim=1).tolist()
 
     for i, pl in enumerate(prompt_lens):
@@ -110,4 +139,3 @@ def test_build_inputs_with_prompt_mask_masks_prompt_and_padding():
         assert torch.all(labels[i, check_positions] == input_ids[i, check_positions])
         # Padding is masked.
         assert torch.all(labels[i, ~nonpad] == -100)
-
