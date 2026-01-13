@@ -65,12 +65,13 @@ class OnlineLAQConfig:
     laq_checkpoint_path: str
 
 
-class LAQTaskCodeProvider:
+class LAQTaskCodeProvider(torch.nn.Module):
     """
     Thin wrapper around `laq.task.LAQTask` to expose code indices for Stage 2.
     """
 
     def __init__(self, laq_task: Any):
+        super().__init__()
         self._laq_task = laq_task
         self._laq_task.eval()
         self._laq_task.freeze()
@@ -99,4 +100,3 @@ def extract_oxe_language(batch: Dict[str, Any]) -> list[str]:
     if not isinstance(language, list):
         raise TypeError(f"Expected 'language' to be a list[str], got {type(language)}")
     return [str(x) for x in language]
-
