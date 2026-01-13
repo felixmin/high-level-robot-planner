@@ -211,7 +211,7 @@ def main():
     parser.add_argument(
         "--container",
         default=None,
-        help="Container image path (default: from HLRP_CONTAINER_IMAGE or lam.sqsh)"
+        help="Container image path (overrides cluster.container.image)"
     )
 
     args, overrides = parser.parse_known_args()

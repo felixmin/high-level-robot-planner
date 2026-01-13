@@ -178,20 +178,20 @@ sweep:
 | `--time`, `-t` | cluster config | Time limit (HH:MM:SS) |
 | `--mem` | cluster config / `200G` | Memory per node |
 | `--cpus` | cluster config / `8` | CPUs per task |
-| `--container` | cluster config | Container image path (required if not in config) |
+| `--container` | cluster config | Container image path (required) |
 | `--dry-run` | `false` | Print script without submitting |
 
 ---
 
 ## Container Configuration
 
-The default container is `lam.sqsh` which has all dependencies pre-installed:
-- PyTorch with CUDA
-- PyTorch Lightning
-- Hydra, OmegaConf
-- Transformers, timm
-- TensorFlow, tensorflow-datasets
-- WandB, einops, webdataset
+The container image path is required and should live in the selected cluster config:
+
+```yaml
+# config/cluster/<cluster>.yaml
+container:
+  image: /path/to/container.sqsh
+```
 
 ### Override Container
 
@@ -259,7 +259,7 @@ Each job generates a script like:
 #SBATCH --output=/dss/.../outputs/logs/%j.out
 #SBATCH --error=/dss/.../outputs/logs/%j.err
 #SBATCH --container-image=/dss/.../containers/lam.sqsh
-#SBATCH --container-mounts=/dss/...:/dss/...
+#SBATCH --container-mounts=/dss/.../high-level-robot-planner:/dss/.../high-level-robot-planner
 #SBATCH --container-workdir=/dss/.../high-level-robot-planner
 
 # Environment setup
@@ -316,10 +316,7 @@ Submits 6 jobs (2 datasets × 3 seeds).
 
 ### "Container image not found"
 
-The default container path is for the LRZ cluster. Set your own:
-```bash
-export HLRP_CONTAINER_IMAGE=/path/to/your/container.sqsh
-```
+Set `container.image` in your cluster config (or pass `--container /path/to/container.sqsh`).
 
 ### Job stuck in "Priority" state
 

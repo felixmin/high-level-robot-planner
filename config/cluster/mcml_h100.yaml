@@ -13,23 +13,6 @@ slurm:
   partition: mcml-hgx-h100-94x4
   qos: mcml
   account: null  # Set if needed
-  
-distributed:
-  backend: nccl
-  precision: bf16-mixed
-  strategy: ddp  # DDP for single node, FSDP for large models
-  
-  # NCCL settings
-  nccl_socket_ifname: ib0  # InfiniBand
-  nccl_debug: WARN  # Set to INFO for debugging
 
-storage:
-  data_root: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/datasets
-  checkpoint_dir: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/checkpoints
-  log_dir: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/logs
-
-# Container settings
 container:
-  image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/lapa.sqsh
-  mounts:
-    - /dss/dssmcmlfs01:/data
+  image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/lam.sqsh

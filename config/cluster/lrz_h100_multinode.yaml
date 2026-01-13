@@ -15,24 +15,6 @@ slurm:
   partition: lrz-hgx-h100-94x4
   qos: mcml
   account: null
-  
-distributed:
-  backend: nccl
-  precision: bf16-mixed
-  strategy: fsdp  # FSDP for multi-node
-  
-  # NCCL settings (critical for multi-node)
-  nccl_socket_ifname: ib0
-  nccl_debug: WARN
-  nccl_ib_timeout: 22
-  nccl_ib_retry_cnt: 7
-
-storage:
-  data_root: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/datasets
-  checkpoint_dir: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/checkpoints
-  log_dir: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/logs
 
 container:
-  image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/lapa.sqsh
-  mounts:
-    - /dss/dssmcmlfs01:/data
+  image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/containers/lam.sqsh

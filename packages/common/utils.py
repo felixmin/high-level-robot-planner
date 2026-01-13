@@ -4,11 +4,9 @@ General utility functions for LAPA project.
 
 import random
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
-from omegaconf import DictConfig
 
 
 def set_seed(seed: int) -> None:
@@ -25,25 +23,6 @@ def set_seed(seed: int) -> None:
     # Make PyTorch deterministic
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-
-
-def get_checkpoint_path(cfg: DictConfig, checkpoint_name: Optional[str] = None) -> Path:
-    """
-    Get checkpoint path from configuration.
-    
-    Args:
-        cfg: Hydra configuration
-        checkpoint_name: Optional checkpoint filename
-        
-    Returns:
-        Path to checkpoint
-    """
-    checkpoint_dir = Path(cfg.cluster.storage.checkpoint_dir) / cfg.experiment_name
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    
-    if checkpoint_name:
-        return checkpoint_dir / checkpoint_name
-    return checkpoint_dir
 
 
 def count_parameters(model: torch.nn.Module, trainable_only: bool = False) -> int:
@@ -84,4 +63,3 @@ def print_model_summary(model: torch.nn.Module, logger=None) -> None:
         logger.info(summary)
     else:
         print(summary)
-

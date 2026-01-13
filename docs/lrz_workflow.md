@@ -121,19 +121,13 @@ cluster:
 
 ### NCCL Configuration
 
-Already configured in our cluster configs:
-```yaml
-# config/cluster/lrz_h100_multinode.yaml
-distributed:
-  nccl_socket_ifname: ib0       # InfiniBand
-  nccl_ib_timeout: 22
-  nccl_ib_retry_cnt: 7
-```
+`scripts/submit_job.py` exports reasonable defaults:
+- `NCCL_SOCKET_IFNAME=ib0`
+- `NCCL_DEBUG=WARN`
 
 Slurm automatically sets:
 - `MASTER_ADDR`: First node in allocation
 - `MASTER_PORT`: 29500
-- `NCCL_SOCKET_IFNAME`: ib0 (InfiniBand)
 
 ## Interactive Sessions
 
@@ -270,4 +264,3 @@ ssh <compute_node> nvidia-smi -l 1
 - MCML Guidelines: https://doku.lrz.de/display/PUBLIC/MCML+Members
 - Slurm Commands: https://slurm.schedmd.com/pdfs/summary.pdf
 - NCCL Tuning: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html
-
