@@ -151,7 +151,7 @@ python scripts/2_train_laq.py experiment=laq_debug
 python scripts/submit_job.py experiment=laq_full
 
 # Stage 2: Foundation on LRZ (multi-node)
-python scripts/submit_job.py --script 4_train_foundation experiment=vla_7b
+python scripts/submit_job.py experiment=vla_7b
 ```
 
 ### Submitting Sweeps (Multiple Jobs)
@@ -163,7 +163,7 @@ python scripts/submit_job.py --script 4_train_foundation experiment=vla_7b
 python scripts/submit_job.py experiment=laq_lr_sweep
 
 # Dry run to preview jobs
-python scripts/submit_job.py --dry-run experiment=laq_lr_sweep
+python scripts/submit_job.py submit.dry_run=true experiment=laq_lr_sweep
 ```
 
 See `docs/job_submission.md` for full documentation.

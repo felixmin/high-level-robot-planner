@@ -25,7 +25,7 @@ sys.path.insert(0, str(workspace_root / "packages"))
 
 from common.data import OXEDataModule
 from common.logging import set_seed
-from common.unified_logging import setup_unified_logging
+from common.unified_logging import setup_unified_logging, setup_wandb_with_unified_paths
 from foundation.action_tokens import ActionTokenConfig
 from foundation.constrained_decode import ActionTokenIds
 from foundation.image_adapters import oxe_first_frames_to_pil
@@ -39,17 +39,28 @@ from foundation.vla_module import VLATokenLightningModule, VLAOptimizerConfig
 def main(cfg: DictConfig):
     # Unified logging (mirrors Stage 1)
     use_unified_logging = cfg.logging.get("unified", True)
+
+    logging_root_dir = cfg.logging.get("root_dir")
+    logging_runs_dir = cfg.logging.get("runs_dir")
+
+    if logging_runs_dir:
+        runs_dir = Path(logging_runs_dir)
+    elif logging_root_dir:
+        runs_dir = Path(logging_root_dir) / "runs" / "local"
+    else:
+        runs_dir = workspace_root / "runs" / "local"
+
     if use_unified_logging:
         logger, output_dir = setup_unified_logging(
-            workspace_root=workspace_root,
-            job_id=None,
+            runs_dir=runs_dir,
+            job_id=cfg.logging.get("job_id"),
             log_level=cfg.logging.get("level", "INFO"),
             capture_stdout=cfg.logging.get("capture_stdout", True),
         )
     else:
         logger = logging.getLogger("foundation.training")
         logging.basicConfig(level=logging.INFO)
-        output_dir = Path("./outputs")
+        output_dir = runs_dir / "outputs" / "local"
         output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("=" * 80)
@@ -59,6 +70,17 @@ def main(cfg: DictConfig):
     logger.info(OmegaConf.to_yaml(cfg))
 
     set_seed(int(getattr(cfg, "seed", 42)))
+
+    # Setup WandB logger (use unified logging paths). If disabled, avoid Lightning's default logger
+    # to prevent creating extra `lightning_logs/` directories.
+    wandb_logger = setup_wandb_with_unified_paths(
+        logger=logger,
+        output_dir=output_dir,
+        project=cfg.logging.get("project", "hlrp"),
+        name=cfg.experiment.name,
+        tags=cfg.logging.get("tags", []),
+        use_wandb=bool(cfg.logging.get("use_wandb", True)),
+    )
 
     # Data: OXE streaming frame pairs + language
     if not hasattr(cfg.data, "dataset_name") and not hasattr(cfg.data, "datasets"):
@@ -144,7 +166,7 @@ def main(cfg: DictConfig):
             mode=cfg.training.checkpoint.mode,
             save_top_k=int(cfg.training.checkpoint.save_top_k),
             save_last=bool(cfg.training.checkpoint.save_last),
-            filename="vla-{step}-{val_loss:.4f}",
+            filename="vla-{step}-{val/loss:.4f}",
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
@@ -160,6 +182,8 @@ def main(cfg: DictConfig):
         log_every_n_steps=10,
         callbacks=callbacks,
         check_val_every_n_epoch=cfg.training.validation.check_val_every_n_epoch,
+        logger=wandb_logger if wandb_logger is not None else False,
+        default_root_dir=str(output_dir),
     )
 
     trainer.fit(module, datamodule=datamodule)

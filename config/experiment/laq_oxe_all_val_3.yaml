@@ -17,6 +17,9 @@ experiment:
   name: laq_oxe_all_val_3
   description: "LAQ on all OXE datasets with aux loss + flow supervision"
 
+submit:
+  cache_dir: cache
+
 # Model settings
 model:
   image_size: 256
@@ -222,6 +225,7 @@ training:
         num_samples: 256
 
 logging:
+  root_dir: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay
   unified: true
   level: INFO
   use_wandb: true

@@ -25,6 +25,9 @@ logging:
   # Unified logging system (recommended)
   unified: true              # Enable unified logging to runs/ folder
   level: INFO                # Logging level (DEBUG, INFO, WARNING, ERROR)
+  job_id: null               # Optional explicit run ID (used by submit_job local runs)
+  root_dir: null             # Optional base directory for all run artifacts
+  runs_dir: null             # Optional run-group directory (e.g., <root_dir>/runs/YYYY-MM-DD/HH-MM-SS)
 
   # WandB integration
   use_wandb: true            # Enable Weights & Biases logging
@@ -38,3 +41,13 @@ logging:
   #   runs/output/{job_id}/checkpoints/               - Model checkpoints
   #   runs/output/hydra/YYYY-MM-DD/HH-MM-SS/.hydra/   - Hydra config backups
 
+# Job submission defaults (used by scripts/submit_job.py)
+submit:
+  # Training entrypoint (without .py). Experiments can override this.
+  script: 2_train_laq
+  # If true, prints the generated sbatch script(s) but does not submit.
+  dry_run: false
+  # Where to persist pretrained model downloads (HF + torch/torchvision).
+  cache_dir: cache
+  # Where Slurm should write stdout/stderr (%j.out/.err).
+  slurm_logs_dir: slurm

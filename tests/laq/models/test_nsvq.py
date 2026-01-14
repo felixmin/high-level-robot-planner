@@ -220,8 +220,7 @@ def test_nsvq_replace_unused_codebooks(nsvq_module, nsvq_config):
     original_codebook_1 = nsvq_module.codebooks[1].clone()
 
     # Replace unused codebooks
-    num_batches = 100
-    nsvq_module.replace_unused_codebooks(num_batches)
+    nsvq_module.replace_unused_codebooks()
 
     # Check unused codebook was replaced (should be different)
     assert not torch.allclose(nsvq_module.codebooks[1], original_codebook_1)

@@ -13,6 +13,9 @@ experiment:
   name: vla_7b_foundation
   description: "Foundation VLA training with Llama-2 7B"
 
+submit:
+  script: 4_train_foundation
+
 # Multi-node settings
 cluster:
   compute:
@@ -27,4 +30,3 @@ training:
 logging:
   tags: ["production", "foundation", "7b", "fsdp"]
   log_model: true
-

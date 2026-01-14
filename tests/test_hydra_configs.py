@@ -42,9 +42,8 @@ class TestExperimentConfigs:
             assert cfg.training.optimizer.type == "AdamW"
 
             # Validate cluster config
-            assert cfg.cluster.name == "local"
-            assert cfg.cluster.compute.num_nodes == 1
-            assert cfg.cluster.compute.gpus_per_node == 1
+            assert cfg.cluster.name == "local_dev"
+            assert bool(cfg.cluster.slurm.enabled) is False
 
     def test_laq_full_config(self, config_dir):
         """Test LAQ full configuration loads correctly."""
@@ -108,7 +107,7 @@ class TestExperimentConfigs:
             assert cfg.model.vla.model_name == "nvidia/Cosmos-Reason2-2B"
             assert cfg.model.action_tokens.codebook_size == 8
             assert cfg.model.action_tokens.code_seq_len == 4
-            assert cfg.cluster.name == "local"
+            assert cfg.cluster.name == "local_dev"
 
 
 class TestConfigComposition:

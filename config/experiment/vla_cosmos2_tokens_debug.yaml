@@ -12,6 +12,9 @@ experiment:
   name: vla_cosmos2_tokens_debug
   description: "Debug run: Cosmos-Reason2 token-based latent action prediction"
 
+submit:
+  script: 4_train_foundation
+
 logging:
   tags: ["debug", "foundation", "cosmos2", "tokens"]
   log_model: false

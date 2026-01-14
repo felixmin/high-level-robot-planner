@@ -77,10 +77,20 @@ def main(cfg: DictConfig):
     # Setup unified logging if enabled
     use_unified_logging = cfg.logging.get("unified", True)
 
+    logging_root_dir = cfg.logging.get("root_dir")
+    logging_runs_dir = cfg.logging.get("runs_dir")
+
+    if logging_runs_dir:
+        runs_dir = Path(logging_runs_dir)
+    elif logging_root_dir:
+        runs_dir = Path(logging_root_dir) / "runs" / "local"
+    else:
+        runs_dir = workspace_root / "runs" / "local"
+
     if use_unified_logging:
         logger, output_dir = setup_unified_logging(
-            workspace_root=workspace_root,
-            job_id=None,  # Auto-detect SLURM_JOB_ID or use 'local'
+            runs_dir=runs_dir,
+            job_id=cfg.logging.get("job_id"),
             log_level=cfg.logging.get("level", "INFO"),
             capture_stdout=cfg.logging.get("capture_stdout", True),
         )
@@ -92,7 +102,7 @@ def main(cfg: DictConfig):
             format='[%(asctime)s][%(name)s][%(levelname)s] - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
-        output_dir = Path("./outputs")
+        output_dir = runs_dir / "outputs" / "local"
         output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("=" * 80)
@@ -315,7 +325,8 @@ def main(cfg: DictConfig):
         gradient_clip_val=training_config.gradient.clip_val,
         gradient_clip_algorithm=training_config.gradient.clip_algorithm,
         callbacks=callbacks,
-        logger=wandb_logger,  # Use wandb_logger, not logger (which is our unified logger)
+        logger=wandb_logger if wandb_logger is not None else False,
+        default_root_dir=str(output_dir),
         profiler=profiler,
         log_every_n_steps=10,
         val_check_interval=val_check_interval,  # Configurable validation frequency

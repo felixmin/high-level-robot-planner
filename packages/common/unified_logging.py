@@ -45,20 +45,20 @@ def get_job_id() -> str:
 
 
 def setup_unified_logging(
-    workspace_root: Path,
+    runs_dir: Path,
     job_id: Optional[str] = None,
     log_level: str = "INFO",
     capture_stdout: bool = True,
 ) -> tuple[logging.Logger, Path]:
     """
-    Setup unified logging that captures all output to runs/ folder.
+    Setup unified logging that captures all output to a single run-group directory.
 
     Creates:
-    - runs/logs/{job_id}.log - Complete training log
-    - runs/output/{job_id}/ - Per-job output directory
+    - <runs_dir>/outputs/<job_id>/unified.log - Complete training log
+    - <runs_dir>/outputs/<job_id>/ - Per-job output directory
 
     Args:
-        workspace_root: Path to workspace root directory
+        runs_dir: Path to the run-group directory (contains outputs/)
         job_id: Optional job ID (auto-detected if None)
         log_level: Logging level (INFO, DEBUG, etc.)
         capture_stdout: If True, redirect stdout/stderr to log file
@@ -70,21 +70,18 @@ def setup_unified_logging(
         job_id = get_job_id()
 
     # Create directory structure
-    runs_dir = workspace_root / "runs"
-    logs_dir = runs_dir / "logs"
-    output_base_dir = runs_dir / "output"
-    output_dir = output_base_dir / job_id
+    outputs_dir = runs_dir / "outputs"
+    output_dir = outputs_dir / job_id
 
     try:
-        logs_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         print(f"ERROR: Failed to create directories: {e}")
-        print(f"  - Attempted to create: {logs_dir}, {output_dir}")
+        print(f"  - Attempted to create: {output_dir}")
         raise
 
     # Log file path
-    log_file = logs_dir / f"{job_id}.log"
+    log_file = output_dir / "unified.log"
 
     # Configure root logger
     root_logger = logging.getLogger()
@@ -131,20 +128,18 @@ def setup_unified_logging(
     logger.info(f"Log level: {log_level}")
     logger.info("=" * 80)
 
-    # Note: Hydra creates its own output directory (outputs/DATE/TIME/.hydra/)
-    # We don't modify it since it's read-only after initialization.
-    # Our unified logging handles the important outputs:
-    #   - Checkpoints → runs/output/{job_id}/checkpoints/
-    #   - WandB → runs/output/{job_id}/wandb/
-    #   - Logs → runs/logs/{job_id}.log
-    # Hydra's .hydra/ config backup is kept in its default location for backward compatibility.
+    # Note: Hydra creates its own output directory for config backups (hydra.run.dir).
+    # Our unified logging handles the important outputs under <runs_dir>/outputs/<job_id>/:
+    #   - Checkpoints → checkpoints/
+    #   - WandB → wandb/
+    #   - Logs → unified.log
 
     # Note: stdout/stderr capture is handled by WandB when enabled
     # Our file handler above captures all logging.* calls
     # WandB's stdout wrapper captures all print() calls
     # This creates two complementary logs:
-    #   - runs/logs/{job_id}.log: logger.info() calls (timestamped)
-    #   - runs/output/{job_id}/wandb/files/output.log: print() calls (WandB capture)
+    #   - <runs_dir>/outputs/<job_id>/unified.log: logger.info() calls (timestamped)
+    #   - <runs_dir>/outputs/<job_id>/wandb/files/output.log: print() calls (WandB capture)
 
     return logger, output_dir
 
@@ -205,7 +200,7 @@ def logging_context(workspace_root: Path, job_id: Optional[str] = None, log_leve
             # ... training code ...
     """
     logger, output_dir = setup_unified_logging(
-        workspace_root=workspace_root,
+        runs_dir=workspace_root,
         job_id=job_id,
         log_level=log_level,
     )

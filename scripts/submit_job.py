@@ -18,21 +18,22 @@ Usage:
     python scripts/submit_job.py experiment=laq_oxe_debug training.epochs=10
 
     # Dry run (print script, don't submit)
-    python scripts/submit_job.py --dry-run experiment=laq_oxe_debug
+    python scripts/submit_job.py submit.dry_run=true experiment=laq_oxe_debug
 
-    # Custom resources
-    python scripts/submit_job.py --time 01:00:00 --gpus 2 experiment=laq_full
+    # Custom resources (Hydra overrides)
+    python scripts/submit_job.py cluster.compute.time_limit=01:00:00 cluster.compute.gpus_per_node=2 experiment=laq_full
 
-    # Sweep (reads hydra.sweeper.params from experiment config)
+    # Sweep (reads sweep.params from experiment config)
     python scripts/submit_job.py experiment=laq_lr_sweep
     # Submits one job per parameter combination
 """
 
-import argparse
 import itertools
 import os
 import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
@@ -105,15 +106,15 @@ def generate_sbatch_script(
     cpus: int,
     container_image: str,
     job_name: str,
+    container_mounts: str,
+    slurm_logs_dir: Path,
+    cache_dir: Path,
 ) -> str:
     """Generate sbatch script content."""
 
     # Build the python command with overrides
     override_str = " ".join(overrides) if overrides else ""
     python_cmd = f"python scripts/{script}.py {override_str}".strip()
-
-    # Output directory
-    logs_dir = PROJECT_ROOT / "outputs" / "logs"
 
     script_content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
@@ -124,10 +125,10 @@ def generate_sbatch_script(
 #SBATCH --cpus-per-task={cpus}
 #SBATCH --mem={mem}
 #SBATCH --time={time}
-#SBATCH --output={logs_dir}/%j.out
-#SBATCH --error={logs_dir}/%j.err
+#SBATCH --output={slurm_logs_dir}/%j.out
+#SBATCH --error={slurm_logs_dir}/%j.err
 #SBATCH --container-image={container_image}
-#SBATCH --container-mounts={PROJECT_ROOT}:{PROJECT_ROOT}
+#SBATCH --container-mounts={container_mounts}
 #SBATCH --container-workdir={PROJECT_ROOT}
 
 echo "========================================"
@@ -143,6 +144,13 @@ export PYTHONPATH={PROJECT_ROOT}/packages:$PYTHONPATH
 export NCCL_SOCKET_IFNAME=ib0
 export NCCL_DEBUG=WARN
 
+# Persist caches on the mounted filesystem (avoid downloading models every job)
+mkdir -p "{cache_dir}/huggingface" "{cache_dir}/torch"
+export HF_HOME="{cache_dir}/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export TRANSFORMERS_CACHE="$HF_HOME/hub"
+export TORCH_HOME="{cache_dir}/torch"
+
 # Show GPU info
 nvidia-smi
 
@@ -157,116 +165,153 @@ echo "========================================"
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Submit training jobs to Slurm",
-        epilog="Additional arguments are passed as Hydra overrides"
-    )
-    parser.add_argument(
-        "--script", "-s",
-        default="2_train_laq",
-        help="Training script to run (without .py)"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print sbatch script, don't submit"
-    )
-    parser.add_argument(
-        "--partition", "-p",
-        default=None,
-        help="Slurm partition (default: from cluster config)"
-    )
-    parser.add_argument(
-        "--qos",
-        default=None,
-        help="Slurm QoS (default: from cluster config)"
-    )
-    parser.add_argument(
-        "--account",
-        default=None,
-        help="Slurm account (default: from cluster config)"
-    )
-    parser.add_argument(
-        "--gpus", "-g",
-        type=int,
-        default=None,
-        help="Number of GPUs (default: from cluster config)"
-    )
-    parser.add_argument(
-        "--time", "-t",
-        default=None,
-        help="Time limit (HH:MM:SS) (default: from cluster config)"
-    )
-    parser.add_argument(
-        "--mem",
-        default=None,
-        help="Memory per node (default: from cluster config or 200G)"
-    )
-    parser.add_argument(
-        "--cpus",
-        type=int,
-        default=None,
-        help="CPUs per task (default: from cluster config)"
-    )
-    parser.add_argument(
-        "--container",
-        default=None,
-        help="Container image path (overrides cluster.container.image)"
-    )
-
-    args, overrides = parser.parse_known_args()
+    overrides = sys.argv[1:]
 
     # Load config to show experiment info and get job name
     config_dir = str(PROJECT_ROOT / "config")
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name="config", overrides=overrides)
 
+    # Submission defaults (can be overridden via config/experiment/*.yaml or CLI)
+    script = OmegaConf.select(cfg, "submit.script") or "2_train_laq"
+    dry_run = bool(OmegaConf.select(cfg, "submit.dry_run") or False)
+
+    script_path = PROJECT_ROOT / "scripts" / f"{script}.py"
+    if not script_path.exists():
+        raise SystemExit(f"Training script not found: {script_path}")
+
     slurm_enabled = bool(OmegaConf.select(cfg, "cluster.slurm.enabled"))
-    if not slurm_enabled:
-        cluster_name = OmegaConf.select(cfg, "cluster.name") or "<unknown>"
-        raise SystemExit(
-            "Cluster config has `cluster.slurm.enabled: false` "
-            f"(cluster={cluster_name}).\n"
-            "Run the training script locally, or submit with a Slurm-enabled cluster, e.g.:\n"
-            "  python scripts/submit_job.py experiment=... cluster=lrz_h100"
-        )
 
-    # Resolve Slurm defaults from Hydra config unless explicitly set via CLI.
-    partition = args.partition or OmegaConf.select(cfg, "cluster.slurm.partition") or "mcml-hgx-h100-94x4"
-    qos = args.qos if args.qos is not None else OmegaConf.select(cfg, "cluster.slurm.qos")
-    account = args.account if args.account is not None else OmegaConf.select(cfg, "cluster.slurm.account")
+    # Resolve root + run-group directories.
+    logging_root_dir = OmegaConf.select(cfg, "logging.root_dir")
+    resolved_logging_root = Path(logging_root_dir) if logging_root_dir else None
+    if resolved_logging_root and not resolved_logging_root.is_absolute():
+        resolved_logging_root = PROJECT_ROOT / resolved_logging_root
+    resolved_logging_root = resolved_logging_root or PROJECT_ROOT
 
-    # Resolve compute defaults from Hydra config unless explicitly set via CLI.
-    gpus = args.gpus if args.gpus is not None else (OmegaConf.select(cfg, "cluster.compute.gpus_per_node") or 1)
-    cpus = args.cpus if args.cpus is not None else (OmegaConf.select(cfg, "cluster.compute.cpus_per_task") or 8)
-    time_limit = args.time or OmegaConf.select(cfg, "cluster.compute.time_limit") or "24:00:00"
-
-    # Container image is required for Slurm submissions.
-    container_image = args.container or OmegaConf.select(cfg, "cluster.container.image")
-    if not container_image:
-        cluster_name = OmegaConf.select(cfg, "cluster.name") or "<unknown>"
-        raise SystemExit(
-            "Missing container image. Set `cluster.container.image` in the cluster config "
-            f"(cluster={cluster_name}) or pass `--container /path/to/image.sqsh`."
-        )
-
-    # Memory: use CLI arg > cluster config > default 200G
-    if args.mem is not None:
-        mem = args.mem
-    elif OmegaConf.select(cfg, "cluster.compute.mem_gb"):
-        mem = f"{cfg.cluster.compute.mem_gb}G"
+    logging_runs_dir = OmegaConf.select(cfg, "logging.runs_dir")
+    if logging_runs_dir:
+        runs_dir = Path(logging_runs_dir)
+        if not runs_dir.is_absolute():
+            runs_dir = resolved_logging_root / runs_dir
     else:
-        mem = "200G"  # Safe default for OXE streaming
+        date_part = time.strftime("%Y-%m-%d")
+        time_part = time.strftime("%H-%M-%S")
+        runs_dir = resolved_logging_root / "runs" / date_part / time_part
+
+    # Cache dir is stable across runs (by default under logging_root_dir).
+    cache_dir = Path(OmegaConf.select(cfg, "submit.cache_dir") or "cache")
+    if not cache_dir.is_absolute():
+        cache_dir = resolved_logging_root / cache_dir
+
+    # Slurm stdout/err: relative to the run-group directory by default.
+    slurm_logs_dir = Path(OmegaConf.select(cfg, "submit.slurm_logs_dir") or "slurm")
+    if not slurm_logs_dir.is_absolute():
+        slurm_logs_dir = runs_dir / slurm_logs_dir
 
     # Check for sweep parameters
     sweep_params = parse_sweep_params(cfg)
     sweep_combinations = generate_sweep_combinations(sweep_params)
     is_sweep = len(sweep_combinations) > 1
 
+    if not slurm_enabled:
+        print("=" * 60)
+        print("HLRP Local Run (no Slurm)")
+        print("=" * 60)
+        print(f"\nScript: {script}.py")
+        print(f"Experiment: {cfg.experiment.name}")
+        print(f"Description: {cfg.experiment.description}")
+        print(f"\nPaths:")
+        print(f"  Runs dir: {runs_dir}")
+        print(f"  Cache dir: {cache_dir}")
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        if is_sweep:
+            print(f"\n🔄 SWEEP MODE: {len(sweep_combinations)} runs")
+            print("  (Runs sequentially on the local machine)")
+
+        base_env = os.environ.copy()
+        base_env["PYTHONPATH"] = f"{PROJECT_ROOT}/packages:" + base_env.get("PYTHONPATH", "")
+        base_env["HF_HOME"] = str(cache_dir / "huggingface")
+        base_env["HF_HUB_CACHE"] = str(cache_dir / "huggingface" / "hub")
+        base_env["TRANSFORMERS_CACHE"] = str(cache_dir / "huggingface" / "hub")
+        base_env["TORCH_HOME"] = str(cache_dir / "torch")
+
+        run_prefix = time.strftime("%Y%m%d-%H%M%S")
+        for i, sweep_overrides in enumerate(sweep_combinations):
+            combined_overrides = list(overrides) + sweep_overrides
+            override_str = " ".join(combined_overrides).strip()
+
+            # Ensure a stable output root for this submission group.
+            runs_override = f"logging.runs_dir={runs_dir}"
+
+            # Give each run a unique id so unified logging doesn't collide.
+            run_id = f"local-{run_prefix}-{i+1:03d}"
+            job_override = f"logging.job_id={run_id}"
+            cmd_overrides = list(combined_overrides)
+            if not any(ov.startswith("logging.runs_dir=") for ov in cmd_overrides):
+                cmd_overrides.append(runs_override)
+            if not any(ov.startswith("logging.job_id=") for ov in cmd_overrides):
+                cmd_overrides.append(job_override)
+            cmd = [sys.executable, str(script_path)] + cmd_overrides
+
+            if dry_run:
+                print(f"\n[DRY RUN] {run_id}: {override_str}")
+                print("  " + " ".join(cmd))
+                continue
+
+            print(f"\nRunning {run_id}: {override_str}" if override_str else f"\nRunning {run_id}")
+            subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=base_env, check=True)
+
+        return
+
+    # Resolve Slurm/compute settings from Hydra config (override via CLI, e.g. cluster.compute.time_limit=...).
+    partition = OmegaConf.select(cfg, "cluster.slurm.partition") or "mcml-hgx-h100-94x4"
+    qos = OmegaConf.select(cfg, "cluster.slurm.qos")
+    account = OmegaConf.select(cfg, "cluster.slurm.account")
+    gpus = int(OmegaConf.select(cfg, "cluster.compute.gpus_per_node") or 1)
+    cpus = int(OmegaConf.select(cfg, "cluster.compute.cpus_per_task") or 8)
+    time_limit = OmegaConf.select(cfg, "cluster.compute.time_limit") or "24:00:00"
+
+    # Container image is required for Slurm submissions.
+    container_image = OmegaConf.select(cfg, "cluster.container.image")
+    if not container_image:
+        cluster_name = OmegaConf.select(cfg, "cluster.name") or "<unknown>"
+        raise SystemExit(
+            "Missing container image. Set `cluster.container.image` in the cluster config "
+            f"(cluster={cluster_name})."
+        )
+
+    # Memory: use cluster config > default 200G
+    if OmegaConf.select(cfg, "cluster.compute.mem_gb"):
+        mem = f"{cfg.cluster.compute.mem_gb}G"
+    else:
+        mem = "200G"  # Safe default for OXE streaming
+
+    # Ensure directories exist on the shared filesystem.
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    slurm_logs_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build container mounts: always mount the project root, plus any external run/cache roots.
+    mount_roots: list[Path] = [PROJECT_ROOT, runs_dir, cache_dir]
+
+    # Ensure unique mount roots while preserving order.
+    seen: set[Path] = set()
+    unique_mounts: list[Path] = []
+    for p in mount_roots:
+        if p in seen:
+            continue
+        seen.add(p)
+        unique_mounts.append(p)
+
+    container_mounts = ",".join(f"{p}:{p}" for p in unique_mounts)
+
     print("=" * 60)
     print("HLRP Job Submission")
     print("=" * 60)
-    print(f"\nScript: {args.script}.py")
+    print(f"\nScript: {script}.py")
     print(f"Experiment: {cfg.experiment.name}")
     print(f"Description: {cfg.experiment.description}")
 
@@ -287,10 +332,9 @@ def main():
     print(f"  Memory: {mem}")
     print(f"  CPUs: {cpus}")
     print(f"  Container: {container_image}")
-
-    # Create logs directory
-    logs_dir = PROJECT_ROOT / "outputs" / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    print(f"  Runs dir: {runs_dir}")
+    print(f"  Slurm logs: {slurm_logs_dir}")
+    print(f"  Cache dir: {cache_dir}")
 
     # Submit jobs for each sweep combination
     submitted_jobs = []
@@ -299,6 +343,18 @@ def main():
         # Combine base overrides with sweep overrides
         # Sweep overrides come last to take precedence
         combined_overrides = list(overrides) + sweep_overrides
+
+        # Force run outputs into this submission group's run directory unless user overrides.
+        if not any(ov.startswith("logging.runs_dir=") for ov in combined_overrides):
+            combined_overrides.append(f"logging.runs_dir={runs_dir}")
+
+        # Put Hydra config snapshots under this run group too unless user overrides.
+        if not any(ov.startswith("hydra.run.dir=") for ov in combined_overrides):
+            combined_overrides.append(f"hydra.run.dir={runs_dir}/outputs/hydra/${{now:%H-%M-%S}}")
+        if not any(ov.startswith("hydra.sweep.dir=") for ov in combined_overrides):
+            combined_overrides.append(f"hydra.sweep.dir={runs_dir}/outputs/hydra/${{now:%H-%M-%S}}")
+        if not any(ov.startswith("hydra.sweep.subdir=") for ov in combined_overrides):
+            combined_overrides.append("hydra.sweep.subdir=${hydra.job.num}")
 
         # Generate unique job name for sweeps
         if is_sweep:
@@ -317,7 +373,7 @@ def main():
 
         # Generate sbatch script
         sbatch_content = generate_sbatch_script(
-            script=args.script,
+            script=script,
             overrides=combined_overrides,
             partition=partition,
             qos=qos,
@@ -328,9 +384,12 @@ def main():
             cpus=cpus,
             container_image=container_image,
             job_name=job_name,
+            container_mounts=container_mounts,
+            slurm_logs_dir=slurm_logs_dir,
+            cache_dir=cache_dir,
         )
 
-        if args.dry_run:
+        if dry_run:
             if is_sweep:
                 print(f"\n[DRY RUN] Job {i+1}/{len(sweep_combinations)}: {sweep_overrides}")
             print("-" * 60)
@@ -371,7 +430,7 @@ def main():
             os.unlink(sbatch_file)
 
     # Print summary
-    if not args.dry_run and submitted_jobs:
+    if not dry_run and submitted_jobs:
         print("\n" + "=" * 60)
         print(f"Submitted {len(submitted_jobs)} job(s)")
         print("=" * 60)
@@ -379,9 +438,9 @@ def main():
         print("  squeue --me")
         if len(submitted_jobs) == 1:
             job_id = submitted_jobs[0][0]
-            print(f"  tail -f {logs_dir}/{job_id}.out")
+            print(f"  tail -f {slurm_logs_dir}/{job_id}.out")
         else:
-            print(f"  tail -f {logs_dir}/<job_id>.out")
+            print(f"  tail -f {slurm_logs_dir}/<job_id>.out")
             print("\nJob IDs:")
             for job_id, sweep_ov in submitted_jobs:
                 print(f"  {job_id}: {sweep_ov if sweep_ov else 'base config'}")

@@ -14,10 +14,10 @@ This guide explains how to submit training jobs to the LRZ cluster using `script
 python scripts/submit_job.py experiment=laq_oxe_debug cluster=lrz_h100
 
 # Submit with custom time limit
-python scripts/submit_job.py --time 04:00:00 experiment=laq_full
+python scripts/submit_job.py cluster.compute.time_limit=04:00:00 experiment=laq_full
 
 # Dry run (preview without submitting)
-python scripts/submit_job.py --dry-run experiment=laq_oxe_debug cluster=lrz_h100
+python scripts/submit_job.py submit.dry_run=true experiment=laq_oxe_debug cluster=lrz_h100
 
 # Submit a sweep (multiple jobs)
 python scripts/submit_job.py experiment=laq_lr_sweep cluster=lrz_h100
@@ -68,10 +68,10 @@ python scripts/submit_job.py experiment=laq_full \
 
 ```bash
 python scripts/submit_job.py \
-    --gpus 4 \
-    --time 08:00:00 \
-    --mem 128G \
-    --cpus 16 \
+    cluster.compute.gpus_per_node=4 \
+    cluster.compute.time_limit=08:00:00 \
+    cluster.compute.mem_gb=128 \
+    cluster.compute.cpus_per_task=16 \
     experiment=laq_full
 ```
 
@@ -79,7 +79,7 @@ python scripts/submit_job.py \
 
 ```bash
 # Run foundation training instead of LAQ
-python scripts/submit_job.py --script 4_train_foundation experiment=vla_7b
+python scripts/submit_job.py experiment=vla_7b
 ```
 
 ---
@@ -168,18 +168,17 @@ sweep:
 
 ## CLI Options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--script`, `-s` | `2_train_laq` | Training script (without .py) |
-| `--partition`, `-p` | cluster config | Slurm partition |
-| `--qos` | cluster config | Slurm QoS |
-| `--account` | cluster config | Slurm account |
-| `--gpus`, `-g` | cluster config | Number of GPUs |
-| `--time`, `-t` | cluster config | Time limit (HH:MM:SS) |
-| `--mem` | cluster config / `200G` | Memory per node |
-| `--cpus` | cluster config / `8` | CPUs per task |
-| `--container` | cluster config | Container image path (required) |
-| `--dry-run` | `false` | Print script without submitting |
+This script is a pure Hydra CLI. Common overrides:
+
+- `submit.dry_run=true` (print sbatch scripts, don’t submit)
+- `submit.script=4_train_foundation` (override which `scripts/*.py` entrypoint runs)
+- `cluster=<name>` (select cluster config)
+- `cluster.compute.gpus_per_node=...`
+- `cluster.compute.cpus_per_task=...`
+- `cluster.compute.mem_gb=...`
+- `cluster.compute.time_limit=HH:MM:SS`
+- `cluster.slurm.partition=...`, `cluster.slurm.qos=...`, `cluster.slurm.account=...`
+- `cluster.container.image=/path/to/container.sqsh`
 
 ---
 
@@ -196,9 +195,17 @@ container:
 ### Override Container
 
 ```bash
-# Via CLI
-python scripts/submit_job.py --container /path/to/custom.sqsh experiment=laq_debug
+# Via Hydra override
+python scripts/submit_job.py cluster.container.image=/path/to/custom.sqsh experiment=laq_debug
 ```
+
+---
+
+## Caching (Pretrained Weights)
+
+The generated sbatch script sets Hugging Face and torch/torchvision cache env vars so
+pretrained weights persist across jobs. Configure the base directory with `submit.cache_dir`
+(default: `cache/`).
 
 ---
 
@@ -225,10 +232,10 @@ Status codes:
 
 ```bash
 # Live output
-ssh ai 'tail -f /dss/.../outputs/logs/5423108.out'
+ssh ai 'tail -f /dss/.../runs/slurm/5423108.out'
 
 # Error log
-ssh ai 'cat /dss/.../outputs/logs/5423108.err'
+ssh ai 'cat /dss/.../runs/slurm/5423108.err'
 ```
 
 ### Cancel Jobs
@@ -256,8 +263,8 @@ Each job generates a script like:
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=200G
 #SBATCH --time=15:00:00
-#SBATCH --output=/dss/.../outputs/logs/%j.out
-#SBATCH --error=/dss/.../outputs/logs/%j.err
+#SBATCH --output=/dss/.../runs/slurm/%j.out
+#SBATCH --error=/dss/.../runs/slurm/%j.err
 #SBATCH --container-image=/dss/.../containers/lam.sqsh
 #SBATCH --container-mounts=/dss/.../high-level-robot-planner:/dss/.../high-level-robot-planner
 #SBATCH --container-workdir=/dss/.../high-level-robot-planner
@@ -316,7 +323,7 @@ Submits 6 jobs (2 datasets × 3 seeds).
 
 ### "Container image not found"
 
-Set `container.image` in your cluster config (or pass `--container /path/to/container.sqsh`).
+Set `cluster.container.image` in your cluster config (or override with `cluster.container.image=/path/to/container.sqsh`).
 
 ### Job stuck in "Priority" state
 
@@ -353,8 +360,8 @@ hydra:
 |------|---------|
 | `scripts/submit_job.py` | Main submission script |
 | `config/experiment/*.yaml` | Experiment configs (can include sweep.params) |
-| `outputs/logs/*.out` | Job stdout logs |
-| `outputs/logs/*.err` | Job stderr logs |
+| `runs/slurm/*.out` | Job stdout logs |
+| `runs/slurm/*.err` | Job stderr logs |
 
 ---
 

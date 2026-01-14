@@ -57,6 +57,7 @@ Thumbs.db
 # Logging and experiment tracking
 wandb/
 logs/
+runs/
 mlruns/
 lightning_logs/
 *.log
@@ -66,6 +67,7 @@ nohup.out
 # Data (large files should not be committed)
 
 datasets/
+cache/
 *.tar
 *.tar.gz
 *.zip
@@ -94,4 +96,3 @@ temp/
 # Slurm
 slurm-*.out
 *.sbatch.log
-

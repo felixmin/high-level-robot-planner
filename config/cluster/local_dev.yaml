@@ -1,0 +1,7 @@
+# Local development configuration (no Slurm, no container).
+
+name: local_dev
+
+slurm:
+  enabled: false
+
