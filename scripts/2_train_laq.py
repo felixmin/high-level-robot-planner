@@ -178,19 +178,21 @@ def main(cfg: DictConfig):
     checkpoint_dir = output_dir / "checkpoints"
     checkpoint_dir.mkdir(exist_ok=True)
 
+    every_n_train_steps = checkpoint_config.every_n_train_steps
     checkpoint_callback = ModelCheckpoint(
-        dirpath=str(checkpoint_dir),  # Route to unified output directory
+        dirpath=str(checkpoint_dir),
         monitor=checkpoint_config.monitor,
         mode=checkpoint_config.mode,
         save_top_k=checkpoint_config.save_top_k,
         save_last=checkpoint_config.save_last,
-        every_n_epochs=checkpoint_config.every_n_epochs,
-        filename="laq-{epoch:02d}-{val/loss:.4f}",
+        every_n_train_steps=every_n_train_steps,
+        filename="laq-step{step:06d}-{val/loss:.4f}",
         verbose=True,
     )
     callbacks.append(checkpoint_callback)
     logger.info(f"✓ Checkpoint callback added (monitor={checkpoint_config.monitor})")
     logger.info(f"  - Checkpoint directory: {checkpoint_dir}")
+    logger.info(f"  - Checkpointing every {every_n_train_steps} steps")
 
     # Learning rate monitoring
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
