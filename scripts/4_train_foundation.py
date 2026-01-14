@@ -166,10 +166,13 @@ def main(cfg: DictConfig):
             mode=cfg.training.checkpoint.mode,
             save_top_k=int(cfg.training.checkpoint.save_top_k),
             save_last=bool(cfg.training.checkpoint.save_last),
-            filename="vla-{step}-{val/loss:.4f}",
+            filename="vla-step{step:06d}",
         ),
-        LearningRateMonitor(logging_interval="step"),
     ]
+    if wandb_logger is not None:
+        callbacks.append(LearningRateMonitor(logging_interval="step"))
+    else:
+        logger.info("WandB disabled; skipping LearningRateMonitor (no logger).")
 
     trainer = pl.Trainer(
         accelerator="gpu" if torch.cuda.is_available() else "cpu",

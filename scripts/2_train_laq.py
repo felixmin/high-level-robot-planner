@@ -196,7 +196,10 @@ def main(cfg: DictConfig):
         save_top_k=checkpoint_config.save_top_k,
         save_last=checkpoint_config.save_last,
         every_n_train_steps=every_n_train_steps,
-        filename="laq-step{step:06d}-{val/loss:.4f}",
+        # Avoid using metric keys like `val/loss` in the filename template: Lightning's
+        # formatting and filesystem sanitization can be version-dependent, and step-based
+        # checkpointing may run when no validation metrics are available.
+        filename="laq-step{step:06d}",
         verbose=True,
     )
     callbacks.append(checkpoint_callback)
@@ -204,10 +207,7 @@ def main(cfg: DictConfig):
     logger.info(f"  - Checkpoint directory: {checkpoint_dir}")
     logger.info(f"  - Checkpointing every {every_n_train_steps} steps")
 
-    # Learning rate monitoring
-    lr_monitor = LearningRateMonitor(logging_interval="epoch")
-    callbacks.append(lr_monitor)
-    logger.info("✓ Learning rate monitor added")
+    # Learning rate monitoring requires a Lightning logger and is added after logger setup.
 
     # Progress logging (for cluster jobs where tqdm doesn't work in log files)
     progress_logger = ProgressLoggerCallback(log_every_n_steps=100)
@@ -270,6 +270,14 @@ def main(cfg: DictConfig):
     else:
         wandb_logger = None
         logger.info("✓ WandB disabled")
+
+    # Learning rate monitoring (requires a Lightning logger)
+    if wandb_logger is not None:
+        lr_monitor = LearningRateMonitor(logging_interval="epoch")
+        callbacks.append(lr_monitor)
+        logger.info("✓ Learning rate monitor added")
+    else:
+        logger.info("✓ Learning rate monitor disabled (no logger)")
 
     # Setup profiler
     logger.info("\n" + "=" * 80)

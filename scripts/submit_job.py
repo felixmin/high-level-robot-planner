@@ -110,6 +110,7 @@ def generate_sbatch_script(
     container_mounts: str,
     slurm_logs_dir: Path,
     cache_dir: Path,
+    hf_token_path: Path | None,
 ) -> str:
     """Generate sbatch script content."""
 
@@ -118,6 +119,22 @@ def generate_sbatch_script(
     # or `${hydra.job.num}` inside the sbatch script.
     python_args = ["python", f"scripts/{script}.py", *overrides]
     python_cmd = " ".join(shlex.quote(str(arg)) for arg in python_args).strip()
+
+    if hf_token_path:
+        hf_auth_block = f"""# Hugging Face auth for gated repos (e.g. DINOv3).
+if [ -z "${{HF_TOKEN:-}}" ] && [ -f "{hf_token_path}" ]; then
+  export HF_TOKEN="$(< "{hf_token_path}")"
+fi
+if [ -z "${{HUGGINGFACE_HUB_TOKEN:-}}" ] && [ -n "${{HF_TOKEN:-}}" ]; then
+  export HUGGINGFACE_HUB_TOKEN="$HF_TOKEN"
+fi
+"""
+    else:
+        hf_auth_block = """# Hugging Face auth for gated repos (e.g. DINOv3).
+if [ -z "${HF_TOKEN:-}" ] && [ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]; then
+  echo "WARNING: No Hugging Face token found; gated models may fail. Run huggingface-cli login or set HF_TOKEN." >&2
+fi
+"""
 
     script_content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
@@ -134,6 +151,8 @@ def generate_sbatch_script(
 #SBATCH --container-mounts={container_mounts}
 #SBATCH --container-workdir={PROJECT_ROOT}
 
+set -euo pipefail
+
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
@@ -143,7 +162,7 @@ echo "Working directory: $(pwd)"
 echo "========================================"
 
 # Environment setup
-export PYTHONPATH={PROJECT_ROOT}/packages:$PYTHONPATH
+export PYTHONPATH={PROJECT_ROOT}/packages:${{PYTHONPATH:-}}
 export NCCL_SOCKET_IFNAME=ib0
 export NCCL_DEBUG=WARN
 
@@ -153,6 +172,8 @@ export NCCL_DEBUG=WARN
 mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/torch"
 export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
 export TORCH_HOME="{cache_dir}/torch"
+
+{hf_auth_block}
 
 # Show GPU info
 nvidia-smi
@@ -295,8 +316,16 @@ def main():
     slurm_logs_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Hugging Face auth token path (if present) for gated model downloads inside the container.
+    hf_token_path = None
+    candidate = Path.home() / ".huggingface" / "token"
+    if candidate.exists():
+        hf_token_path = candidate
+
     # Build container mounts: always mount the project root, plus any external run/cache roots.
     mount_roots: list[Path] = [PROJECT_ROOT, runs_dir, cache_dir]
+    if hf_token_path is not None:
+        mount_roots.append(hf_token_path.parent)
 
     # Ensure unique mount roots while preserving order.
     seen: set[Path] = set()
@@ -388,6 +417,7 @@ def main():
             container_mounts=container_mounts,
             slurm_logs_dir=slurm_logs_dir,
             cache_dir=cache_dir,
+            hf_token_path=hf_token_path,
         )
 
         if dry_run:
