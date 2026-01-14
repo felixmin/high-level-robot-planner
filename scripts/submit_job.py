@@ -147,11 +147,11 @@ export PYTHONPATH={PROJECT_ROOT}/packages:$PYTHONPATH
 export NCCL_SOCKET_IFNAME=ib0
 export NCCL_DEBUG=WARN
 
-# Persist caches on the mounted filesystem (avoid downloading models every job)
-mkdir -p "{cache_dir}/huggingface" "{cache_dir}/torch"
-export HF_HOME="{cache_dir}/huggingface"
-export HF_HUB_CACHE="$HF_HOME/hub"
-export TRANSFORMERS_CACHE="$HF_HOME/hub"
+# Persist caches on the mounted filesystem (avoid downloading models every job).
+# Important: do not override HF_HOME here, otherwise Hugging Face auth (token) may no longer be
+# discovered if it was previously stored under the default HF_HOME on $HOME.
+mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/torch"
+export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
 export TORCH_HOME="{cache_dir}/torch"
 
 # Show GPU info
@@ -236,9 +236,7 @@ def main():
 
         base_env = os.environ.copy()
         base_env["PYTHONPATH"] = f"{PROJECT_ROOT}/packages:" + base_env.get("PYTHONPATH", "")
-        base_env["HF_HOME"] = str(cache_dir / "huggingface")
         base_env["HF_HUB_CACHE"] = str(cache_dir / "huggingface" / "hub")
-        base_env["TRANSFORMERS_CACHE"] = str(cache_dir / "huggingface" / "hub")
         base_env["TORCH_HOME"] = str(cache_dir / "torch")
 
         run_prefix = time.strftime("%Y%m%d-%H%M%S")

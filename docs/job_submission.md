@@ -207,6 +207,11 @@ The generated sbatch script sets Hugging Face and torch/torchvision cache env va
 pretrained weights persist across jobs. Configure the base directory with `submit.cache_dir`
 (default: `cache/`).
 
+If you use gated Hugging Face models, make sure the job can authenticate:
+
+- Run `huggingface-cli login` once on the cluster (stores a token under your home directory), or
+- Export `HF_TOKEN=...` in your environment before submitting.
+
 ---
 
 ## Monitoring Jobs
