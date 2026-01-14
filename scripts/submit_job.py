@@ -30,6 +30,7 @@ Usage:
 
 import itertools
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -112,9 +113,11 @@ def generate_sbatch_script(
 ) -> str:
     """Generate sbatch script content."""
 
-    # Build the python command with overrides
-    override_str = " ".join(overrides) if overrides else ""
-    python_cmd = f"python scripts/{script}.py {override_str}".strip()
+    # Build the python command with overrides.
+    # Quote each override so bash doesn't expand Hydra interpolations like `${now:...}`
+    # or `${hydra.job.num}` inside the sbatch script.
+    python_args = ["python", f"scripts/{script}.py", *overrides]
+    python_cmd = " ".join(shlex.quote(str(arg)) for arg in python_args).strip()
 
     script_content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
