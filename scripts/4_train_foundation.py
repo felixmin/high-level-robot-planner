@@ -23,7 +23,7 @@ from omegaconf import DictConfig, OmegaConf
 workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
-from common.callbacks import ProgressLoggerCallback
+from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
 from common.data import OXEDataModule
 from common.logging import set_seed
 from common.unified_logging import setup_unified_logging, setup_wandb_with_unified_paths
@@ -286,6 +286,20 @@ def main(cfg: DictConfig):
     if enable_progress:
         log_every = 100 if progress_cfg is None else int(progress_cfg.get("log_every_n_steps", 100))
         callbacks.append(ProgressLoggerCallback(log_every_n_steps=log_every))
+
+    # Dataset usage logging (prints how much of each dataset was *actually consumed*).
+    # Recommended to align with step-based validation cadence by logging on validation end.
+    usage_cfg = cfg.training.get("dataset_usage_logger")
+    if usage_cfg and bool(usage_cfg.get("enabled", True)):
+        callbacks.append(
+            DatasetUsageLoggerCallback(
+                enabled=True,
+                log_on_validation_end=bool(usage_cfg.get("log_on_validation_end", True)),
+                log_every_n_steps=usage_cfg.get("log_every_n_steps"),
+                key=str(usage_cfg.get("key", "dataset_name")),
+                top_k=int(usage_cfg.get("top_k", 12)),
+            )
+        )
     if wandb_logger is not None:
         callbacks.append(LearningRateMonitor(logging_interval="step"))
     else:

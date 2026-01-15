@@ -274,6 +274,7 @@ class NSVQ(torch.nn.Module):
         """
 
         with torch.no_grad():
+            total_assignments = int(self.codebooks_used.sum().item())
             unused_indices, used_indices, min_count = self._get_replacement_indices()
 
             unused_count = unused_indices.shape[0]
@@ -299,7 +300,13 @@ class NSVQ(torch.nn.Module):
                     (unused_count, self.embedding_dim), device=self.codebooks.device
                 )
 
-            logger.info("Replaced %d codebooks (min_count=%.4f)", unused_count, min_count)
+            logger.info(
+                "Replaced %d codebooks (used=%d, total=%d, min_count=%.4f)",
+                unused_count,
+                used_count,
+                total_assignments,
+                min_count,
+            )
             self.codebooks_used.zero_()
 
     def inference(self, input_data_first, input_data_last, user_action_token_num=None):

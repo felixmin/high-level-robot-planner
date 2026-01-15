@@ -34,6 +34,13 @@ throughput:
   enabled: true
   log_every_n_steps: 10
 
+# Print dataset mix seen between validations (helps sanity-check multi-dataset training).
+dataset_usage_logger:
+  enabled: true
+  log_on_validation_end: true
+  key: dataset_name
+  top_k: 12
+
 checkpoint:
   monitor: val/loss
   mode: min

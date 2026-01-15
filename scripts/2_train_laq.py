@@ -28,7 +28,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Ca
 
 
 from common.data import LAQDataModule, OXEDataModule
-from common.callbacks import ProgressLoggerCallback
+from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
 from common.logging import set_seed, count_parameters
 from common.unified_logging import setup_unified_logging, setup_wandb_with_unified_paths
 from laq import (
@@ -190,6 +190,20 @@ def main(cfg: DictConfig):
     progress_logger = ProgressLoggerCallback(log_every_n_steps=100)
     callbacks.append(progress_logger)
     logger.info("✓ Progress logger added (logs every 100 steps)")
+
+    # Dataset usage logging: print dataset mix consumed between validations.
+    usage_cfg = training_config.get("dataset_usage_logger")
+    if usage_cfg and bool(usage_cfg.get("enabled", True)):
+        callbacks.append(
+            DatasetUsageLoggerCallback(
+                enabled=True,
+                log_on_validation_end=bool(usage_cfg.get("log_on_validation_end", True)),
+                log_every_n_steps=usage_cfg.get("log_every_n_steps"),
+                key=str(usage_cfg.get("key", "dataset_name")),
+                top_k=int(usage_cfg.get("top_k", 12)),
+            )
+        )
+        logger.info("✓ Dataset usage logger added")
 
     # Setup validation strategies
     val_config = training_config.validation

@@ -13,6 +13,7 @@ Decoder Types:
 
 import logging
 import math
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -504,13 +505,29 @@ class LatentActionQuantization(nn.Module):
             self._encode_frames(first_frame, rest_frames)
         )
 
-        tokens, _, _, indices = self.vq(first_tokens, last_tokens, codebook_training_only=False)
+        tokens, perplexity, _, indices = self.vq(first_tokens, last_tokens, codebook_training_only=False)
 
         num_unique_indices = indices.unique().size(0)
 
+        codebook_replaced = 0.0
+        replaced_count = 0.0
+        used_count = 0.0
+        window_total = float(self.vq.codebooks_used.sum().item())
+        min_count = 0.0
+
         if step != 0 and self._should_replace_codebook(step):
             logger.debug(f"Replacing unused codebook entries at step {step}")
+            unused_indices, used_indices, min_count_val = self.vq._get_replacement_indices()
+            replaced_count = float(unused_indices.shape[0])
+            used_count = float(used_indices.shape[0])
+            min_count = float(min_count_val)
+            codebook_replaced = 1.0
             self.vq.replace_unused_codebooks()
+            if int(os.environ.get("RANK", "0")) == 0:
+                print(
+                    f"[Codebook] step={int(step)} replaced={int(replaced_count)} "
+                    f"used={int(used_count)} total={int(window_total)} min_count={min_count:.4f}"
+                )
 
         if return_only_codebook_ids:
             return indices
@@ -524,7 +541,15 @@ class LatentActionQuantization(nn.Module):
 
         # Initialize loss and metrics
         total_loss = torch.tensor(0.0, device=device, requires_grad=True)
-        metrics = {"num_unique_codes": num_unique_indices}
+        metrics = {
+            "num_unique_codes": num_unique_indices,
+            "vq_perplexity": perplexity.detach(),
+            "codebook_replaced": torch.tensor(codebook_replaced, device=device),
+            "codebook_replaced_count": torch.tensor(replaced_count, device=device),
+            "codebook_used_count": torch.tensor(used_count, device=device),
+            "codebook_window_total": torch.tensor(window_total, device=device),
+            "codebook_min_count": torch.tensor(min_count, device=device),
+        }
 
         # Precompute shared values for decoders
         h_dec, w_dec = self.patch_height_width

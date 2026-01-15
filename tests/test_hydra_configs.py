@@ -40,6 +40,8 @@ class TestExperimentConfigs:
             assert cfg.training.epochs == 3
             assert hasattr(cfg.training, "optimizer")
             assert cfg.training.optimizer.type == "AdamW"
+            assert bool(cfg.training.dataset_usage_logger.enabled) is True
+            assert bool(cfg.training.dataset_usage_logger.log_on_validation_end) is True
 
             # Validate cluster config
             assert cfg.cluster.name == "local_dev"
@@ -111,6 +113,8 @@ class TestExperimentConfigs:
             assert cfg.training.validation.check_interval == 100
             assert cfg.training.validation.limit_batches == 4
             assert bool(cfg.training.validation.visualization.enabled) is True
+            assert bool(cfg.training.dataset_usage_logger.enabled) is True
+            assert bool(cfg.training.dataset_usage_logger.log_on_validation_end) is True
             assert cfg.training.checkpoint.every_n_train_steps == 100
             assert cfg.cluster.name == "local_dev"
 

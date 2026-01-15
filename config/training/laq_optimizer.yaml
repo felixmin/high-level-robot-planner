@@ -98,6 +98,14 @@ validation:
       top_k_sequences: 16  # Number of most frequent sequences to visualize
       examples_per_sequence: 4  # Frame pairs to show per sequence
 
+# Dataset usage logging: prints how much of each dataset was *actually consumed*
+# between validations (uses `batch.dataset_name`).
+dataset_usage_logger:
+  enabled: true
+  log_on_validation_end: true
+  key: dataset_name
+  top_k: 12
+
 # Checkpointing
 checkpoint:
   monitor: val/loss
@@ -112,4 +120,3 @@ profiler:
   type: simple             # 'simple', 'advanced', or 'pytorch'
   dirpath: ./profiles      # Where to save profile outputs
   filename: profile        # Profile filename
-

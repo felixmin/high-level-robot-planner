@@ -4,6 +4,7 @@ Common Lightning callbacks shared across stages.
 
 from __future__ import annotations
 
+import collections
 from typing import Any, Optional
 
 from lightning.pytorch.callbacks import Callback
@@ -65,3 +66,72 @@ class ProgressLoggerCallback(Callback):
             return
         print(f"[Validation] step={int(trainer.global_step)}, {metrics_str}")
 
+
+class DatasetUsageLoggerCallback(Callback):
+    """
+    Track and report how many samples from each dataset were seen.
+
+    Intended for OXE/OpenX batches where `batch["dataset_name"]` is a list[str] of length B.
+    Reports counts since the last report, and can be aligned with step-based validation by
+    printing on each validation end.
+    """
+
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        log_on_validation_end: bool = True,
+        log_every_n_steps: Optional[int] = None,
+        key: str = "dataset_name",
+        top_k: int = 12,
+    ):
+        super().__init__()
+        self.enabled = bool(enabled)
+        self.log_on_validation_end = bool(log_on_validation_end)
+        self.log_every_n_steps = int(log_every_n_steps) if log_every_n_steps else None
+        self.key = str(key)
+        self.top_k = int(top_k)
+
+        self._since_last: collections.Counter[str] = collections.Counter()
+        self._total: collections.Counter[str] = collections.Counter()
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch: Any, batch_idx: int) -> None:
+        if not self.enabled:
+            return
+        if not isinstance(batch, dict):
+            return
+        items = batch.get(self.key)
+        if not isinstance(items, list):
+            return
+
+        for x in items:
+            name = str(x) if x is not None else "None"
+            self._since_last[name] += 1
+            self._total[name] += 1
+
+        if self.log_every_n_steps is not None:
+            step = int(getattr(trainer, "global_step", 0))
+            if self.log_every_n_steps > 0 and (step + 1) % self.log_every_n_steps == 0:
+                self._print_summary(trainer, prefix="Train", reset_since_last=True)
+
+    def on_validation_end(self, trainer, pl_module) -> None:
+        if not self.enabled or not self.log_on_validation_end:
+            return
+        self._print_summary(trainer, prefix="Validation", reset_since_last=True)
+
+    def _print_summary(self, trainer, *, prefix: str, reset_since_last: bool) -> None:
+        if not self._since_last:
+            return
+
+        total = sum(self._since_last.values())
+        parts = []
+        for name, count in self._since_last.most_common(max(1, self.top_k)):
+            pct = 100.0 * float(count) / float(total) if total > 0 else 0.0
+            parts.append(f"{name}={count} ({pct:.1f}%)")
+
+        step = int(getattr(trainer, "global_step", 0))
+        msg = f"[{prefix}][DatasetUsage] step={step} interval_total={total} " + ", ".join(parts)
+        print(msg)
+
+        if reset_since_last:
+            self._since_last.clear()
