@@ -26,8 +26,8 @@ model:
   use_dinov3_encoder: true
   dinov3_model_name: "facebook/dinov3-vits16-pretrain-lvd1689m"
   dinov3_pool_to_grid: 8
-  code_seq_len: 1
-  codebook_size: 4096
+  code_seq_len: 4
+  codebook_size: 8
   # Training decoders
   use_dino_decoder: true   # DINO token prediction (main training objective)
   use_pixel_decoder: false # Pixel prediction with gradients (disabled)
