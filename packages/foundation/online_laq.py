@@ -76,9 +76,35 @@ class LAQTaskCodeProvider(torch.nn.Module):
         self._laq_task.eval()
         self._laq_task.freeze()
 
-        # Expect the underlying model to expose these attributes (true for LAQ in this repo).
-        self.codebook_size = int(self._laq_task.model.codebook_size)
-        self.code_seq_len = int(self._laq_task.model.code_seq_len)
+        self.codebook_size = self._infer_codebook_size()
+        self.code_seq_len = self._infer_code_seq_len()
+
+    def _infer_codebook_size(self) -> int:
+        model = getattr(self._laq_task, "model", None)
+        vq = getattr(model, "vq", None)
+        if vq is not None and hasattr(vq, "num_embeddings"):
+            return int(vq.num_embeddings)
+        if model is not None and hasattr(model, "codebook_size"):
+            return int(getattr(model, "codebook_size"))
+        model_cfg = getattr(self._laq_task, "model_config", None)
+        if model_cfg is not None and hasattr(model_cfg, "codebook_size"):
+            return int(getattr(model_cfg, "codebook_size"))
+        raise AttributeError(
+            "Could not infer LAQ codebook size from checkpoint (expected one of: "
+            "laq_task.model.vq.num_embeddings, laq_task.model.codebook_size, laq_task.model_config.codebook_size)."
+        )
+
+    def _infer_code_seq_len(self) -> int:
+        model = getattr(self._laq_task, "model", None)
+        if model is not None and hasattr(model, "code_seq_len"):
+            return int(getattr(model, "code_seq_len"))
+        model_cfg = getattr(self._laq_task, "model_config", None)
+        if model_cfg is not None and hasattr(model_cfg, "code_seq_len"):
+            return int(getattr(model_cfg, "code_seq_len"))
+        raise AttributeError(
+            "Could not infer LAQ code_seq_len from checkpoint (expected one of: "
+            "laq_task.model.code_seq_len, laq_task.model_config.code_seq_len)."
+        )
 
     @property
     def device(self) -> torch.device:

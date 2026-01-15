@@ -166,14 +166,16 @@ export PYTHONPATH={PROJECT_ROOT}/packages:${{PYTHONPATH:-}}
 export NCCL_SOCKET_IFNAME=ib0
 export NCCL_DEBUG=WARN
 
-# Persist caches on the mounted filesystem (avoid downloading models every job).
-# Important: do not override HF_HOME here, otherwise Hugging Face auth (token) may no longer be
-# discovered if it was previously stored under the default HF_HOME on $HOME.
-mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/torch"
-export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
-export TORCH_HOME="{cache_dir}/torch"
+	# Persist caches on the mounted filesystem (avoid downloading models every job).
+	# Important: do not override HF_HOME here, otherwise Hugging Face auth (token) may no longer be
+	# discovered if it was previously stored under the default HF_HOME on $HOME.
+	mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/torch"
+	export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
+	export TORCH_HOME="{cache_dir}/torch"
+	mkdir -p "{cache_dir}/tmp"
+	export TMPDIR="{cache_dir}/tmp"
 
-{hf_auth_block}
+	{hf_auth_block}
 
 # Show GPU info
 nvidia-smi
@@ -329,8 +331,16 @@ def main():
     if candidate.exists():
         hf_token_path = candidate
 
+    # External artifact paths that must be visible inside the container (e.g., LAQ checkpoint).
+    extra_mounts: list[Path] = []
+    laq_ckpt = OmegaConf.select(cfg, "model.laq.checkpoint")
+    if laq_ckpt:
+        laq_ckpt_path = Path(str(laq_ckpt))
+        if laq_ckpt_path.is_absolute():
+            extra_mounts.append(laq_ckpt_path.parent)
+
     # Build container mounts: always mount the project root, plus any external run/cache roots.
-    mount_roots: list[Path] = [PROJECT_ROOT, runs_dir, cache_dir]
+    mount_roots: list[Path] = [PROJECT_ROOT, runs_dir, cache_dir, *extra_mounts]
     if hf_token_path is not None:
         mount_roots.append(hf_token_path.parent)
 

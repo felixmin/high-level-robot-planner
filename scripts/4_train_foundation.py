@@ -100,9 +100,64 @@ def main(cfg: DictConfig):
         )
     from laq import LAQTask
 
+    def load_laq_task_from_checkpoint(checkpoint_path: str) -> LAQTask:
+        """
+        Load an LAQ Lightning checkpoint across Torch/Lightning versions.
+
+        PyTorch 2.6 changed `torch.load` default to `weights_only=True`, but
+        Lightning checkpoints include non-tensor objects (e.g., OmegaConf).
+        """
+        ckpt_path = str(checkpoint_path)
+
+        # Newer Lightning versions may plumb `weights_only` through.
+        try:
+            return LAQTask.load_from_checkpoint(ckpt_path, weights_only=False)
+        except TypeError:
+            pass
+        except RuntimeError as exc:
+            # Fall back to a manual loader when the failure is due to weights-only loading.
+            if "weights_only" not in str(exc).lower():
+                raise
+
+        import inspect
+
+        load_kwargs: dict[str, object] = {"map_location": "cpu"}
+        if "weights_only" in inspect.signature(torch.load).parameters:
+            load_kwargs["weights_only"] = False
+
+        checkpoint = torch.load(ckpt_path, **load_kwargs)
+        if not isinstance(checkpoint, dict):
+            raise TypeError(f"Expected checkpoint dict, got {type(checkpoint)}")
+
+        hparams = checkpoint.get("hyper_parameters")
+        if not isinstance(hparams, dict):
+            raise KeyError("Checkpoint missing 'hyper_parameters' dict")
+
+        model_config = hparams.get("model_config")
+        training_config = hparams.get("training_config")
+        use_ema = bool(hparams.get("use_ema", False))
+
+        if isinstance(model_config, dict):
+            model_config = OmegaConf.create(model_config)
+        if isinstance(training_config, dict):
+            training_config = OmegaConf.create(training_config)
+
+        if model_config is None or training_config is None:
+            raise KeyError("Checkpoint hyperparameters missing model/training config")
+
+        state_dict = checkpoint.get("state_dict")
+        if not isinstance(state_dict, dict):
+            raise KeyError("Checkpoint missing 'state_dict'")
+
+        task = LAQTask(
+            model_config=model_config, training_config=training_config, use_ema=use_ema
+        )
+        task.load_state_dict(state_dict, strict=True)
+        return task
+
     try:
-        laq_task = LAQTask.load_from_checkpoint(laq_ckpt)
-    except RuntimeError as exc:
+        laq_task = load_laq_task_from_checkpoint(laq_ckpt)
+    except Exception as exc:
         raise RuntimeError(
             f"Failed to load LAQ checkpoint '{laq_ckpt}'. "
             "Provide a checkpoint trained with the current LAQ codebase."

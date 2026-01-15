@@ -105,8 +105,8 @@ class TestExperimentConfigs:
             assert "cosmos" in cfg.experiment.description.lower()
             assert cfg.model.name == "vla_cosmos2_tokens"
             assert cfg.model.vla.model_name == "nvidia/Cosmos-Reason2-2B"
-            assert cfg.model.action_tokens.codebook_size == 8
-            assert cfg.model.action_tokens.code_seq_len == 4
+            assert cfg.model.action_tokens.codebook_size == 4096
+            assert cfg.model.action_tokens.code_seq_len == 1
             assert cfg.cluster.name == "local_dev"
 
 

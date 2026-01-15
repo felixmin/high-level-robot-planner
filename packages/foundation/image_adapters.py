@@ -20,6 +20,7 @@ def oxe_first_frames_to_pil(frames: torch.Tensor) -> List[Image.Image]:
     Accepts:
       - [B, 2, H, W, 3] uint8 (standard OXE collate)
       - [B, 2, 3, H, W] uint8
+      - [B, 3, 2, H, W] (LAQ video format; uint8 or float in [0, 1])
 
     Returns:
       - List[PIL.Image.Image] length B (RGB)
@@ -32,6 +33,9 @@ def oxe_first_frames_to_pil(frames: torch.Tensor) -> List[Image.Image]:
         first = frames[:, 0]  # [B, H, W, 3]
     elif frames.shape[2] == 3:
         first = frames[:, 0].permute(0, 2, 3, 1)  # [B, H, W, 3]
+    elif frames.shape[1] == 3 and frames.shape[2] == 2:
+        # [B, 3, 2, H, W] -> [B, H, W, 3]
+        first = frames[:, :, 0].permute(0, 2, 3, 1)
     else:
         raise ValueError(f"Unrecognized frame layout: {tuple(frames.shape)}")
 

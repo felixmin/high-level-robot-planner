@@ -11,8 +11,8 @@ laq:
   checkpoint: ""  # required at runtime (Stage 1 LAQ checkpoint)
 
 action_tokens:
-  codebook_size: 8
-  code_seq_len: 4
+  codebook_size: 4096  # Must match LAQ checkpoint (current: 4096/1, future: 8/4)
+  code_seq_len: 1
   action_start: "<ACTION>"
   action_end: "</ACTION>"
   token_fmt: "<ACT_{i}>"
