@@ -172,8 +172,11 @@ export NCCL_DEBUG=WARN
 	mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/torch"
 	export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
 	export TORCH_HOME="{cache_dir}/torch"
-	mkdir -p "{cache_dir}/tmp"
-	export TMPDIR="{cache_dir}/tmp"
+	# Use node-local temp when available (wandb system monitor/GPU stats are sensitive to slow shared TMPDIR).
+	# Fall back to /tmp if SLURM_TMPDIR isn't set.
+	# Include SLURM_LOCALID so multi-task jobs don't contend for the same tmp directory.
+	export TMPDIR="${{SLURM_TMPDIR:-/tmp}}/hlrp-${{SLURM_JOB_ID}}-${{SLURM_LOCALID:-0}}"
+	mkdir -p "$TMPDIR"
 
 	{hf_auth_block}
 

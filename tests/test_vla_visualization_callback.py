@@ -34,6 +34,8 @@ def test_vla_sample_visualization_callback_writes_files(tmp_path):
             "instructions": ["pick up block", "push button"],
             "gt_codes": [[3, 1, 7, 0], [3, 1, 7, 0]],
             "pred_codes": [[3, 1, 7, 0], [-1, -1, -1, -1]],
+            "episode_id": ["ep1", "ep2"],
+            "frame_idx": [0, 5],
         },
     )
 
@@ -42,4 +44,3 @@ def test_vla_sample_visualization_callback_writes_files(tmp_path):
     viz_dir = tmp_path / "visualizations"
     assert (viz_dir / "val_samples_step000123.png").exists()
     assert (viz_dir / "val_samples_step000123.json").exists()
-

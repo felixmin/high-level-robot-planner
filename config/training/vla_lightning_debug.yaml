@@ -23,6 +23,12 @@ validation:
     num_samples: 4
     every_n_val: 1
 
+# Save a few training samples (image + instruction + GT/pred tokens).
+train_visualization:
+  enabled: true
+  num_samples: 4
+  every_n_steps: 500
+
 # Log throughput metrics (useful for WandB).
 throughput:
   enabled: true
@@ -33,3 +39,4 @@ checkpoint:
   mode: min
   save_top_k: 1
   save_last: true
+  every_n_train_steps: 100

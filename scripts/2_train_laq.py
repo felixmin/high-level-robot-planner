@@ -27,31 +27,8 @@ import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
 
 
-class ProgressLoggerCallback(Callback):
-    """Log training progress to stdout for cluster jobs where tqdm doesn't work."""
-
-    def __init__(self, log_every_n_steps: int = 100):
-        self.log_every_n_steps = log_every_n_steps
-
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        if (trainer.global_step + 1) % self.log_every_n_steps == 0:
-            loss = outputs.get("loss", 0) if isinstance(outputs, dict) else outputs
-            lr = trainer.optimizers[0].param_groups[0]["lr"]
-            # Use print() for progress output (captured by WandB and unified logging)
-            print(
-                f"[Step {trainer.global_step + 1}] "
-                f"loss={float(loss):.4f}, lr={lr:.2e}, "
-                f"epoch={trainer.current_epoch}"
-            )
-
-    def on_validation_end(self, trainer, pl_module):
-        metrics = {k: v for k, v in trainer.callback_metrics.items() if "val" in k}
-        if metrics:
-            metrics_str = ", ".join(f"{k}={float(v):.4f}" for k, v in metrics.items())
-            # Use print() for progress output (captured by WandB and unified logging)
-            print(f"[Validation] step={trainer.global_step}, {metrics_str}")
-
 from common.data import LAQDataModule, OXEDataModule
+from common.callbacks import ProgressLoggerCallback
 from common.logging import set_seed, count_parameters
 from common.unified_logging import setup_unified_logging, setup_wandb_with_unified_paths
 from laq import (

@@ -112,11 +112,15 @@ class VLATokenLightningModule(pl.LightningModule):
             # Stash a small sample for visualization callbacks (rank0 only will use it).
             try:
                 max_items = min(8, len(instructions), len(pred_codes))
+                episode_id = batch.get("episode_id") if isinstance(batch, dict) else None
+                frame_idx = batch.get("frame_idx") if isinstance(batch, dict) else None
                 self._last_val_sample = {
                     "frames": frames[:max_items].detach().cpu(),
                     "instructions": list(instructions[:max_items]),
                     "gt_codes": [row.tolist() for row in codes[:max_items].detach().cpu()],
                     "pred_codes": [list(row) for row in pred_codes[:max_items]],
+                    "episode_id": list(episode_id[:max_items]) if episode_id else None,
+                    "frame_idx": list(frame_idx[:max_items]) if frame_idx else None,
                 }
             except Exception:
                 self._last_val_sample = None
@@ -202,7 +206,8 @@ class VLATokenLightningModule(pl.LightningModule):
         prompt_lens = attention_mask.sum(dim=1).to(torch.long)
 
         token_ids = self.action_token_ids
-        assert token_ids is not None
+        if token_ids is None:
+            raise RuntimeError("action_token_ids is required for constrained generation")
         prefix_fn = make_prefix_allowed_tokens_fn(token_ids)
 
         max_new = token_ids.code_seq_len + 3  # <ACTION> + codes + </ACTION>

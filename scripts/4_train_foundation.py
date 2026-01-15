@@ -23,6 +23,7 @@ from omegaconf import DictConfig, OmegaConf
 workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
+from common.callbacks import ProgressLoggerCallback
 from common.data import OXEDataModule
 from common.logging import set_seed
 from common.unified_logging import setup_unified_logging, setup_wandb_with_unified_paths
@@ -31,6 +32,8 @@ from foundation.constrained_decode import ActionTokenIds
 from foundation.callbacks import (
     ThroughputLoggingCallback,
     ThroughputLoggingConfig,
+    VLATrainSampleVizConfig,
+    VLATrainSampleVisualizationCallback,
     VLASampleVizConfig,
     VLASampleVisualizationCallback,
 )
@@ -176,7 +179,12 @@ def main(cfg: DictConfig):
 
     torch_dtype = str(cfg.model.vla.get("torch_dtype", "bf16")).lower()
     dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
-    dtype = dtype_map.get(torch_dtype, torch.bfloat16)
+    if torch_dtype not in dtype_map:
+        raise ValueError(
+            f"Unknown model.vla.torch_dtype={torch_dtype!r}. "
+            f"Supported: {sorted(dtype_map.keys())}"
+        )
+    dtype = dtype_map[torch_dtype]
 
     vla_model = Qwen3VLForConditionalGeneration.from_pretrained(
         model_name,
@@ -220,14 +228,19 @@ def main(cfg: DictConfig):
     checkpoint_dir = output_dir / "checkpoints"
     checkpoint_dir.mkdir(exist_ok=True)
 
+    checkpoint_cfg = cfg.training.checkpoint
+    every_n_train_steps = checkpoint_cfg.get("every_n_train_steps")
+
     callbacks = [
         ModelCheckpoint(
             dirpath=str(checkpoint_dir),
-            monitor=cfg.training.checkpoint.monitor,
-            mode=cfg.training.checkpoint.mode,
-            save_top_k=int(cfg.training.checkpoint.save_top_k),
-            save_last=bool(cfg.training.checkpoint.save_last),
+            monitor=checkpoint_cfg.monitor,
+            mode=checkpoint_cfg.mode,
+            save_top_k=int(checkpoint_cfg.save_top_k),
+            save_last=bool(checkpoint_cfg.save_last),
+            every_n_train_steps=int(every_n_train_steps) if every_n_train_steps is not None else None,
             filename="vla-step{step:06d}",
+            verbose=True,
         ),
     ]
 
@@ -236,9 +249,20 @@ def main(cfg: DictConfig):
         callbacks.append(
             VLASampleVisualizationCallback(
                 VLASampleVizConfig(
-                    enabled=bool(viz_cfg.get("enabled", True)),
+                    enabled=True,
                     num_samples=int(viz_cfg.get("num_samples", 4)),
                     every_n_val=int(viz_cfg.get("every_n_val", 1)),
+                )
+            )
+        )
+    train_viz_cfg = cfg.training.get("train_visualization")
+    if train_viz_cfg and bool(train_viz_cfg.get("enabled", True)):
+        callbacks.append(
+            VLATrainSampleVisualizationCallback(
+                VLATrainSampleVizConfig(
+                    enabled=True,
+                    num_samples=int(train_viz_cfg.get("num_samples", 4)),
+                    every_n_steps=int(train_viz_cfg.get("every_n_steps", 500)),
                 )
             )
         )
@@ -247,11 +271,21 @@ def main(cfg: DictConfig):
         callbacks.append(
             ThroughputLoggingCallback(
                 ThroughputLoggingConfig(
-                    enabled=bool(perf_cfg.get("enabled", True)),
+                    enabled=True,
                     log_every_n_steps=int(perf_cfg.get("log_every_n_steps", 10)),
                 )
             )
         )
+
+    # Progress logging (useful on clusters where tqdm doesn't render nicely in logs).
+    # Default: enable on Slurm, disabled for local runs unless explicitly configured.
+    progress_cfg = cfg.training.get("progress_logger")
+    enable_progress = bool(cfg.cluster.slurm.enabled) if progress_cfg is None else bool(
+        progress_cfg.get("enabled", True)
+    )
+    if enable_progress:
+        log_every = 100 if progress_cfg is None else int(progress_cfg.get("log_every_n_steps", 100))
+        callbacks.append(ProgressLoggerCallback(log_every_n_steps=log_every))
     if wandb_logger is not None:
         callbacks.append(LearningRateMonitor(logging_interval="step"))
     else:
@@ -261,37 +295,66 @@ def main(cfg: DictConfig):
     # For short max_steps runs with large IterableDatasets, validation may never run unless
     # we validate every N steps (like Stage 1) and/or limit validation batches.
     trainer_extra_kwargs: dict[str, object] = {}
-    val_check_interval = cfg.training.validation.get(
-        "check_interval", cfg.training.validation.get("val_check_interval")
-    )
+    val_check_interval = cfg.training.validation.get("check_interval")
     if val_check_interval is not None:
         trainer_extra_kwargs["val_check_interval"] = val_check_interval
-    limit_val_batches = cfg.training.validation.get(
-        "limit_batches", cfg.training.validation.get("limit_val_batches")
-    )
+    limit_val_batches = cfg.training.validation.get("limit_batches")
     if limit_val_batches is not None:
         trainer_extra_kwargs["limit_val_batches"] = limit_val_batches
     num_sanity_val_steps = cfg.training.validation.get("num_sanity_val_steps")
     if num_sanity_val_steps is not None:
         trainer_extra_kwargs["num_sanity_val_steps"] = int(num_sanity_val_steps)
 
+    # Optional profiler (matches Stage 1 conventions).
+    profiler = None
+    profiler_cfg = cfg.training.get("profiler")
+    if profiler_cfg and bool(profiler_cfg.get("enabled", False)):
+        profiler_type = str(profiler_cfg.get("type", "simple"))
+        dirpath = str(profiler_cfg.get("dirpath", output_dir / "profiles"))
+        filename = str(profiler_cfg.get("filename", "profile"))
+        if profiler_type == "simple":
+            from lightning.pytorch.profilers import SimpleProfiler
+
+            profiler = SimpleProfiler(dirpath=dirpath, filename=filename)
+        elif profiler_type == "advanced":
+            from lightning.pytorch.profilers import AdvancedProfiler
+
+            profiler = AdvancedProfiler(dirpath=dirpath, filename=filename)
+        elif profiler_type == "pytorch":
+            from lightning.pytorch.profilers import PyTorchProfiler
+
+            profiler = PyTorchProfiler(
+                dirpath=dirpath,
+                filename=filename,
+                emit_nvtx=False,
+                export_to_chrome=True,
+                row_limit=20,
+            )
+        else:
+            raise ValueError(f"Unknown profiler type: {profiler_type}")
+
     trainer = pl.Trainer(
-        accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=1 if torch.cuda.is_available() else None,
+        accelerator="auto",
+        devices="auto",
+        strategy="auto",
         max_steps=cfg.training.max_steps,
         max_epochs=cfg.training.max_epochs,
         accumulate_grad_batches=cfg.training.accumulate_grad_batches,
         precision=cfg.training.precision,
         gradient_clip_val=cfg.training.gradient_clip_val,
-        log_every_n_steps=10,
+        log_every_n_steps=int(cfg.training.get("log_every_n_steps", 10)),
         callbacks=callbacks,
         check_val_every_n_epoch=cfg.training.validation.check_val_every_n_epoch,
         logger=wandb_logger if wandb_logger is not None else False,
         default_root_dir=str(output_dir),
+        profiler=profiler,
         **trainer_extra_kwargs,
     )
 
-    trainer.fit(module, datamodule=datamodule)
+    ckpt_path = cfg.training.get("resume_from_checkpoint")
+    if ckpt_path:
+        logger.info(f"Resuming from checkpoint: {ckpt_path}")
+    trainer.fit(module, datamodule=datamodule, ckpt_path=ckpt_path)
 
 
 if __name__ == "__main__":

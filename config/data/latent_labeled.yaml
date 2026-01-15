@@ -12,5 +12,6 @@ image_size: 256
 batch_size: 16
 num_workers: 0
 shuffle_buffer: 200
+val_shuffle_buffer: 0
 prefetch_buffer: 4
 return_metadata: true

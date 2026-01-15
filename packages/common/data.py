@@ -1066,6 +1066,7 @@ class OXEDataModule(pl.LightningDataModule):
         batch_size: int = 32,
         num_workers: int = 0,  # IterableDataset + tf.data handles parallelism
         shuffle_buffer: int = 200,
+        val_shuffle_buffer: int = 0,
         prefetch_buffer: int = 4,
         return_metadata: bool = True,
         persistent_iterator: bool = True,
@@ -1117,6 +1118,7 @@ class OXEDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.shuffle_buffer = shuffle_buffer
+        self.val_shuffle_buffer = val_shuffle_buffer
         self.prefetch_buffer = prefetch_buffer
         self.return_metadata = return_metadata
         self.persistent_iterator = persistent_iterator
@@ -1149,7 +1151,7 @@ class OXEDataModule(pl.LightningDataModule):
                 split=cfg.get("val_split", "train[90%:]"),
                 offset=cfg.get("offset", self.offset),
                 image_size=self.image_size,
-                shuffle_buffer=0,  # No shuffle for val
+                shuffle_buffer=self.val_shuffle_buffer,
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
@@ -1172,7 +1174,7 @@ class OXEDataModule(pl.LightningDataModule):
             self.val_dataset = MultiOXEFramePairDataset(
                 datasets=self.dataset_configs,
                 image_size=self.image_size,
-                shuffle_buffer=0,  # No shuffle for val
+                shuffle_buffer=self.val_shuffle_buffer,
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 is_train=False,
@@ -1185,6 +1187,7 @@ class OXEDataModule(pl.LightningDataModule):
         logger.info(f"  - Offset: {self.offset} steps")
         logger.info(f"  - Image size: {self.image_size}")
         logger.info(f"  - Shuffle buffer: {self.shuffle_buffer}")
+        logger.info(f"  - Val shuffle buffer: {self.val_shuffle_buffer}")
 
     def train_dataloader(self):
         """Create training dataloader."""

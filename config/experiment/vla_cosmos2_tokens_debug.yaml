@@ -8,6 +8,10 @@ defaults:
   - /training@training: vla_lightning_debug
   - /cluster@cluster: local_dev
 
+data:
+  # Shuffle validation pairs a bit so debug visualizations aren't dominated by a single episode.
+  val_shuffle_buffer: 200
+
 experiment:
   name: vla_cosmos2_tokens_debug
   description: "Debug run: Cosmos-Reason2 token-based latent action prediction"
