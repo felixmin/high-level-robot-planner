@@ -95,10 +95,31 @@ class VLATokenLightningModule(pl.LightningModule):
             and hasattr(self.vla_model, "generate")
             and batch_idx == 0
         ):
-            acc = self._compute_token_accuracy(
-                frames=frames, instructions=instructions, gt_codes=codes
+            pred_codes = self._predict_codes(frames=frames, instructions=instructions)
+            metrics = self._compute_generation_metrics(gt_codes=codes, pred_codes=pred_codes)
+            self.log(
+                "val/token_accuracy",
+                metrics["token_accuracy"],
+                prog_bar=True,
+                sync_dist=True,
             )
-            self.log("val/token_accuracy", acc, prog_bar=True, sync_dist=True)
+            self.log(
+                "val/sequence_accuracy",
+                metrics["sequence_accuracy"],
+                prog_bar=False,
+                sync_dist=True,
+            )
+            # Stash a small sample for visualization callbacks (rank0 only will use it).
+            try:
+                max_items = min(8, len(instructions), len(pred_codes))
+                self._last_val_sample = {
+                    "frames": frames[:max_items].detach().cpu(),
+                    "instructions": list(instructions[:max_items]),
+                    "gt_codes": [row.tolist() for row in codes[:max_items].detach().cpu()],
+                    "pred_codes": [list(row) for row in pred_codes[:max_items]],
+                }
+            except Exception:
+                self._last_val_sample = None
 
         return loss
 
@@ -135,9 +156,37 @@ class VLATokenLightningModule(pl.LightningModule):
         return loss, codes, frames, instructions
 
     @torch.no_grad()
-    def _compute_token_accuracy(
-        self, *, frames: torch.Tensor, instructions: list[str], gt_codes: torch.Tensor
-    ) -> torch.Tensor:
+    def _compute_generation_metrics(
+        self, *, gt_codes: torch.Tensor, pred_codes: list[list[int]]
+    ) -> dict[str, torch.Tensor]:
+        if gt_codes.ndim != 2:
+            raise ValueError(f"Expected gt_codes [B, S], got shape {tuple(gt_codes.shape)}")
+        if len(pred_codes) != gt_codes.shape[0]:
+            raise ValueError("Batch size mismatch between gt_codes and pred_codes")
+
+        correct = 0
+        total = 0
+        seq_correct = 0
+
+        for i in range(gt_codes.shape[0]):
+            gt = gt_codes[i].tolist()
+            pred = pred_codes[i][: len(gt)]
+            if pred == gt:
+                seq_correct += 1
+            for p, g in zip(pred, gt, strict=True):
+                total += 1
+                if p == g:
+                    correct += 1
+
+        token_acc = 0.0 if total == 0 else (correct / total)
+        seq_acc = 0.0 if gt_codes.shape[0] == 0 else (seq_correct / gt_codes.shape[0])
+        return {
+            "token_accuracy": torch.tensor(token_acc, device=self.device, dtype=torch.float32),
+            "sequence_accuracy": torch.tensor(seq_acc, device=self.device, dtype=torch.float32),
+        }
+
+    @torch.no_grad()
+    def _predict_codes(self, *, frames: torch.Tensor, instructions: list[str]) -> list[list[int]]:
         images = self.frames_to_images(frames)
         prompt_inputs = build_prompt_inputs(
             processor=self.processor,
@@ -167,29 +216,16 @@ class VLATokenLightningModule(pl.LightningModule):
         # Map code token id -> code index
         code_id_to_index = {tid: i for i, tid in enumerate(token_ids.action_code_ids)}
 
-        correct = 0
-        total = 0
-
+        results: list[list[int]] = []
         for i in range(generated.shape[0]):
             start = int(prompt_lens[i].item())
             gen_suffix = generated[i, start:].tolist()
             pred_code_ids = [t for t in gen_suffix if t in code_id_to_index]
-            pred_codes = [
-                code_id_to_index[t] for t in pred_code_ids[: token_ids.code_seq_len]
-            ]
-
-            gt = gt_codes[i].tolist()
-            # pad missing predictions with -1
-            if len(pred_codes) < len(gt):
-                pred_codes = pred_codes + ([-1] * (len(gt) - len(pred_codes)))
-
-            for p, g in zip(pred_codes[: len(gt)], gt, strict=True):
-                total += 1
-                if p == g:
-                    correct += 1
-
-        acc = 0.0 if total == 0 else (correct / total)
-        return torch.tensor(acc, device=self.device, dtype=torch.float32)
+            pred = [code_id_to_index[t] for t in pred_code_ids[: token_ids.code_seq_len]]
+            if len(pred) < token_ids.code_seq_len:
+                pred = pred + ([-1] * (token_ids.code_seq_len - len(pred)))
+            results.append(pred)
+        return results
 
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]

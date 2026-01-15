@@ -107,6 +107,9 @@ class TestExperimentConfigs:
             assert cfg.model.vla.model_name == "nvidia/Cosmos-Reason2-2B"
             assert cfg.model.action_tokens.codebook_size == 4096
             assert cfg.model.action_tokens.code_seq_len == 1
+            assert cfg.training.validation.check_interval == 100
+            assert cfg.training.validation.limit_batches == 4
+            assert bool(cfg.training.validation.visualization.enabled) is True
             assert cfg.cluster.name == "local_dev"
 
 

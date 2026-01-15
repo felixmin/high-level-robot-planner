@@ -111,3 +111,15 @@ def test_validation_step_logs_token_accuracy_without_error():
     }
     loss = module.validation_step(batch, batch_idx=0)
     assert torch.is_tensor(loss)
+    assert hasattr(module, "_last_val_sample")
+    assert module._last_val_sample is not None
+    assert module._last_val_sample["gt_codes"][0] == [3, 1, 7, 0]
+    assert module._last_val_sample["pred_codes"][0] == [3, 1, 7, 0]
+
+    pred = module._predict_codes(frames=batch["frames"], instructions=batch["language"])
+    metrics = module._compute_generation_metrics(
+        gt_codes=torch.tensor([[3, 1, 7, 0], [3, 1, 7, 0]], dtype=torch.long),
+        pred_codes=pred,
+    )
+    assert float(metrics["token_accuracy"].cpu().item()) == 1.0
+    assert float(metrics["sequence_accuracy"].cpu().item()) == 1.0

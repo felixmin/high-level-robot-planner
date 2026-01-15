@@ -11,11 +11,25 @@ optimizer:
   weight_decay: 0.01
 
 validation:
+  # Validate every N training steps (Stage 1-style) since epochs can be huge.
+  check_interval: 100
+  # Keep validation fast for smoke runs (int or float in [0,1]).
+  limit_batches: 4
+  # Epoch-based fallback (usually irrelevant with check_interval set).
   check_val_every_n_epoch: 1
+  # Save qualitative samples alongside metrics.
+  visualization:
+    enabled: true
+    num_samples: 4
+    every_n_val: 1
+
+# Log throughput metrics (useful for WandB).
+throughput:
+  enabled: true
+  log_every_n_steps: 10
 
 checkpoint:
   monitor: val/loss
   mode: min
   save_top_k: 1
   save_last: true
-

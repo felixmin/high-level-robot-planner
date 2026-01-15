@@ -28,6 +28,12 @@ from common.logging import set_seed
 from common.unified_logging import setup_unified_logging, setup_wandb_with_unified_paths
 from foundation.action_tokens import ActionTokenConfig
 from foundation.constrained_decode import ActionTokenIds
+from foundation.callbacks import (
+    ThroughputLoggingCallback,
+    ThroughputLoggingConfig,
+    VLASampleVizConfig,
+    VLASampleVisualizationCallback,
+)
 from foundation.image_adapters import oxe_first_frames_to_pil
 from foundation.online_laq import LAQTaskCodeProvider
 from foundation.qwen3vl_setup import prepare_action_token_training
@@ -224,10 +230,50 @@ def main(cfg: DictConfig):
             filename="vla-step{step:06d}",
         ),
     ]
+
+    viz_cfg = cfg.training.validation.get("visualization")
+    if viz_cfg and bool(viz_cfg.get("enabled", True)):
+        callbacks.append(
+            VLASampleVisualizationCallback(
+                VLASampleVizConfig(
+                    enabled=bool(viz_cfg.get("enabled", True)),
+                    num_samples=int(viz_cfg.get("num_samples", 4)),
+                    every_n_val=int(viz_cfg.get("every_n_val", 1)),
+                )
+            )
+        )
+    perf_cfg = cfg.training.get("throughput")
+    if perf_cfg and bool(perf_cfg.get("enabled", True)):
+        callbacks.append(
+            ThroughputLoggingCallback(
+                ThroughputLoggingConfig(
+                    enabled=bool(perf_cfg.get("enabled", True)),
+                    log_every_n_steps=int(perf_cfg.get("log_every_n_steps", 10)),
+                )
+            )
+        )
     if wandb_logger is not None:
         callbacks.append(LearningRateMonitor(logging_interval="step"))
     else:
         logger.info("WandB disabled; skipping LearningRateMonitor (no logger).")
+
+    # Validation defaults in Lightning run at the end of the (potentially huge) epoch.
+    # For short max_steps runs with large IterableDatasets, validation may never run unless
+    # we validate every N steps (like Stage 1) and/or limit validation batches.
+    trainer_extra_kwargs: dict[str, object] = {}
+    val_check_interval = cfg.training.validation.get(
+        "check_interval", cfg.training.validation.get("val_check_interval")
+    )
+    if val_check_interval is not None:
+        trainer_extra_kwargs["val_check_interval"] = val_check_interval
+    limit_val_batches = cfg.training.validation.get(
+        "limit_batches", cfg.training.validation.get("limit_val_batches")
+    )
+    if limit_val_batches is not None:
+        trainer_extra_kwargs["limit_val_batches"] = limit_val_batches
+    num_sanity_val_steps = cfg.training.validation.get("num_sanity_val_steps")
+    if num_sanity_val_steps is not None:
+        trainer_extra_kwargs["num_sanity_val_steps"] = int(num_sanity_val_steps)
 
     trainer = pl.Trainer(
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
@@ -242,6 +288,7 @@ def main(cfg: DictConfig):
         check_val_every_n_epoch=cfg.training.validation.check_val_every_n_epoch,
         logger=wandb_logger if wandb_logger is not None else False,
         default_root_dir=str(output_dir),
+        **trainer_extra_kwargs,
     )
 
     trainer.fit(module, datamodule=datamodule)
