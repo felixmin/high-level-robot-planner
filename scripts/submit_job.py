@@ -304,6 +304,13 @@ def main():
             "Missing container image. Set `cluster.container.image` in the cluster config "
             f"(cluster={cluster_name})."
         )
+    container_image_path = Path(str(container_image))
+    if not container_image_path.exists():
+        raise SystemExit(
+            "Container image not found: "
+            f"{container_image_path}\n"
+            "Set `cluster.container.image=/path/to/container.sqsh` (or update your cluster config)."
+        )
 
     # Memory: use cluster config > default 200G
     if OmegaConf.select(cfg, "cluster.compute.mem_gb"):
