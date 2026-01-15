@@ -118,6 +118,24 @@ class TestExperimentConfigs:
             assert cfg.training.checkpoint.every_n_train_steps == 100
             assert cfg.cluster.name == "local_dev"
 
+    def test_vla_cosmos2_tokens_config(self, config_dir):
+        """Test Cosmos-Reason2 token-based VLA (non-debug) configuration loads correctly."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(config_name="config", overrides=["experiment=vla_cosmos2_tokens"])
+
+            assert cfg.experiment.name == "vla_cosmos2_tokens"
+            assert cfg.model.name == "vla_cosmos2_tokens"
+            assert cfg.model.vla.model_name == "nvidia/Cosmos-Reason2-2B"
+            assert cfg.model.action_tokens.codebook_size == 8
+            assert cfg.model.action_tokens.code_seq_len == 4
+            assert hasattr(cfg.data, "datasets")
+            assert len(cfg.data.datasets) == 4
+            assert cfg.data.batch_size == 64
+            assert cfg.training.validation.check_interval == 1000
+            assert cfg.training.checkpoint.every_n_train_steps == 1000
+            assert bool(cfg.training.dataset_usage_logger.enabled) is True
+            assert cfg.cluster.name == "mcml_h100"
+
 
 class TestConfigComposition:
     """Test configuration composition and overrides."""
@@ -173,7 +191,7 @@ class TestExperimentConsistency:
 
     @pytest.mark.parametrize(
         "experiment",
-        ["laq_debug", "laq_full", "laq_normal", "vla_7b", "vla_cosmos2_tokens_debug"],
+        ["laq_debug", "laq_full", "laq_normal", "vla_7b", "vla_cosmos2_tokens_debug", "vla_cosmos2_tokens"],
     )
     def test_all_experiments_load(self, config_dir, experiment):
         """Test that all available experiments load successfully."""

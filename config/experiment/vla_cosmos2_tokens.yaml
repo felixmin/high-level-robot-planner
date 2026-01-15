@@ -1,0 +1,26 @@
+# @package _global_
+
+# Stage 2: Cosmos-Reason2 (Qwen3-VL) token-based VLA (non-debug).
+# Uses LAQ settings from `laq_oxe_all_val_3`: codebook_size=8, code_seq_len=4,
+# and trains on the 4 OXE datasets via `laq_oxe_all`.
+
+defaults:
+  - /model@model: foundation_cosmos2_tokens_8_4
+  - /data@data: laq_oxe_all
+  - /training@training: vla_lightning
+  - /cluster@cluster: mcml_h100
+
+experiment:
+  name: vla_cosmos2_tokens
+  description: "Cosmos-Reason2 token-based latent action prediction (8x4 codes)"
+
+submit:
+  script: 4_train_foundation
+
+data:
+  batch_size: 64
+
+logging:
+  tags: ["production", "foundation", "cosmos2", "tokens"]
+  log_model: true
+

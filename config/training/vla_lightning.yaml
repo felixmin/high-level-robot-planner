@@ -1,0 +1,56 @@
+# Stage 2 (Foundation) Lightning training settings (non-debug defaults).
+
+max_steps: 200000
+max_epochs: 1
+accumulate_grad_batches: 1
+precision: bf16-mixed
+gradient_clip_val: 1.0
+log_every_n_steps: 10
+
+optimizer:
+  lr: 1.0e-5
+  weight_decay: 0.01
+
+validation:
+  # Validate every N training steps (epochs are huge with streaming datasets).
+  check_interval: 1000
+  # Keep validation bounded (int batches or float fraction).
+  limit_batches: 50
+  check_val_every_n_epoch: 1
+  visualization:
+    enabled: true
+    num_samples: 4
+    every_n_val: 1
+
+train_visualization:
+  enabled: true
+  num_samples: 4
+  every_n_steps: 5000
+
+throughput:
+  enabled: true
+  log_every_n_steps: 50
+
+dataset_usage_logger:
+  enabled: true
+  log_on_validation_end: true
+  key: dataset_name
+  top_k: 12
+
+progress_logger:
+  enabled: true
+  log_every_n_steps: 100
+
+checkpoint:
+  monitor: val/loss
+  mode: min
+  save_top_k: 2
+  save_last: true
+  every_n_train_steps: 1000
+
+profiler:
+  enabled: false
+  type: simple
+  dirpath: ./profiles
+  filename: profile
+
