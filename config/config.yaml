@@ -12,7 +12,7 @@ experiment_name: ${experiment.name}
 seed: 42
 precision: "32-true"  # "32-true", "16-mixed", "bf16-mixed"
 
-# Hydra configuration (routes .hydra config backups to runs folder)
+# Hydra configuration (default; submit_job overrides these to keep snapshots inside the run dir)
 hydra:
   run:
     dir: runs/output/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
@@ -25,7 +25,7 @@ logging:
   level: INFO                # Logging level (DEBUG, INFO, WARNING, ERROR)
   job_id: null               # Optional explicit run ID (used by submit_job local runs)
   root_dir: null             # Optional base directory for all run artifacts
-  runs_dir: null             # Optional run-group directory (e.g., <root_dir>/runs/YYYY-MM-DD/HH-MM-SS)
+  runs_dir: null             # Optional run directory (if null, scripts create a timestamped folder under <root_dir>/runs/)
 
   # WandB integration
   use_wandb: true            # Enable Weights & Biases logging
@@ -33,11 +33,11 @@ logging:
   log_model: false           # Upload model checkpoints to WandB
   tags: []                   # WandB tags for run organization
 
-  # Output structure (under runs_dir, e.g., runs/YYYY-MM-DD/HH-MM-SS/):
-  #   outputs/{job_id}/unified.log      - All logger.info() calls (timestamped)
-  #   outputs/{job_id}/wandb/           - WandB files (includes print() capture)
-  #   outputs/{job_id}/checkpoints/     - Model checkpoints
-  #   outputs/hydra/HH-MM-SS/.hydra/    - Hydra config backups
+  # Output structure (under logging.runs_dir):
+  #   unified.log      - All logger.info() calls (timestamped)
+  #   wandb/           - WandB files (includes print() capture)
+  #   checkpoints/     - Model checkpoints
+  #   .hydra/          - Hydra config snapshots (when hydra.run.dir is set to logging.runs_dir)
 
 # Job submission defaults (used by scripts/submit_job.py)
 submit:
@@ -47,5 +47,5 @@ submit:
   dry_run: false
   # Where to persist pretrained model downloads (HF + torch/torchvision).
   cache_dir: cache
-  # Where Slurm should write stdout/stderr (%j.out/.err).
+  # Deprecated/ignored by submit_job.py (Slurm stdout/err goes into the run directory).
   slurm_logs_dir: slurm

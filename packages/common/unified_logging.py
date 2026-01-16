@@ -11,7 +11,9 @@ This module provides:
 """
 
 import os
+import re
 import sys
+import time
 import logging
 from pathlib import Path
 from typing import Optional
@@ -79,33 +81,46 @@ def get_rank() -> int:
     return 0
 
 
+def _slugify_run_name(name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._-")
+    return slug or "run"
+
+
 def resolve_runs_dir(
     logging_root_dir: Optional[str],
     logging_runs_dir: Optional[str],
     workspace_root: Path,
+    experiment_name: Optional[str] = None,
+    timestamp: Optional[str] = None,
 ) -> Path:
     """
     Resolve the runs directory from logging config values.
 
     Priority:
     1. logging_runs_dir (explicit run directory, e.g., runs/2026-01-15_191650_laq_debug)
-    2. logging_root_dir / "runs" / "local" (root with default subdirectory)
-    3. workspace_root / "runs" / "local" (fallback to project root)
+    2. <logging_root_dir>/runs/<timestamp>_<experiment> (if logging_root_dir is set)
+    3. <workspace_root>/runs/<timestamp>_<experiment> (fallback to project root)
 
     Args:
         logging_root_dir: Optional base directory for all run artifacts (cfg.logging.root_dir)
         logging_runs_dir: Optional explicit run directory (cfg.logging.runs_dir)
         workspace_root: Project root directory as fallback
+        experiment_name: Optional experiment name used to name the run folder
+        timestamp: Optional timestamp string override (primarily for tests)
 
     Returns:
         Resolved Path to the runs directory (flat structure)
     """
     if logging_runs_dir:
-        return Path(logging_runs_dir)
-    elif logging_root_dir:
-        return Path(logging_root_dir) / "runs" / "local"
-    else:
-        return workspace_root / "runs" / "local"
+        runs_dir = Path(logging_runs_dir)
+        if (not runs_dir.is_absolute()) and logging_root_dir:
+            runs_dir = Path(logging_root_dir) / runs_dir
+        return runs_dir
+
+    base_root = Path(logging_root_dir) if logging_root_dir else workspace_root
+    safe_experiment = _slugify_run_name(experiment_name) if experiment_name else "local"
+    timestamp = timestamp or time.strftime("%Y-%m-%d_%H-%M-%S")
+    return base_root / "runs" / f"{timestamp}_{safe_experiment}"
 
 
 def setup_unified_logging(

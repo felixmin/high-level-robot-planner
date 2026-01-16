@@ -55,6 +55,7 @@ def main(cfg: DictConfig):
         logging_root_dir=cfg.logging.get("root_dir"),
         logging_runs_dir=cfg.logging.get("runs_dir"),
         workspace_root=workspace_root,
+        experiment_name=OmegaConf.select(cfg, "experiment.name"),
     )
 
     logger, output_dir = setup_unified_logging(

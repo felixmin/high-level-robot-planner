@@ -12,7 +12,7 @@ defaults:
   - /data@data: laq_oxe_all
   - /training@training: laq_optimizer
   - /cluster@cluster: lrz_h100
-  - optional /user_config: local
+  - optional user_config: local
 
 experiment:
   name: laq_oxe_all_val_3

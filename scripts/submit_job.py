@@ -102,7 +102,6 @@ def generate_sbatch_script(
     qos: str | None,
     account: str | None,
     gpus: int,
-    time_limit: str,
     mem: str,
     cpus: int,
     container_image: str,
@@ -111,8 +110,18 @@ def generate_sbatch_script(
     slurm_logs_dir: Path,
     cache_dir: Path,
     hf_token_path: Path | None,
+    *,
+    time_limit: str | None = None,
+    time: str | None = None,
 ) -> str:
     """Generate sbatch script content."""
+
+    if time_limit is not None and time is not None:
+        raise ValueError("Pass only one of time_limit or time")
+    if time_limit is None:
+        time_limit = time
+    if time_limit is None:
+        raise ValueError("Missing time limit (set time_limit or time)")
 
     # Build the python command with overrides.
     # Quote each override so bash doesn't expand Hydra interpolations like `${now:...}`
