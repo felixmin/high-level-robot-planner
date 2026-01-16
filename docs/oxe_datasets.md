@@ -59,6 +59,8 @@ dataset_name: bridge
 train_split: "train[:90%]"
 val_split: "train[90%:]"
 offset: 5  # Frame offset in steps (~1 second at 5Hz)
+samples_per_episode: 0  # 0 = use all (t, t+offset) pairs in each episode; set to 1 for LAPA-style
+sampling_seed: null  # Optional: makes per-episode sampling and shuffles reproducible
 image_size: 256
 batch_size: 32
 num_workers: 0  # tf.data handles parallelism

@@ -55,6 +55,9 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 import numpy as np
 import torch
 from torch.utils.data import IterableDataset
+import random
+import os
+import zlib
 
 
 @dataclass
@@ -220,6 +223,8 @@ class OXEFramePairDataset(IterableDataset):
         return_metadata: bool = False,
         gcs_path: Optional[str] = None,
         persistent_iterator: bool = True,  # Keep iterator alive to avoid shuffle buffer refill
+        samples_per_episode: int = 0,
+        seed: Optional[int] = None,
     ):
         super().__init__()
 
@@ -252,6 +257,10 @@ class OXEFramePairDataset(IterableDataset):
         self.num_parallel_calls = num_parallel_calls
         self.return_metadata = return_metadata
         self.persistent_iterator = persistent_iterator
+        self.samples_per_episode = samples_per_episode
+        self.seed = seed
+        self._rng = random.Random(seed)
+        self._tf_seed: Optional[int] = None
 
         # Lazy initialization of tf.data pipeline
         self._builder = None
@@ -263,6 +272,39 @@ class OXEFramePairDataset(IterableDataset):
         self._epoch_count = 0
         # Idempotency flag for cleanup
         self._cleaned_up = False
+
+    def _init_rng_for_worker(self) -> None:
+        """
+        Ensure sampling RNG is unique per DataLoader worker (and reproducible when seed is set).
+
+        Note: IterableDataset + num_workers>0 does not shard automatically; we also shard the
+        TFDS episode dataset in `_create_tf_pipeline()` to avoid duplicate episodes.
+        """
+        worker_info = torch.utils.data.get_worker_info()
+        worker_id = worker_info.id if worker_info is not None else 0
+
+        if self.seed is not None:
+            combined_seed = (int(self.seed) + 1000003 * int(worker_id)) & 0x7FFFFFFF
+        else:
+            # Avoid identical RNG state across forked workers when seed is not provided.
+            entropy = int.from_bytes(os.urandom(8), "little")
+            combined_seed = (entropy ^ (os.getpid() << 16) ^ int(worker_id)) & 0x7FFFFFFF
+
+        self._rng = random.Random(combined_seed)
+        self._tf_seed = combined_seed
+
+    @staticmethod
+    def _decode_tf_string(val: Any) -> str:
+        try:
+            if val is None:
+                return ""
+            if hasattr(val, "numpy"):
+                val = val.numpy()
+            if isinstance(val, bytes):
+                return val.decode("utf-8").rstrip("\x00")
+            return str(val).rstrip("\x00")
+        except Exception:
+            return ""
 
     def _init_tfds(self):
         """Initialize TFDS builder and dataset (lazy)."""
@@ -287,6 +329,8 @@ class OXEFramePairDataset(IterableDataset):
         # Estimate based on dataset-specific average episode length
         avg_len = self.config.avg_episode_length
         avg_pairs_per_episode = max(1, avg_len - self.offset)
+        if self.samples_per_episode and self.samples_per_episode > 0:
+            avg_pairs_per_episode = min(avg_pairs_per_episode, self.samples_per_episode)
         return self._num_episodes * avg_pairs_per_episode
 
     def _create_tf_pipeline(self):
@@ -294,11 +338,17 @@ class OXEFramePairDataset(IterableDataset):
         import tensorflow as tf
 
         self._init_tfds()
+        self._init_rng_for_worker()
         ds = self._builder.as_dataset(split=self.split)
+
+        # Shard episodes across DataLoader workers to avoid duplicates when num_workers > 0.
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is not None and worker_info.num_workers > 1:
+            ds = ds.shard(num_shards=worker_info.num_workers, index=worker_info.id)
 
         # Shuffle episodes if enabled
         if self.shuffle_buffer > 0:
-            ds = ds.shuffle(self.shuffle_buffer)
+            ds = ds.shuffle(self.shuffle_buffer, seed=self._tf_seed)
 
         image_key = self.config.image_key
         instruction_key = self.config.instruction_key
@@ -329,6 +379,10 @@ class OXEFramePairDataset(IterableDataset):
                 if n_steps < offset + 1:
                     continue
 
+                max_start_idx = n_steps - offset
+                if max_start_idx <= 0:
+                    continue
+
                 # Extract robot type from episode metadata if available
                 robot_type = ""
                 if return_metadata and robot_key and "episode_metadata" in episode:
@@ -343,19 +397,13 @@ class OXEFramePairDataset(IterableDataset):
                     except Exception:
                         robot_type = ""
 
-                # Get instruction (same for all steps in episode)
+                # Get instruction (often the same for all steps in episode)
                 instruction = ""
                 if return_metadata:
                     try:
                         if instruction_in_step:
                             # Instruction at step level (e.g., RoboNet)
-                            instr_tensor = steps[0].get(instruction_key)
-                            if instr_tensor is not None:
-                                instr_val = instr_tensor.numpy()
-                                if isinstance(instr_val, bytes):
-                                    instruction = instr_val.decode("utf-8")
-                                else:
-                                    instruction = str(instr_val)
+                            instruction = self._decode_tf_string(steps[0].get(instruction_key))
                         elif instruction_key in steps[0]["observation"]:
                             # Instruction in observation dict (Bridge, RT-1, language_table)
                             instr_tensor = steps[0]["observation"][instruction_key]
@@ -376,78 +424,160 @@ class OXEFramePairDataset(IterableDataset):
                     except Exception:
                         instruction = ""
 
-                # Extract all frames and resize in batch for efficiency
-                frames_raw = [s["observation"][image_key] for s in steps]
-                frames = tf.stack(frames_raw)  # [T, H, W, C]
-
-                # Resize if needed (batch resize is faster)
-                if frames.shape[1] != image_size or frames.shape[2] != image_size:
-                    frames = tf.image.resize(frames, [image_size, image_size])
-                    frames = tf.cast(frames, tf.uint8)
-
-                frames = frames.numpy()
-
-                # Extract actions if available (for visualization)
-                actions = None
-                if return_metadata and "action" in steps[0]:
-                    try:
-                        if action_is_dict and action_key:
-                            # Dict-based actions (e.g., Bridge has world_vector, rotation_delta)
-                            # Vectorize: stack tensors first, then convert to numpy once
-                            actions_tf = tf.stack([s["action"][action_key] for s in steps])
-                            actions = actions_tf.numpy()
-                        else:
-                            # Flat action array (e.g., language_table, RoboNet)
-                            # Only take first action_dim dimensions
-                            # Vectorize: stack tensors first, then convert to numpy once
-                            actions_tf = tf.stack([s["action"] for s in steps])
-                            actions = actions_tf.numpy()[:, :action_dim]
-                    except Exception:
-                        actions = None
-                        
-                # Extract states if available
-                states = None
-                if return_metadata and state_key in steps[0]["observation"]:
-                    try:
-                        # Only take first N dims (e.g. 2 for 2D plot)
-                        # Vectorize: stack tensors first, then convert to numpy once
-                        states_tf = tf.stack([s["observation"][state_key] for s in steps])
-                        states = states_tf.numpy()[:, :state_dim]
-                    except Exception:
-                        states = None
-
-                # Generate pairs
-                for t in range(n_steps - offset):
-                    # Stack: [2, H, W, C]
-                    pair = np.stack([frames[t], frames[t + offset]], axis=0)
-
-                    if return_metadata:
-                        # Compute accumulated action (sum of actions from t to t+offset)
-                        if actions is not None:
-                            cumulative_action = actions[t : t + offset].sum(axis=0)
-                        else:
-                            cumulative_action = np.zeros(action_dim, dtype=np.float32)
-                            
-                        # Get initial state at start of pair
-                        if states is not None:
-                            initial_state = states[t]
-                        else:
-                            initial_state = np.zeros(state_dim, dtype=np.float32)
-
-                        meta = {
-                            "episode_id": episode_id,
-                            "frame_idx": t,
-                            "offset": offset,
-                            "language": instruction,  # Standardized key (was: instruction)
-                            "dataset_type": dataset_name,  # Use actual dataset name for filtering
-                            "dataset_name": dataset_name,
-                            "action": cumulative_action.astype(np.float32),
-                            "initial_state": initial_state.astype(np.float32),
-                            "robot": robot_type,  # Robot type for filtering (e.g., RoboNet)
-                        }
-                        yield pair, meta
+                if self.samples_per_episode and self.samples_per_episode > 0:
+                    # LAPA-style: sample a small number of (t, t+offset) pairs per episode
+                    k = min(int(self.samples_per_episode), max_start_idx)
+                    if k <= 0:
+                        continue
+                    if k == 1:
+                        t_indices = [self._rng.randrange(max_start_idx)]
                     else:
-                        yield pair
+                        t_indices = self._rng.sample(range(max_start_idx), k=k)
+
+                    # Extract actions/states for the full episode once (small tensors; avoids per-sample TF->numpy overhead).
+                    actions = None
+                    if return_metadata and "action" in steps[0]:
+                        try:
+                            if action_is_dict and action_key:
+                                actions_tf = tf.stack([s["action"][action_key] for s in steps])
+                                actions = actions_tf.numpy()[:, :action_dim]
+                            else:
+                                actions_tf = tf.stack([s["action"] for s in steps])
+                                actions = actions_tf.numpy()[:, :action_dim]
+                        except Exception:
+                            actions = None
+
+                    states = None
+                    if return_metadata and state_key in steps[0]["observation"]:
+                        try:
+                            states_tf = tf.stack([s["observation"][state_key] for s in steps])
+                            states = states_tf.numpy()[:, :state_dim]
+                        except Exception:
+                            states = None
+
+                    for t in t_indices:
+                        pair_tf = tf.stack(
+                            [
+                                steps[t]["observation"][image_key],
+                                steps[t + offset]["observation"][image_key],
+                            ],
+                            axis=0,
+                        )  # [2, H, W, C]
+
+                        if pair_tf.shape[1] != image_size or pair_tf.shape[2] != image_size:
+                            pair_tf = tf.image.resize(pair_tf, [image_size, image_size])
+                            pair_tf = tf.cast(pair_tf, tf.uint8)
+
+                        pair = pair_tf.numpy()
+
+                        if return_metadata:
+                            # If language is step-level (e.g., RoboNet), use the sampled step's instruction.
+                            if instruction_in_step:
+                                instruction_t = self._decode_tf_string(steps[t].get(instruction_key)) or instruction
+                            else:
+                                instruction_t = instruction
+
+                            # Compute accumulated action (sum of actions from t to t+offset)
+                            if actions is not None:
+                                cumulative_action = actions[t : t + offset].sum(axis=0)
+                            else:
+                                cumulative_action = np.zeros(action_dim, dtype=np.float32)
+
+                            # Get initial state at start of pair
+                            if states is not None:
+                                initial_state = states[t]
+                            else:
+                                initial_state = np.zeros(state_dim, dtype=np.float32)
+
+                            meta = {
+                                "episode_id": episode_id,
+                                "frame_idx": t,
+                                "offset": offset,
+                                "language": instruction_t,  # Standardized key (was: instruction)
+                                "dataset_type": dataset_name,  # Use actual dataset name for filtering
+                                "dataset_name": dataset_name,
+                                "action": np.asarray(cumulative_action, dtype=np.float32),
+                                "initial_state": np.asarray(initial_state, dtype=np.float32),
+                                "robot": robot_type,  # Robot type for filtering (e.g., RoboNet)
+                            }
+                            yield pair, meta
+                        else:
+                            yield pair
+                else:
+                    # Default (unchanged): yield all pairs from each episode.
+                    # Extract all frames and resize in batch for efficiency.
+                    frames_raw = [s["observation"][image_key] for s in steps]
+                    frames = tf.stack(frames_raw)  # [T, H, W, C]
+
+                    # Resize if needed (batch resize is faster)
+                    if frames.shape[1] != image_size or frames.shape[2] != image_size:
+                        frames = tf.image.resize(frames, [image_size, image_size])
+                        frames = tf.cast(frames, tf.uint8)
+
+                    frames = frames.numpy()
+
+                    # Extract actions if available (for visualization)
+                    actions = None
+                    if return_metadata and "action" in steps[0]:
+                        try:
+                            if action_is_dict and action_key:
+                                # Dict-based actions (e.g., Bridge has world_vector, rotation_delta)
+                                actions_tf = tf.stack([s["action"][action_key] for s in steps])
+                                actions = actions_tf.numpy()
+                            else:
+                                # Flat action array (e.g., language_table, RoboNet)
+                                actions_tf = tf.stack([s["action"] for s in steps])
+                                actions = actions_tf.numpy()[:, :action_dim]
+                        except Exception:
+                            actions = None
+
+                    # Extract states if available
+                    states = None
+                    if return_metadata and state_key in steps[0]["observation"]:
+                        try:
+                            states_tf = tf.stack([s["observation"][state_key] for s in steps])
+                            states = states_tf.numpy()[:, :state_dim]
+                        except Exception:
+                            states = None
+
+                    # Generate pairs
+                    for t in range(max_start_idx):
+                        # Stack: [2, H, W, C]
+                        pair = np.stack([frames[t], frames[t + offset]], axis=0)
+
+                        if return_metadata:
+                            # If language is step-level (e.g., RoboNet), use per-step instruction.
+                            if instruction_in_step:
+                                instruction_t = self._decode_tf_string(steps[t].get(instruction_key)) or instruction
+                            else:
+                                instruction_t = instruction
+
+                            # Compute accumulated action (sum of actions from t to t+offset)
+                            if actions is not None:
+                                cumulative_action = actions[t : t + offset].sum(axis=0)
+                            else:
+                                cumulative_action = np.zeros(action_dim, dtype=np.float32)
+
+                            # Get initial state at start of pair
+                            if states is not None:
+                                initial_state = states[t]
+                            else:
+                                initial_state = np.zeros(state_dim, dtype=np.float32)
+
+                            meta = {
+                                "episode_id": episode_id,
+                                "frame_idx": t,
+                                "offset": offset,
+                                "language": instruction_t,  # Standardized key (was: instruction)
+                                "dataset_type": dataset_name,  # Use actual dataset name for filtering
+                                "dataset_name": dataset_name,
+                                "action": cumulative_action.astype(np.float32),
+                                "initial_state": initial_state.astype(np.float32),
+                                "robot": robot_type,  # Robot type for filtering (e.g., RoboNet)
+                            }
+                            yield pair, meta
+                        else:
+                            yield pair
 
         # Create tf.data.Dataset from generator
         if return_metadata:
@@ -481,7 +611,7 @@ class OXEFramePairDataset(IterableDataset):
 
         # Apply shuffle if enabled (at pair level for better mixing)
         if self.shuffle_buffer > 0:
-            tf_ds = tf_ds.shuffle(self.shuffle_buffer)
+            tf_ds = tf_ds.shuffle(self.shuffle_buffer, seed=self._tf_seed)
 
         # Prefetch for performance
         tf_ds = tf_ds.prefetch(tf.data.AUTOTUNE)
@@ -691,6 +821,8 @@ class MultiOXEFramePairDataset(IterableDataset):
         return_metadata: bool = True,
         is_train: bool = True,
         persistent_iterator: bool = True,  # Keep iterators alive to avoid shuffle buffer refill
+        samples_per_episode: int = 0,
+        seed: Optional[int] = None,
     ):
         super().__init__()
 
@@ -701,6 +833,8 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.return_metadata = return_metadata
         self.is_train = is_train
         self.persistent_iterator = persistent_iterator
+        self.samples_per_episode = samples_per_episode
+        self.seed = seed
 
         # Will be populated lazily
         self._datasets = None
@@ -742,6 +876,8 @@ class MultiOXEFramePairDataset(IterableDataset):
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
+                samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
+                seed=self._get_dataset_seed(cfg),
             )
             self._datasets.append(ds)
             weights.append(cfg.get("weight", 1.0))
@@ -749,6 +885,16 @@ class MultiOXEFramePairDataset(IterableDataset):
         # Normalize weights
         total_weight = sum(weights)
         self._weights = [w / total_weight for w in weights]
+
+    def _get_dataset_seed(self, cfg: dict) -> Optional[int]:
+        # If an explicit per-dataset seed is provided, use it as-is.
+        if "seed" in cfg and cfg["seed"] is not None:
+            return int(cfg["seed"])
+        if self.seed is None:
+            return None
+        # Derive deterministic per-dataset seed from global seed + dataset name.
+        name_hash = zlib.crc32(str(cfg.get("name", "")).encode("utf-8")) & 0x7FFFFFFF
+        return (int(self.seed) + int(name_hash)) & 0x7FFFFFFF
 
     def __len__(self):
         """Approximate total length across all datasets."""
@@ -790,13 +936,14 @@ class MultiOXEFramePairDataset(IterableDataset):
 
     def __iter__(self):
         """Interleave samples from all datasets based on weights with CYCLIC sampling."""
-        import random
+        import random as _random
 
         self._init_datasets()
 
         # Create iterators for each dataset
         # NOTE: If iterators are already active (persistent), this continues them.
         iterators = [iter(ds) for ds in self._datasets]
+        rng = _random.Random(self.seed) if self.seed is not None else _random.Random()
         
         # We loop for exactly __len__ steps to define the epoch length.
         # This prevents distribution shift: even if a dataset runs out,
@@ -806,7 +953,7 @@ class MultiOXEFramePairDataset(IterableDataset):
         for _ in range(steps_total):
             # Choose dataset based on weights
             # We select from ALL datasets, not just "active" ones
-            r = random.random()
+            r = rng.random()
             cumsum = 0
             dataset_idx = 0
             for i, w in enumerate(self._weights):

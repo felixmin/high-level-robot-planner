@@ -1062,6 +1062,8 @@ class OXEDataModule(pl.LightningDataModule):
         val_split: str = "train[90%:]",
         # Shared settings
         offset: int = 5,
+        samples_per_episode: int = 0,
+        sampling_seed: Optional[int] = None,
         image_size: int = 256,
         batch_size: int = 32,
         num_workers: int = 0,  # IterableDataset + tf.data handles parallelism
@@ -1114,6 +1116,8 @@ class OXEDataModule(pl.LightningDataModule):
             raise ValueError("Must provide either 'datasets' list or 'dataset_name'")
 
         self.offset = offset
+        self.samples_per_episode = samples_per_episode
+        self.sampling_seed = sampling_seed
         self.image_size = image_size
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -1144,6 +1148,8 @@ class OXEDataModule(pl.LightningDataModule):
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
+                samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
+                seed=cfg.get("seed", self.sampling_seed),
             )
             self.val_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
@@ -1155,6 +1161,8 @@ class OXEDataModule(pl.LightningDataModule):
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
+                samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
+                seed=cfg.get("seed", self.sampling_seed),
             )
             logger.info(f"✓ OXE DataModule initialized (single dataset)")
             logger.info(f"  - Dataset: {cfg['name']}")
@@ -1170,6 +1178,8 @@ class OXEDataModule(pl.LightningDataModule):
                 return_metadata=self.return_metadata,
                 is_train=True,
                 persistent_iterator=self.persistent_iterator,
+                samples_per_episode=self.samples_per_episode,
+                seed=self.sampling_seed,
             )
             self.val_dataset = MultiOXEFramePairDataset(
                 datasets=self.dataset_configs,
@@ -1179,12 +1189,16 @@ class OXEDataModule(pl.LightningDataModule):
                 return_metadata=self.return_metadata,
                 is_train=False,
                 persistent_iterator=self.persistent_iterator,
+                samples_per_episode=self.samples_per_episode,
+                seed=self.sampling_seed,
             )
             dataset_names = [cfg["name"] for cfg in self.dataset_configs]
             logger.info(f"✓ OXE DataModule initialized (multi-dataset)")
             logger.info(f"  - Datasets: {', '.join(dataset_names)}")
 
         logger.info(f"  - Offset: {self.offset} steps")
+        logger.info(f"  - Samples per episode: {self.samples_per_episode if self.samples_per_episode else 'all'}")
+        logger.info(f"  - Sampling seed: {self.sampling_seed}")
         logger.info(f"  - Image size: {self.image_size}")
         logger.info(f"  - Shuffle buffer: {self.shuffle_buffer}")
         logger.info(f"  - Val shuffle buffer: {self.val_shuffle_buffer}")

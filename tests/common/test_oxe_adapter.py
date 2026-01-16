@@ -40,6 +40,24 @@ class TestOXEFramePairDataset:
         # Cleanup after test
         ds.cleanup()
 
+    @pytest.fixture
+    def one_sample_per_episode_dataset(self):
+        """Create a dataset that yields exactly one sample per episode."""
+        from common.adapters.oxe import OXEFramePairDataset
+
+        ds = OXEFramePairDataset(
+            dataset_name="language_table",
+            split="train[:100]",
+            offset=5,
+            image_size=64,
+            shuffle_buffer=10,
+            return_metadata=True,
+            samples_per_episode=1,
+            seed=123,
+        )
+        yield ds
+        ds.cleanup()
+
     def test_iteration_basic(self, small_dataset):
         """Test basic iteration over dataset."""
         count = 0
@@ -108,6 +126,18 @@ class TestOXEFramePairDataset:
 
         print("✓ Metadata correctly extracted")
 
+    def test_one_sample_per_episode(self, one_sample_per_episode_dataset):
+        """Test that per-episode sampling yields unique episodes within a short window."""
+        episode_ids = []
+        for item in one_sample_per_episode_dataset:
+            episode_ids.append(item["episode_id"])
+            if len(episode_ids) >= 10:
+                break
+
+        assert len(episode_ids) == 10
+        assert len(set(episode_ids)) == 10, "Expected unique episode_id when sampling 1 per episode"
+        print("✓ One-sample-per-episode mode yields unique episodes")
+
 
 class TestMultiOXEFramePairDataset:
     """Test MultiOXEFramePairDataset functionality."""
@@ -170,6 +200,29 @@ class TestMultiOXEFramePairDataset:
 
         assert multi_dataset._datasets is None
         print("✓ Cleanup releases all underlying datasets")
+
+    def test_seed_derivation(self):
+        """Test that a global seed produces deterministic per-dataset seeds."""
+        from common.adapters.oxe import MultiOXEFramePairDataset
+
+        ds = MultiOXEFramePairDataset(
+            datasets=[
+                {"name": "language_table", "train_split": "train[:30]", "weight": 0.5, "offset": 5},
+                {"name": "bridge", "train_split": "train[:30]", "weight": 0.5, "offset": 5},
+            ],
+            image_size=64,
+            shuffle_buffer=10,
+            return_metadata=False,
+            is_train=True,
+            samples_per_episode=1,
+            seed=123,
+        )
+        ds._init_datasets()
+        assert ds._datasets is not None
+        seeds = [d.seed for d in ds._datasets]
+        assert seeds[0] is not None and seeds[1] is not None
+        assert seeds[0] != seeds[1], "Expected different derived seeds per dataset"
+        ds.cleanup()
 
 
 class TestMemoryStability:
