@@ -22,8 +22,6 @@ hydra:
 
 # Logging configuration
 logging:
-  # Unified logging system (recommended)
-  unified: true              # Enable unified logging to runs/ folder
   level: INFO                # Logging level (DEBUG, INFO, WARNING, ERROR)
   job_id: null               # Optional explicit run ID (used by submit_job local runs)
   root_dir: null             # Optional base directory for all run artifacts
@@ -35,11 +33,11 @@ logging:
   log_model: false           # Upload model checkpoints to WandB
   tags: []                   # WandB tags for run organization
 
-  # Output structure:
-  #   runs/logs/{job_id}.log                          - All logger.info() calls (timestamped)
-  #   runs/output/{job_id}/wandb/                     - WandB files (includes print() capture)
-  #   runs/output/{job_id}/checkpoints/               - Model checkpoints
-  #   runs/output/hydra/YYYY-MM-DD/HH-MM-SS/.hydra/   - Hydra config backups
+  # Output structure (under runs_dir, e.g., runs/YYYY-MM-DD/HH-MM-SS/):
+  #   outputs/{job_id}/unified.log      - All logger.info() calls (timestamped)
+  #   outputs/{job_id}/wandb/           - WandB files (includes print() capture)
+  #   outputs/{job_id}/checkpoints/     - Model checkpoints
+  #   outputs/hydra/HH-MM-SS/.hydra/    - Hydra config backups
 
 # Job submission defaults (used by scripts/submit_job.py)
 submit:

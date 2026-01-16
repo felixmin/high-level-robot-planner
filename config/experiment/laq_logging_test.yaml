@@ -85,7 +85,6 @@ logging:
     - logging_test
     - short_run
   level: INFO
-  unified: true  # KEY: Enable unified logging
 
 # Model - standard LAQ config
 model:

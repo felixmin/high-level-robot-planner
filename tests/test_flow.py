@@ -330,7 +330,22 @@ class TestHydraConfigWithFlow:
         from pathlib import Path
         return str(Path(__file__).parent.parent / "config")
 
-    def test_laq_oxe_all_val_3_loads(self, config_dir):
+    @pytest.fixture
+    def ensure_user_config(self, config_dir):
+        """Create empty user_config/local.yaml if it doesn't exist (for optional include)."""
+        from pathlib import Path
+        user_config_dir = Path(config_dir) / "user_config"
+        user_config_path = user_config_dir / "local.yaml"
+        created = False
+        if not user_config_path.exists():
+            user_config_dir.mkdir(parents=True, exist_ok=True)
+            user_config_path.write_text("# Temporary user config for testing\n")
+            created = True
+        yield user_config_path
+        if created:
+            user_config_path.unlink()
+
+    def test_laq_oxe_all_val_3_loads(self, config_dir, ensure_user_config):
         """Test that laq_oxe_all_val_3 config loads correctly."""
         from hydra import compose, initialize_config_dir
 

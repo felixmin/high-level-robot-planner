@@ -38,6 +38,9 @@ outputs/
 multirun/
 .hydra/
 
+# User-specific config (copy from config/user_config/local.yaml.example)
+config/user_config/local.yaml
+
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb

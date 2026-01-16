@@ -202,7 +202,6 @@ training:
         num_samples: 256
 
 logging:
-  unified: true
   level: INFO
   use_wandb: true
   project: hlrp

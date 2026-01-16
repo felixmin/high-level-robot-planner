@@ -79,22 +79,53 @@ def get_rank() -> int:
     return 0
 
 
+def resolve_runs_dir(
+    logging_root_dir: Optional[str],
+    logging_runs_dir: Optional[str],
+    workspace_root: Path,
+) -> Path:
+    """
+    Resolve the runs directory from logging config values.
+
+    Priority:
+    1. logging_runs_dir (explicit run directory, e.g., runs/2026-01-15_191650_laq_debug)
+    2. logging_root_dir / "runs" / "local" (root with default subdirectory)
+    3. workspace_root / "runs" / "local" (fallback to project root)
+
+    Args:
+        logging_root_dir: Optional base directory for all run artifacts (cfg.logging.root_dir)
+        logging_runs_dir: Optional explicit run directory (cfg.logging.runs_dir)
+        workspace_root: Project root directory as fallback
+
+    Returns:
+        Resolved Path to the runs directory (flat structure)
+    """
+    if logging_runs_dir:
+        return Path(logging_runs_dir)
+    elif logging_root_dir:
+        return Path(logging_root_dir) / "runs" / "local"
+    else:
+        return workspace_root / "runs" / "local"
+
+
 def setup_unified_logging(
     runs_dir: Path,
     job_id: Optional[str] = None,
     log_level: str = "INFO",
+    logger_name: str = "hlrp.training",
 ) -> tuple[logging.Logger, Path]:
     """
-    Setup unified logging that captures all output to a single run-group directory.
+    Setup unified logging that captures all output to a single run directory.
 
     Creates:
-    - <runs_dir>/outputs/<job_id>/unified.log - Complete training log (rank 0 only)
-    - <runs_dir>/outputs/<job_id>/ - Per-job output directory
+    - <runs_dir>/unified.log - Complete training log (rank 0 only)
+    - <runs_dir>/ - Output directory for checkpoints, wandb, etc.
 
     Args:
-        runs_dir: Path to the run-group directory (contains outputs/)
-        job_id: Optional job ID (auto-detected if None)
+        runs_dir: Path to the run directory (flat structure)
+        job_id: Optional job ID (used for logging, auto-detected if None)
         log_level: Logging level (INFO, DEBUG, etc.)
+        logger_name: Name for the returned logger (default: "hlrp.training")
 
     Returns:
         (logger, output_dir) tuple
@@ -106,9 +137,8 @@ def setup_unified_logging(
     if job_id is None:
         job_id = get_job_id()
 
-    # Create directory structure
-    outputs_dir = runs_dir / "outputs"
-    output_dir = outputs_dir / job_id
+    # Flat structure: output directly to runs_dir
+    output_dir = runs_dir
 
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -158,7 +188,7 @@ def setup_unified_logging(
         sys.excepthook = _make_excepthook(sys.excepthook)
 
     # Get module-specific logger
-    logger = logging.getLogger("laq.training")
+    logger = logging.getLogger(logger_name)
 
     # Log setup info
     logger.info("=" * 80)
@@ -171,17 +201,18 @@ def setup_unified_logging(
     logger.info("=" * 80)
 
     # Note: Hydra creates its own output directory for config backups (hydra.run.dir).
-    # Our unified logging handles the important outputs under <runs_dir>/outputs/<job_id>/:
+    # Our unified logging handles the important outputs under <runs_dir>/:
     #   - Checkpoints → checkpoints/
     #   - WandB → wandb/
     #   - Logs → unified.log
+    #   - Hydra config → .hydra/
 
     # Note: stdout/stderr capture is handled by WandB when enabled
     # Our file handler above captures all logging.* calls
     # WandB's stdout wrapper captures all print() calls
     # This creates two complementary logs:
-    #   - <runs_dir>/outputs/<job_id>/unified.log: logger.info() calls (timestamped)
-    #   - <runs_dir>/outputs/<job_id>/wandb/files/output.log: print() calls (WandB capture)
+    #   - <runs_dir>/unified.log: logger.info() calls (timestamped)
+    #   - <runs_dir>/wandb/files/output.log: print() calls (WandB capture)
 
     return logger, output_dir
 

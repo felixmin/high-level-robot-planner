@@ -13,7 +13,6 @@ Usage:
 """
 
 import sys
-import logging
 from pathlib import Path
 
 # Add packages to path
@@ -30,7 +29,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Ca
 from common.data import LAQDataModule, OXEDataModule
 from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
 from common.logging import set_seed, count_parameters
-from common.unified_logging import setup_unified_logging, setup_wandb_with_unified_paths
+from common.unified_logging import resolve_runs_dir, setup_unified_logging, setup_wandb_with_unified_paths
 from laq import (
     LAQTask,
     EMACallback,
@@ -51,35 +50,19 @@ def main(cfg: DictConfig):
     4. Setup Lightning trainer with callbacks
     5. Train the model
     """
-    # Setup unified logging if enabled
-    use_unified_logging = cfg.logging.get("unified", True)
+    # Setup unified logging
+    runs_dir = resolve_runs_dir(
+        logging_root_dir=cfg.logging.get("root_dir"),
+        logging_runs_dir=cfg.logging.get("runs_dir"),
+        workspace_root=workspace_root,
+    )
 
-    logging_root_dir = cfg.logging.get("root_dir")
-    logging_runs_dir = cfg.logging.get("runs_dir")
-
-    if logging_runs_dir:
-        runs_dir = Path(logging_runs_dir)
-    elif logging_root_dir:
-        runs_dir = Path(logging_root_dir) / "runs" / "local"
-    else:
-        runs_dir = workspace_root / "runs" / "local"
-
-    if use_unified_logging:
-        logger, output_dir = setup_unified_logging(
-            runs_dir=runs_dir,
-            job_id=cfg.logging.get("job_id"),
-            log_level=cfg.logging.get("level", "INFO"),
-        )
-    else:
-        # Fallback to basic logging for backward compatibility
-        logger = logging.getLogger("laq.training")
-        logging.basicConfig(
-            level=logging.INFO,
-            format='[%(asctime)s][%(name)s][%(levelname)s] - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        output_dir = runs_dir / "outputs" / "local"
-        output_dir.mkdir(parents=True, exist_ok=True)
+    logger, output_dir = setup_unified_logging(
+        runs_dir=runs_dir,
+        job_id=cfg.logging.get("job_id"),
+        log_level=cfg.logging.get("level", "INFO"),
+        logger_name="laq.training",
+    )
 
     logger.info("=" * 80)
     logger.info("LAPA Stage 1: LAQ Training")

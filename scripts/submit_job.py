@@ -102,7 +102,7 @@ def generate_sbatch_script(
     qos: str | None,
     account: str | None,
     gpus: int,
-    time: str,
+    time_limit: str,
     mem: str,
     cpus: int,
     container_image: str,
@@ -144,7 +144,7 @@ fi
 #SBATCH --gres=gpu:{gpus}
 #SBATCH --cpus-per-task={cpus}
 #SBATCH --mem={mem}
-#SBATCH --time={time}
+#SBATCH --time={time_limit}
 #SBATCH --output={slurm_logs_dir}/%j.out
 #SBATCH --error={slurm_logs_dir}/%j.err
 #SBATCH --container-image={container_image}
@@ -224,19 +224,16 @@ def main():
         if not runs_dir.is_absolute():
             runs_dir = resolved_logging_root / runs_dir
     else:
-        date_part = time.strftime("%Y-%m-%d")
-        time_part = time.strftime("%H-%M-%S")
-        runs_dir = resolved_logging_root / "runs" / date_part / time_part
+        # Flat structure: runs/{date}_{time}_{experiment}
+        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+        experiment_name = OmegaConf.select(cfg, "experiment.name") or "unknown"
+        runs_dir = resolved_logging_root / "runs" / f"{timestamp}_{experiment_name}"
 
     # Cache dir is stable across runs (by default under logging_root_dir).
     cache_dir = Path(OmegaConf.select(cfg, "submit.cache_dir") or "cache")
     if not cache_dir.is_absolute():
         cache_dir = resolved_logging_root / cache_dir
 
-    # Slurm stdout/err: relative to the run-group directory by default.
-    slurm_logs_dir = Path(OmegaConf.select(cfg, "submit.slurm_logs_dir") or "slurm")
-    if not slurm_logs_dir.is_absolute():
-        slurm_logs_dir = runs_dir / slurm_logs_dir
 
     # Check for sweep parameters
     sweep_params = parse_sweep_params(cfg)
@@ -253,7 +250,7 @@ def main():
         print(f"\nPaths:")
         print(f"  Runs dir: {runs_dir}")
         print(f"  Cache dir: {cache_dir}")
-        runs_dir.mkdir(parents=True, exist_ok=True)
+        runs_dir.parent.mkdir(parents=True, exist_ok=True)
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         if is_sweep:
@@ -265,30 +262,39 @@ def main():
         base_env["HF_HUB_CACHE"] = str(cache_dir / "huggingface" / "hub")
         base_env["TORCH_HOME"] = str(cache_dir / "torch")
 
-        run_prefix = time.strftime("%Y%m%d-%H%M%S")
         for i, sweep_overrides in enumerate(sweep_combinations):
             combined_overrides = list(overrides) + sweep_overrides
             override_str = " ".join(combined_overrides).strip()
 
-            # Ensure a stable output root for this submission group.
-            runs_override = f"logging.runs_dir={runs_dir}"
+            # For sweeps, each job gets its own runs_dir with sweep suffix
+            if is_sweep:
+                suffix_parts = []
+                for override in sweep_overrides:
+                    key, val = override.split("=", 1)
+                    short_key = key.split(".")[-1]
+                    short_val = val.replace("-", "").replace(".", "")[:8]
+                    suffix_parts.append(f"{short_key}{short_val}")
+                sweep_suffix = "_".join(suffix_parts)
+                job_runs_dir = runs_dir.parent / f"{runs_dir.name}_{sweep_suffix}"
+            else:
+                job_runs_dir = runs_dir
 
-            # Give each run a unique id so unified logging doesn't collide.
-            run_id = f"local-{run_prefix}-{i+1:03d}"
-            job_override = f"logging.job_id={run_id}"
+            job_runs_dir.mkdir(parents=True, exist_ok=True)
+
             cmd_overrides = list(combined_overrides)
             if not any(ov.startswith("logging.runs_dir=") for ov in cmd_overrides):
-                cmd_overrides.append(runs_override)
-            if not any(ov.startswith("logging.job_id=") for ov in cmd_overrides):
-                cmd_overrides.append(job_override)
+                cmd_overrides.append(f"logging.runs_dir={job_runs_dir}")
+            # Hydra config goes directly in run directory (flat structure).
+            if not any(ov.startswith("hydra.run.dir=") for ov in cmd_overrides):
+                cmd_overrides.append(f"hydra.run.dir={job_runs_dir}")
             cmd = [sys.executable, str(script_path)] + cmd_overrides
 
             if dry_run:
-                print(f"\n[DRY RUN] {run_id}: {override_str}")
+                print(f"\n[DRY RUN] {job_runs_dir.name}: {override_str}")
                 print("  " + " ".join(cmd))
                 continue
 
-            print(f"\nRunning {run_id}: {override_str}" if override_str else f"\nRunning {run_id}")
+            print(f"\nRunning {job_runs_dir.name}: {override_str}" if override_str else f"\nRunning {job_runs_dir.name}")
             subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=base_env, check=True)
 
         return
@@ -324,8 +330,9 @@ def main():
         mem = "200G"  # Safe default for OXE streaming
 
     # Ensure directories exist on the shared filesystem.
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    slurm_logs_dir.mkdir(parents=True, exist_ok=True)
+    # For single jobs, runs_dir is the job directory.
+    # For sweeps, job directories are created in the loop (siblings of runs_dir).
+    runs_dir.parent.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Hugging Face auth token path (if present) for gated model downloads inside the container.
@@ -343,7 +350,8 @@ def main():
             extra_mounts.append(laq_ckpt_path.parent)
 
     # Build container mounts: always mount the project root, plus any external run/cache roots.
-    mount_roots: list[Path] = [PROJECT_ROOT, runs_dir, cache_dir, *extra_mounts]
+    # Mount runs_dir.parent to include all sweep job directories (which are siblings).
+    mount_roots: list[Path] = [PROJECT_ROOT, runs_dir.parent, cache_dir, *extra_mounts]
     if hf_token_path is not None:
         mount_roots.append(hf_token_path.parent)
 
@@ -383,7 +391,6 @@ def main():
     print(f"  CPUs: {cpus}")
     print(f"  Container: {container_image}")
     print(f"  Runs dir: {runs_dir}")
-    print(f"  Slurm logs: {slurm_logs_dir}")
     print(f"  Cache dir: {cache_dir}")
 
     # Submit jobs for each sweep combination
@@ -394,19 +401,7 @@ def main():
         # Sweep overrides come last to take precedence
         combined_overrides = list(overrides) + sweep_overrides
 
-        # Force run outputs into this submission group's run directory unless user overrides.
-        if not any(ov.startswith("logging.runs_dir=") for ov in combined_overrides):
-            combined_overrides.append(f"logging.runs_dir={runs_dir}")
-
-        # Put Hydra config snapshots under this run group too unless user overrides.
-        if not any(ov.startswith("hydra.run.dir=") for ov in combined_overrides):
-            combined_overrides.append(f"hydra.run.dir={runs_dir}/outputs/hydra/${{now:%H-%M-%S}}")
-        if not any(ov.startswith("hydra.sweep.dir=") for ov in combined_overrides):
-            combined_overrides.append(f"hydra.sweep.dir={runs_dir}/outputs/hydra/${{now:%H-%M-%S}}")
-        if not any(ov.startswith("hydra.sweep.subdir=") for ov in combined_overrides):
-            combined_overrides.append("hydra.sweep.subdir=${hydra.job.num}")
-
-        # Generate unique job name for sweeps
+        # For sweeps, each job gets its own runs_dir with sweep suffix
         if is_sweep:
             # Create a short suffix from sweep params (e.g., "lr1e-4_seed42")
             suffix_parts = []
@@ -417,9 +412,27 @@ def main():
                 # Shorten value if needed
                 short_val = val.replace("-", "").replace(".", "")[:8]
                 suffix_parts.append(f"{short_key}{short_val}")
-            job_name = f"hlrp_{cfg.experiment.name}_{'_'.join(suffix_parts)}"
+            sweep_suffix = "_".join(suffix_parts)
+            job_runs_dir = runs_dir.parent / f"{runs_dir.name}_{sweep_suffix}"
+            job_name = f"hlrp_{cfg.experiment.name}_{sweep_suffix}"
         else:
+            job_runs_dir = runs_dir
             job_name = f"hlrp_{cfg.experiment.name}"
+
+        # Ensure job directory exists
+        job_runs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Force run outputs into this job's run directory unless user overrides.
+        if not any(ov.startswith("logging.runs_dir=") for ov in combined_overrides):
+            combined_overrides.append(f"logging.runs_dir={job_runs_dir}")
+
+        # Hydra config goes directly in run directory (flat structure).
+        if not any(ov.startswith("hydra.run.dir=") for ov in combined_overrides):
+            combined_overrides.append(f"hydra.run.dir={job_runs_dir}")
+        if not any(ov.startswith("hydra.sweep.dir=") for ov in combined_overrides):
+            combined_overrides.append(f"hydra.sweep.dir={job_runs_dir}")
+        if not any(ov.startswith("hydra.sweep.subdir=") for ov in combined_overrides):
+            combined_overrides.append("hydra.sweep.subdir=.")
 
         # Generate sbatch script
         sbatch_content = generate_sbatch_script(
@@ -429,13 +442,13 @@ def main():
             qos=qos,
             account=account,
             gpus=gpus,
-            time=time_limit,
+            time_limit=time_limit,
             mem=mem,
             cpus=cpus,
             container_image=container_image,
             job_name=job_name,
             container_mounts=container_mounts,
-            slurm_logs_dir=slurm_logs_dir,
+            slurm_logs_dir=job_runs_dir,  # Slurm logs go in job's run dir
             cache_dir=cache_dir,
             hf_token_path=hf_token_path,
         )
@@ -469,7 +482,7 @@ def main():
             # Parse job ID from output like "Submitted batch job 12345"
             output = result.stdout.strip()
             job_id = output.split()[-1] if output else "unknown"
-            submitted_jobs.append((job_id, sweep_overrides))
+            submitted_jobs.append((job_id, job_runs_dir, sweep_overrides))
 
             print(f"  {output}")
 
@@ -488,13 +501,13 @@ def main():
         print("\nMonitor with:")
         print("  squeue --me")
         if len(submitted_jobs) == 1:
-            job_id = submitted_jobs[0][0]
-            print(f"  tail -f {slurm_logs_dir}/{job_id}.out")
+            job_id, job_dir, _ = submitted_jobs[0]
+            print(f"  tail -f {job_dir}/{job_id}.out")
         else:
-            print(f"  tail -f {slurm_logs_dir}/<job_id>.out")
-            print("\nJob IDs:")
-            for job_id, sweep_ov in submitted_jobs:
-                print(f"  {job_id}: {sweep_ov if sweep_ov else 'base config'}")
+            print("\nJobs:")
+            for job_id, job_dir, sweep_ov in submitted_jobs:
+                print(f"  {job_id}: {job_dir.name}")
+                print(f"    tail -f {job_dir}/{job_id}.out")
 
 
 if __name__ == "__main__":

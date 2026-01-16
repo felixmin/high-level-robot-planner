@@ -12,6 +12,7 @@ defaults:
   - /data@data: laq_oxe_all
   - /training@training: laq_optimizer
   - /cluster@cluster: lrz_h100
+  - optional /user_config: local
 
 experiment:
   name: laq_oxe_all_val_3
@@ -225,8 +226,8 @@ training:
         num_samples: 256
 
 logging:
-  root_dir: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay
-  unified: true
+  # root_dir: Set in config/user_config/local.yaml or via CLI override
+  # Example: logging.root_dir=/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/username
   level: INFO
   use_wandb: true
   project: hlrp

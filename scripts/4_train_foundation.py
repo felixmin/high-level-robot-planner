@@ -10,7 +10,6 @@ Usage:
     python scripts/4_train_foundation.py experiment=vla_cosmos2_tokens_debug model.laq.checkpoint=/path/to/laq.ckpt
 """
 
-import logging
 import sys
 from pathlib import Path
 
@@ -26,7 +25,7 @@ sys.path.insert(0, str(workspace_root / "packages"))
 from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
 from common.data import OXEDataModule
 from common.logging import set_seed
-from common.unified_logging import setup_unified_logging, setup_wandb_with_unified_paths
+from common.unified_logging import resolve_runs_dir, setup_unified_logging, setup_wandb_with_unified_paths
 from foundation.action_tokens import ActionTokenConfig
 from foundation.constrained_decode import ActionTokenIds
 from foundation.callbacks import (
@@ -46,30 +45,19 @@ from foundation.vla_module import VLATokenLightningModule, VLAOptimizerConfig
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig):
-    # Unified logging (mirrors Stage 1)
-    use_unified_logging = cfg.logging.get("unified", True)
+    # Setup unified logging
+    runs_dir = resolve_runs_dir(
+        logging_root_dir=cfg.logging.get("root_dir"),
+        logging_runs_dir=cfg.logging.get("runs_dir"),
+        workspace_root=workspace_root,
+    )
 
-    logging_root_dir = cfg.logging.get("root_dir")
-    logging_runs_dir = cfg.logging.get("runs_dir")
-
-    if logging_runs_dir:
-        runs_dir = Path(logging_runs_dir)
-    elif logging_root_dir:
-        runs_dir = Path(logging_root_dir) / "runs" / "local"
-    else:
-        runs_dir = workspace_root / "runs" / "local"
-
-    if use_unified_logging:
-        logger, output_dir = setup_unified_logging(
-            runs_dir=runs_dir,
-            job_id=cfg.logging.get("job_id"),
-            log_level=cfg.logging.get("level", "INFO"),
-        )
-    else:
-        logger = logging.getLogger("foundation.training")
-        logging.basicConfig(level=logging.INFO)
-        output_dir = runs_dir / "outputs" / "local"
-        output_dir.mkdir(parents=True, exist_ok=True)
+    logger, output_dir = setup_unified_logging(
+        runs_dir=runs_dir,
+        job_id=cfg.logging.get("job_id"),
+        log_level=cfg.logging.get("level", "INFO"),
+        logger_name="foundation.training",
+    )
 
     logger.info("=" * 80)
     logger.info("LAPA Stage 2: Foundation VLA Training (Action Tokens)")

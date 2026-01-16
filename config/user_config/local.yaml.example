@@ -1,0 +1,22 @@
+# User-specific configuration overrides
+# Copy this file to local.yaml (in this same directory) and customize for your environment.
+#
+# This file is gitignored so your local paths won't be committed.
+#
+# The config is automatically included (as optional) by experiment configs that need it.
+# You can also override via CLI:
+#   python scripts/2_train_laq.py experiment=laq_oxe_all_val_3 logging.root_dir=/my/path
+
+# Logging paths (where to store run outputs)
+logging:
+  # Base directory for all run artifacts (runs/, cache/, etc.)
+  # Set this to a directory with plenty of storage space.
+  # Examples:
+  #   - Local: /home/username/experiments/hlrp
+  #   - LRZ DSS: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/username
+  root_dir: null
+
+# Cache directory for model downloads (HuggingFace, torch hub)
+# If not set, defaults to <logging.root_dir>/cache or <project_root>/cache
+submit:
+  cache_dir: null
