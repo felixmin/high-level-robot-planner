@@ -44,27 +44,64 @@ def get_job_id() -> str:
     return "local"
 
 
+def _make_excepthook(original_hook):
+    """
+    Create an exception hook that logs uncaught exceptions before calling the original hook.
+
+    This ensures crashes are captured in the log file instead of only appearing in stderr.
+    """
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        # Don't log KeyboardInterrupt (Ctrl+C)
+        if issubclass(exc_type, KeyboardInterrupt):
+            original_hook(exc_type, exc_value, exc_traceback)
+            return
+        logging.critical("Uncaught exception:", exc_info=(exc_type, exc_value, exc_traceback))
+        original_hook(exc_type, exc_value, exc_traceback)
+    return handle_exception
+
+
+def get_rank() -> int:
+    """
+    Get the current process rank for distributed training.
+
+    Checks environment variables set by PyTorch DDP, torchrun, and SLURM.
+
+    Returns:
+        Process rank (0 for main process or single-GPU training)
+    """
+    # PyTorch DDP / torchrun
+    if "LOCAL_RANK" in os.environ:
+        return int(os.environ["LOCAL_RANK"])
+    # SLURM
+    if "SLURM_LOCALID" in os.environ:
+        return int(os.environ["SLURM_LOCALID"])
+    # Single process
+    return 0
+
+
 def setup_unified_logging(
     runs_dir: Path,
     job_id: Optional[str] = None,
     log_level: str = "INFO",
-    capture_stdout: bool = True,
 ) -> tuple[logging.Logger, Path]:
     """
     Setup unified logging that captures all output to a single run-group directory.
 
     Creates:
-    - <runs_dir>/outputs/<job_id>/unified.log - Complete training log
+    - <runs_dir>/outputs/<job_id>/unified.log - Complete training log (rank 0 only)
     - <runs_dir>/outputs/<job_id>/ - Per-job output directory
 
     Args:
         runs_dir: Path to the run-group directory (contains outputs/)
         job_id: Optional job ID (auto-detected if None)
         log_level: Logging level (INFO, DEBUG, etc.)
-        capture_stdout: If True, redirect stdout/stderr to log file
 
     Returns:
         (logger, output_dir) tuple
+
+    Note:
+        In distributed training, only rank 0 writes to the log file to prevent
+        interleaved output. All ranks still log to console.
     """
     if job_id is None:
         job_id = get_job_id()
@@ -100,20 +137,25 @@ def setup_unified_logging(
     console_handler.setFormatter(console_formatter)
     root_logger.addHandler(console_handler)
 
-    # File handler (log file)
-    try:
-        file_handler = logging.FileHandler(log_file, mode='a')
-        file_handler.setLevel(getattr(logging, log_level.upper()))
-        file_formatter = logging.Formatter(
-            "[%(asctime)s][%(name)s][%(levelname)s] - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        file_handler.setFormatter(file_formatter)
-        root_logger.addHandler(file_handler)
-    except (OSError, PermissionError) as e:
-        print(f"WARNING: Failed to create log file handler: {e}")
-        print(f"  - Attempted to write to: {log_file}")
-        print(f"  - Logging will continue to console only")
+    # File handler (log file) - only rank 0 writes to file in distributed training
+    rank = get_rank()
+    if rank == 0:
+        try:
+            file_handler = logging.FileHandler(log_file, mode='a')
+            file_handler.setLevel(getattr(logging, log_level.upper()))
+            file_formatter = logging.Formatter(
+                "[%(asctime)s][%(name)s][%(levelname)s] - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            )
+            file_handler.setFormatter(file_formatter)
+            root_logger.addHandler(file_handler)
+        except (OSError, PermissionError) as e:
+            print(f"WARNING: Failed to create log file handler: {e}")
+            print(f"  - Attempted to write to: {log_file}")
+            print(f"  - Logging will continue to console only")
+
+        # Install excepthook to capture uncaught exceptions in log file
+        sys.excepthook = _make_excepthook(sys.excepthook)
 
     # Get module-specific logger
     logger = logging.getLogger("laq.training")

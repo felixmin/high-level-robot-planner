@@ -64,7 +64,6 @@ def main(cfg: DictConfig):
             runs_dir=runs_dir,
             job_id=cfg.logging.get("job_id"),
             log_level=cfg.logging.get("level", "INFO"),
-            capture_stdout=cfg.logging.get("capture_stdout", True),
         )
     else:
         logger = logging.getLogger("foundation.training")

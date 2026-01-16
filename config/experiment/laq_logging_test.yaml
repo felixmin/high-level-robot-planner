@@ -86,7 +86,6 @@ logging:
     - short_run
   level: INFO
   unified: true  # KEY: Enable unified logging
-  capture_stdout: true
 
 # Model - standard LAQ config
 model:
