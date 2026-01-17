@@ -1,0 +1,39 @@
+# OXE All Datasets configuration
+# Combines language_table, bridge, rt1, and robonet with weighted sampling
+# Total: ~630k episodes across diverse robots and tasks
+
+datasets:
+  - name: language_table
+    train_split: "train[:90%]"
+    val_split: "train[90%:]"
+    offset: 10                   # 1 second at 10Hz
+    weight: 0.35 # (442k episodes)
+
+  - name: bridge
+    train_split: "train[:90%]"
+    val_split: "train[90%:]"
+    offset: 5                    # 1 second at 5Hz
+    weight: 0.15 # (25k episodes)
+
+  - name: rt1
+    train_split: "train[:90%]"
+    val_split: "train[90%:]"
+    offset: 3                    # 1 second at 3Hz
+    weight: 0.25 # (87k episodes)
+
+  - name: robonet
+    train_split: "train[:90%]"
+    val_split: "train[90%:]"
+    offset: 10                   # 1 second at 10Hz
+    weight: 0.25 # (83k episodes)
+
+# Shared settings
+offset: 5                        # Default offset (overridden per-dataset)
+image_size: 256
+batch_size: 32
+num_workers: 0                   # tf.data handles parallelism
+shuffle_buffer: 200              # Split across datasets
+prefetch_buffer: 16              # 0 for AUTOTUNE
+persistent_iterator: true        # Keep iterator alive to avoid shuffle buffer refill
+samples_per_episode: 1           # LAPA-style: sample N pairs per episode (0 = all pairs)
+return_metadata: true            # Required for validation strategies
