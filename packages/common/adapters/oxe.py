@@ -614,7 +614,7 @@ class OXEFramePairDataset(IterableDataset):
             tf_ds = tf_ds.shuffle(self.shuffle_buffer, seed=self._tf_seed)
 
         # Prefetch for performance
-        tf_ds = tf_ds.prefetch(tf.data.AUTOTUNE)
+        tf_ds = tf_ds.prefetch(self.prefetch_buffer if self.prefetch_buffer > 0 else tf.data.AUTOTUNE)
 
         return tf_ds
 
