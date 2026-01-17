@@ -49,10 +49,14 @@ data:
 
 # Training settings
 training:
+  # Profiling
+  profiler:
+    enabled: true           # Enable Lightning SimpleProfiler
+    type: simple             # 'simple', 'advanced', or 'pytorch'
+    dirpath: ./profiles      # Where to save profile outputs
+    filename: profile        # Profile filename
   epochs: 100
   max_steps: null
-  scheduler:
-    type: none
   validation:
     check_interval: 1000
     limit_batches: 500
