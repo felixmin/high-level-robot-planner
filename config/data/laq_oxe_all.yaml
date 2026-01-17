@@ -7,7 +7,7 @@ datasets:
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     offset: 10                   # 1 second at 10Hz
-    # weight: proportionate (442k episodes)
+    weight: 0.1 (442k episodes)
 
   - name: bridge
     train_split: "train[:90%]"
