@@ -38,9 +38,10 @@ data:
 # Training
 training:
   epochs: 10
+  max_steps: 20000
   scheduler:
     type: cosine
-    warmup_epochs: 1
+    warmup_steps: 1000
   validation:
     check_interval: 0.1
     limit_batches: 20

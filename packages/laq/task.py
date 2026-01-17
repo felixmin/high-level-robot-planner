@@ -10,10 +10,11 @@ Wraps LatentActionQuantization in a LightningModule with:
 
 from typing import Any, Dict, List, Optional, Tuple
 
+import math
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import lightning.pytorch as pl
 from omegaconf import DictConfig, OmegaConf
 
@@ -285,6 +286,78 @@ class LAQTask(pl.LightningModule):
         # Reset validation batch storage
         self.validation_batch = None
 
+    def _resolve_total_training_steps(self, sched_config: DictConfig) -> Optional[int]:
+        """
+        Resolve total optimizer steps for step-based LR scheduling.
+
+        Priority:
+        1) Explicit `training_config.max_steps` when set (>0)
+        2) Trainer `max_steps` when set (>0)
+        3) Trainer `estimated_stepping_batches` when finite
+        """
+        # 1) Training config (Hydra) override
+        cfg_max_steps = self.training_config.get("max_steps")
+        if cfg_max_steps is not None:
+            try:
+                cfg_max_steps_int = int(cfg_max_steps)
+                if cfg_max_steps_int > 0:
+                    return cfg_max_steps_int
+            except (TypeError, ValueError):
+                pass
+
+        # 2/3) Trainer-derived values (preferred when available)
+        trainer = getattr(self, "trainer", None)
+        if trainer is not None:
+            trainer_max_steps = getattr(trainer, "max_steps", None)
+            if trainer_max_steps not in (None, -1):
+                try:
+                    trainer_max_steps_int = int(trainer_max_steps)
+                    if trainer_max_steps_int > 0:
+                        return trainer_max_steps_int
+                except (TypeError, ValueError):
+                    pass
+
+            est = getattr(trainer, "estimated_stepping_batches", None)
+            if est is not None:
+                try:
+                    est_int = int(est)
+                    if est_int > 0:
+                        return est_int
+                except (TypeError, ValueError, OverflowError):
+                    pass
+
+            # Fallback if estimated_stepping_batches isn't available yet.
+            num_batches = getattr(trainer, "num_training_batches", None)
+            max_epochs = getattr(trainer, "max_epochs", None)
+            accumulate = getattr(trainer, "accumulate_grad_batches", 1)
+            if (
+                num_batches not in (None, float("inf"))
+                and max_epochs not in (None, -1)
+            ):
+                try:
+                    num_batches_int = int(num_batches)
+                    max_epochs_int = int(max_epochs)
+                    accumulate_int = int(accumulate) if int(accumulate) > 0 else 1
+                    if num_batches_int > 0 and max_epochs_int > 0:
+                        steps_per_epoch = math.ceil(num_batches_int / accumulate_int)
+                        return steps_per_epoch * max_epochs_int
+                except (TypeError, ValueError, OverflowError):
+                    pass
+
+        return None
+
+    def _resolve_warmup_steps(self, sched_config: DictConfig) -> int:
+        """
+        Resolve warmup steps.
+        """
+        warmup_steps = sched_config.get("warmup_steps", None)
+        if warmup_steps is not None:
+            try:
+                return max(0, int(warmup_steps))
+            except (TypeError, ValueError):
+                return 0
+        return 0
+
     def configure_optimizers(self) -> Dict[str, Any]:
         """
         Configure optimizer and LR scheduler.
@@ -326,16 +399,56 @@ class LAQTask(pl.LightningModule):
             # No scheduler - return optimizer only
             return optimizer
         elif sched_config.type == "cosine":
-            scheduler = CosineAnnealingLR(
-                optimizer,
-                T_max=sched_config.T_max,
-                eta_min=sched_config.min_lr,
-            )
+            total_steps = self._resolve_total_training_steps(sched_config)
+            if total_steps is None:
+                raise ValueError(
+                    "LAQ cosine scheduler requires total training steps. "
+                    "Set `training.max_steps` (recommended for streaming/variable-length epochs)."
+                )
+
+            warmup_steps = self._resolve_warmup_steps(sched_config)
+            warmup_steps = min(warmup_steps, total_steps)
+
+            min_lr = float(sched_config.get("min_lr", 0.0) or 0.0)
+            base_lr = float(opt_config.lr)
+            warmup_start_lr = float(sched_config.get("warmup_start_lr", min_lr) or min_lr)
+
+            if warmup_steps > 0:
+                start_factor = warmup_start_lr / base_lr if base_lr > 0 else 1.0
+                # LinearLR expects multiplicative factor; clamp to avoid negative/zero.
+                start_factor = max(1e-8, start_factor)
+                # Ensure the very first optimizer step uses the warmup-start LR.
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = base_lr * start_factor
+                warmup = LinearLR(
+                    optimizer,
+                    start_factor=start_factor,
+                    end_factor=1.0,
+                    total_iters=warmup_steps,
+                )
+                cosine_steps = max(1, total_steps - warmup_steps)
+                cosine = CosineAnnealingLR(
+                    optimizer,
+                    T_max=cosine_steps,
+                    eta_min=min_lr,
+                )
+                scheduler = SequentialLR(
+                    optimizer,
+                    schedulers=[warmup, cosine],
+                    milestones=[warmup_steps],
+                )
+            else:
+                scheduler = CosineAnnealingLR(
+                    optimizer,
+                    T_max=max(1, total_steps),
+                    eta_min=min_lr,
+                )
+
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "interval": "epoch",
+                    "interval": "step",
                     "frequency": 1,
                     "name": "lr",
                 },

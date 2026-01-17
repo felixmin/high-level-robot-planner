@@ -35,6 +35,7 @@ def model_config():
 def training_config():
     """Minimal training config for testing."""
     return OmegaConf.create({
+        "max_steps": 10,
         "optimizer": {
             "lr": 1e-4,
             "betas": [0.9, 0.999],
@@ -43,7 +44,6 @@ def training_config():
         },
         "scheduler": {
             "type": "cosine",
-            "T_max": 10,
             "min_lr": 1e-6,
         },
         "gradient": {
@@ -313,7 +313,7 @@ class TestLAQTaskOptimizer:
         opt_config = task.configure_optimizers()
         scheduler_config = opt_config["lr_scheduler"]
 
-        assert scheduler_config["interval"] == "epoch"
+        assert scheduler_config["interval"] == "step"
         assert scheduler_config["frequency"] == 1
 
         print("✓ LR scheduler configured")

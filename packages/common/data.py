@@ -1053,6 +1053,8 @@ class OXEDataModule(pl.LightningDataModule):
 
     def __init__(
         self,
+        offset: int,
+        prefetch_buffer: int,
         # New multi-dataset format
         datasets: Optional[list] = None,
         # Legacy single-dataset format (still supported)
@@ -1060,8 +1062,6 @@ class OXEDataModule(pl.LightningDataModule):
         gcs_path: Optional[str] = None,
         train_split: str = "train[:90%]",
         val_split: str = "train[90%:]",
-        # Shared settings
-        offset: int = 5,
         samples_per_episode: int = 0,
         sampling_seed: Optional[int] = None,
         image_size: int = 256,
@@ -1069,7 +1069,6 @@ class OXEDataModule(pl.LightningDataModule):
         num_workers: int = 0,  # IterableDataset + tf.data handles parallelism
         shuffle_buffer: int = 200,
         val_shuffle_buffer: int = 0,
-        prefetch_buffer: int = 4,
         return_metadata: bool = True,
         persistent_iterator: bool = True,
         # Legacy parameters (ignored but kept for config compatibility)

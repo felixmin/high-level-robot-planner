@@ -213,12 +213,12 @@ class OXEFramePairDataset(IterableDataset):
 
     def __init__(
         self,
-        dataset_name: str = "language_table",
-        split: str = "train",
-        offset: int = 5,
+        dataset_name: str,
+        split: str,
+        offset: int,
+        prefetch_buffer: int,
         image_size: int = 256,
         shuffle_buffer: int = 1000,
-        prefetch_buffer: int = 0,
         num_parallel_calls: Optional[int] = None,  # None = AUTOTUNE
         return_metadata: bool = False,
         gcs_path: Optional[str] = None,
@@ -269,7 +269,6 @@ class OXEFramePairDataset(IterableDataset):
         self._persistent_pipeline = None
         # Persistent iterator - avoids shuffle buffer refill on each epoch
         self._pipeline_iterator = None
-        self._epoch_count = 0
         # Idempotency flag for cleanup
         self._cleaned_up = False
 
@@ -614,7 +613,8 @@ class OXEFramePairDataset(IterableDataset):
             tf_ds = tf_ds.shuffle(self.shuffle_buffer, seed=self._tf_seed)
 
         # Prefetch for performance
-        tf_ds = tf_ds.prefetch(self.prefetch_buffer if self.prefetch_buffer > 0 else tf.data.AUTOTUNE)
+        prefetch_val = self.prefetch_buffer if self.prefetch_buffer > 0 else tf.data.AUTOTUNE
+        tf_ds = tf_ds.prefetch(prefetch_val)
 
         return tf_ds
 
@@ -723,8 +723,6 @@ class OXEFramePairDataset(IterableDataset):
         """Iterate over frame pairs."""
         import tensorflow as tf
 
-        self._epoch_count += 1
-
         # Get or create iterator (persistent by default to avoid shuffle buffer refill)
         tf_iter = self._get_or_create_iterator()
 
@@ -815,9 +813,9 @@ class MultiOXEFramePairDataset(IterableDataset):
     def __init__(
         self,
         datasets: list,
+        prefetch_buffer: int,
         image_size: int = 256,
         shuffle_buffer: int = 200,
-        prefetch_buffer: int = 0,
         return_metadata: bool = True,
         is_train: bool = True,
         persistent_iterator: bool = True,  # Keep iterators alive to avoid shuffle buffer refill
@@ -839,8 +837,6 @@ class MultiOXEFramePairDataset(IterableDataset):
         # Will be populated lazily
         self._datasets = None
         self._weights = None
-        # Persistent iterators for each dataset
-        self._iterators = None
 
     def _init_datasets(self):
         """Initialize individual datasets lazily."""

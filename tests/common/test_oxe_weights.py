@@ -325,6 +325,7 @@ class TestWeightingIntegration:
                 {"name": "language_table", "offset": 5},
                 {"name": "bridge", "offset": 5, "weight": 0.4},
             ],
+            prefetch_buffer=0,
             image_size=64,
         )
         ds._init_datasets()

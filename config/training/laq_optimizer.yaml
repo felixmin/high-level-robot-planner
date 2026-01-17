@@ -17,8 +17,8 @@ scheduler:
   warmup_start_lr: 1.0e-6
   min_lr: 1.0e-6
   
-  # For CosineAnnealingLR
-  T_max: ${training.epochs}
+  # For cosine scheduling: the LR schedule is step-based.
+  # Prefer setting `training.max_steps` for streaming / variable-length epochs.
   
   # For StepLR (if used)
   step_size: 30

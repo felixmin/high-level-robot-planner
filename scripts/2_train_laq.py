@@ -261,7 +261,7 @@ def main(cfg: DictConfig):
 
     # Learning rate monitoring (requires a Lightning logger)
     if wandb_logger is not None:
-        lr_monitor = LearningRateMonitor(logging_interval="epoch")
+        lr_monitor = LearningRateMonitor(logging_interval="step")
         callbacks.append(lr_monitor)
         logger.info("✓ Learning rate monitor added")
     else:

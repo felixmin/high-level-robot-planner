@@ -111,6 +111,14 @@ class TestLAQDataModule:
 
     def test_datamodule_with_workers(self, sources):
         """Test DataModule with multiple workers."""
+        import multiprocessing as mp
+
+        try:
+            lock = mp.Lock()
+            del lock
+        except PermissionError:
+            pytest.skip("Multiprocessing semaphores are not permitted in this environment")
+
         dm = LAQDataModule(
             sources=sources,
             image_size=256,
@@ -512,6 +520,7 @@ class TestSamplingStrategies:
             sources=sources,
             image_size=256,
             batch_size=4,
+            num_workers=0,
             max_pairs=10,
             val_split=0.0,
             sampling_strategy="random",
@@ -523,6 +532,7 @@ class TestSamplingStrategies:
             sources=sources,
             image_size=256,
             batch_size=4,
+            num_workers=0,
             max_pairs=10,
             val_split=0.0,
             sampling_strategy="random",
@@ -544,6 +554,7 @@ class TestSamplingStrategies:
             sources=sources,
             image_size=256,
             batch_size=4,
+            num_workers=0,
             max_pairs=10,
             val_split=0.0,
             sampling_strategy="random",
@@ -555,6 +566,7 @@ class TestSamplingStrategies:
             sources=sources,
             image_size=256,
             batch_size=4,
+            num_workers=0,
             max_pairs=10,
             val_split=0.0,
             sampling_strategy="random",
