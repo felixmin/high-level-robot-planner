@@ -218,7 +218,7 @@ class OXEFramePairDataset(IterableDataset):
         offset: int = 5,
         image_size: int = 256,
         shuffle_buffer: int = 1000,
-        prefetch_buffer: int = 2,
+        prefetch_buffer: int = 0,
         num_parallel_calls: Optional[int] = None,  # None = AUTOTUNE
         return_metadata: bool = False,
         gcs_path: Optional[str] = None,
@@ -817,7 +817,7 @@ class MultiOXEFramePairDataset(IterableDataset):
         datasets: list,
         image_size: int = 256,
         shuffle_buffer: int = 200,
-        prefetch_buffer: int = 2,
+        prefetch_buffer: int = 0,
         return_metadata: bool = True,
         is_train: bool = True,
         persistent_iterator: bool = True,  # Keep iterators alive to avoid shuffle buffer refill
