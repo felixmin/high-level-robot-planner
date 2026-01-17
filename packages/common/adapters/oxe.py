@@ -848,7 +848,6 @@ class MultiOXEFramePairDataset(IterableDataset):
             return
 
         self._datasets = []
-        weights = []
 
         # Split shuffle buffer across datasets
         buffer_per_dataset = max(10, self.shuffle_buffer // len(self.dataset_configs))
@@ -880,11 +879,10 @@ class MultiOXEFramePairDataset(IterableDataset):
                 seed=self._get_dataset_seed(cfg),
             )
             self._datasets.append(ds)
-            weights.append(cfg.get("weight", 1.0))
 
-        # Normalize weights
-        total_weight = sum(weights)
-        self._weights = [w / total_weight for w in weights]
+        # Compute weights using mixed absolute mode
+        sizes = [len(ds) for ds in self._datasets]
+        self._weights = self._compute_weights(self.dataset_configs, sizes)
 
     def _get_dataset_seed(self, cfg: dict) -> Optional[int]:
         # If an explicit per-dataset seed is provided, use it as-is.
@@ -895,6 +893,98 @@ class MultiOXEFramePairDataset(IterableDataset):
         # Derive deterministic per-dataset seed from global seed + dataset name.
         name_hash = zlib.crc32(str(cfg.get("name", "")).encode("utf-8")) & 0x7FFFFFFF
         return (int(self.seed) + int(name_hash)) & 0x7FFFFFFF
+
+    def _compute_weights(
+        self, datasets_config: list, sizes: list[int]
+    ) -> list[float]:
+        """
+        Compute normalized weights using mixed absolute mode.
+
+        Weight specification options:
+        - Omitted or None: Proportionate weighting (share remaining weight by size)
+        - "proportionate": Explicit proportionate weighting
+        - Numeric (int/float): Absolute sampling ratio (e.g., 0.3 = 30% of samples)
+
+        Algorithm (mixed absolute mode):
+        1. Identify explicit numeric weights vs proportionate
+        2. Sum explicit weights (should be < 1.0; warns if >= 1.0)
+        3. Remaining pool = 1.0 - sum(explicit)
+        4. Proportionate datasets share remaining pool by relative size
+        5. Final weights are normalized to sum to 1.0 for sampling correctness
+
+        Note: If explicit weights sum to > 1.0, they are still normalized to ensure
+        the sampling loop works correctly. A warning is logged in this case.
+
+        Args:
+            datasets_config: List of dataset config dicts
+            sizes: List of estimated dataset sizes (from len(ds))
+
+        Returns:
+            List of normalized weights summing to 1.0
+        """
+        explicit_weights: dict[int, float] = {}  # index -> weight
+        proportionate_indices: list[int] = []
+
+        for i, cfg in enumerate(datasets_config):
+            weight_spec = cfg.get("weight")
+            if weight_spec is None or weight_spec == "proportionate":
+                proportionate_indices.append(i)
+            elif isinstance(weight_spec, (int, float)):
+                explicit_weights[i] = float(weight_spec)
+            else:
+                raise ValueError(
+                    f"Invalid weight specification for dataset '{cfg.get('name', i)}': "
+                    f"{weight_spec!r}. Must be numeric, 'proportionate', or omitted."
+                )
+
+        # Validate explicit weights sum
+        explicit_sum = sum(explicit_weights.values())
+        if explicit_sum >= 1.0:
+            logger.warning(
+                f"Explicit weights sum to {explicit_sum:.3f} >= 1.0. "
+                "Proportionate datasets will have zero weight."
+            )
+
+        # Calculate remaining weight pool for proportionate datasets
+        remaining = max(0.0, 1.0 - explicit_sum)
+
+        # Get sizes for proportionate datasets
+        prop_sizes = [sizes[i] for i in proportionate_indices]
+        total_prop_size = sum(prop_sizes)
+
+        # Build final weights
+        final_weights = [0.0] * len(datasets_config)
+
+        # Assign explicit weights
+        for i, w in explicit_weights.items():
+            final_weights[i] = w
+
+        # Distribute remaining weight to proportionate datasets by size
+        if total_prop_size > 0 and remaining > 0:
+            for i in proportionate_indices:
+                final_weights[i] = remaining * (sizes[i] / total_prop_size)
+        elif proportionate_indices and remaining > 0:
+            # All proportionate datasets have zero size - equal split
+            for i in proportionate_indices:
+                final_weights[i] = remaining / len(proportionate_indices)
+
+        # Normalize to sum to 1.0 (required for sampling loop correctness)
+        # This handles cases where explicit weights sum to > 1.0
+        total_weight = sum(final_weights)
+        if total_weight > 0 and abs(total_weight - 1.0) > 1e-6:
+            final_weights = [w / total_weight for w in final_weights]
+
+        # Log weight breakdown for debugging
+        logger.info("Dataset weights computed (mixed absolute mode):")
+        for i, cfg in enumerate(datasets_config):
+            name = cfg.get("name", f"dataset_{i}")
+            weight_spec = cfg.get("weight")
+            mode = "explicit" if i in explicit_weights else "proportionate"
+            logger.info(
+                f"  {name}: {final_weights[i]:.3f} ({mode}, size={sizes[i]:,})"
+            )
+
+        return final_weights
 
     def __len__(self):
         """Approximate total length across all datasets."""
