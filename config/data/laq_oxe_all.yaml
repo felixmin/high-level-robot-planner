@@ -6,26 +6,26 @@ datasets:
   - name: language_table
     train_split: "train[:90%]"
     val_split: "train[90%:]"
-    weight: 0.35                 # 442k episodes (largest)
     offset: 10                   # 1 second at 10Hz
+    # weight: proportionate (442k episodes)
 
   - name: bridge
     train_split: "train[:90%]"
     val_split: "train[90%:]"
-    weight: 0.15                 # 25k episodes
     offset: 5                    # 1 second at 5Hz
+    # weight: proportionate (25k episodes)
 
   - name: rt1
     train_split: "train[:90%]"
     val_split: "train[90%:]"
-    weight: 0.25                 # 87k episodes
     offset: 3                    # 1 second at 3Hz
+    # weight: proportionate (87k episodes)
 
   - name: robonet
     train_split: "train[:90%]"
     val_split: "train[90%:]"
-    weight: 0.25                 # 83k episodes
     offset: 10                   # 1 second at 10Hz
+    # weight: proportionate (83k episodes)
 
 # Shared settings
 offset: 5                        # Default offset (overridden per-dataset)

@@ -179,6 +179,8 @@ def main(cfg: DictConfig):
         torch_dtype=dtype,
         attn_implementation=cfg.model.vla.get("attn_implementation", "sdpa"),
     )
+    # HuggingFace models default to eval mode after from_pretrained(); set train mode explicitly
+    vla_model.train()
     processor = Qwen3VLProcessor.from_pretrained(model_name)
 
     action_cfg = ActionTokenConfig(

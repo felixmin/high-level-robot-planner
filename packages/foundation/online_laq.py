@@ -79,6 +79,11 @@ class LAQTaskCodeProvider(torch.nn.Module):
         self.codebook_size = self._infer_codebook_size()
         self.code_seq_len = self._infer_code_seq_len()
 
+    def train(self, mode: bool = True) -> "LAQTaskCodeProvider":
+        """Override to always keep this module and internal LAQ in eval mode."""
+        # This is a frozen label generator - never switch to train mode
+        return super().train(False)
+
     def _infer_codebook_size(self) -> int:
         model = getattr(self._laq_task, "model", None)
         vq = getattr(model, "vq", None)

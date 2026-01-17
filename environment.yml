@@ -63,3 +63,6 @@ dependencies:
     # Code quality
     - black>=24.10.0
     - ruff>=0.8.0
+
+    # Visualization tools
+    - streamlit>=1.32.0
