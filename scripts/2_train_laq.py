@@ -28,6 +28,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Ca
 
 from common.data import LAQDataModule, OXEDataModule
 from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
+from foundation.callbacks import ThroughputLoggingCallback, ThroughputLoggingConfig
 from common.logging import set_seed, count_parameters
 from common.unified_logging import resolve_runs_dir, setup_unified_logging, setup_wandb_with_unified_paths
 from laq import (
@@ -173,6 +174,19 @@ def main(cfg: DictConfig):
     progress_logger = ProgressLoggerCallback(log_every_n_steps=100)
     callbacks.append(progress_logger)
     logger.info("✓ Progress logger added (logs every 100 steps)")
+
+    # Throughput logging: logs perf/steps_per_sec and perf/samples_per_sec to wandb
+    perf_cfg = training_config.get("throughput")
+    if perf_cfg and bool(perf_cfg.get("enabled", True)):
+        callbacks.append(
+            ThroughputLoggingCallback(
+                ThroughputLoggingConfig(
+                    enabled=True,
+                    log_every_n_steps=int(perf_cfg.get("log_every_n_steps", 10)),
+                )
+            )
+        )
+        logger.info("✓ Throughput logger added")
 
     # Dataset usage logging: print dataset mix consumed between validations.
     usage_cfg = training_config.get("dataset_usage_logger")
