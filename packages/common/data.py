@@ -1055,29 +1055,21 @@ class OXEDataModule(pl.LightningDataModule):
         self,
         offset: int,
         prefetch_buffer: int,
-        # New multi-dataset format
-        datasets: Optional[list] = None,
-        # Legacy single-dataset format (still supported)
-        dataset_name: Optional[str] = None,
-        gcs_path: Optional[str] = None,
-        train_split: str = "train[:90%]",
-        val_split: str = "train[90%:]",
-        samples_per_episode: int = 0,
-        sampling_seed: Optional[int] = None,
-        image_size: int = 256,
-        batch_size: int = 32,
-        num_workers: int = 0,  # IterableDataset + tf.data handles parallelism
-        episode_shuffle_buffer: int = 500,
-        pair_shuffle_buffer: int = 1000,
-        val_episode_shuffle_buffer: int = 0,
-        val_pair_shuffle_buffer: int = 0,
-        return_metadata: bool = True,
-        persistent_iterator: bool = True,
-        num_parallel_episodes: int = 4,
-        # Legacy parameters (ignored but kept for config compatibility)
-        name: Optional[str] = None,
-        task: Optional[str] = None,
-        **kwargs,
+        datasets: Optional[list],
+        samples_per_episode: int,
+        sampling_seed: Optional[int],
+        image_size: int,
+        batch_size: int,
+        num_workers: int,  # IterableDataset + tf.data handles parallelism
+        episode_shuffle_buffer: int,
+        pair_shuffle_buffer: int,
+        val_episode_shuffle_buffer: int,
+        val_pair_shuffle_buffer: int,
+        return_metadata: bool,
+        persistent_iterator: bool,
+        num_parallel_episodes: int,
+        num_parallel_calls: int,
+        episode_prefetch_buffer: int,
     ):
         """
         Args:
@@ -1088,10 +1080,6 @@ class OXEDataModule(pl.LightningDataModule):
                 - offset: Frame offset for pairs (REQUIRED)
                 - size: Precomputed dataset size (REQUIRED)
                 - weight: Sampling weight (default proportionate)
-            dataset_name: Name of OXE dataset (legacy single-dataset format)
-            gcs_path: Override GCS path (optional, uses registry default)
-            train_split: TFDS split for training (legacy format)
-            val_split: TFDS split for validation (legacy format)
             offset: Default frame offset for pairs (in steps)
             image_size: Target image size (will resize)
             batch_size: Batch size for dataloaders
@@ -1104,22 +1092,7 @@ class OXEDataModule(pl.LightningDataModule):
         """
         super().__init__()
 
-        # Normalize config: convert legacy format to list-based format
-        if datasets is not None:
-            # New multi-dataset format
-            self.dataset_configs = list(datasets)
-        elif dataset_name is not None:
-            # Legacy single-dataset format -> convert to list
-            self.dataset_configs = [{
-                "name": dataset_name,
-                "train_split": train_split,
-                "val_split": val_split,
-                "weight": 1.0,
-                "gcs_path": gcs_path,
-            }]
-        else:
-            raise ValueError("Must provide either 'datasets' list or 'dataset_name'")
-
+        self.dataset_configs = list(datasets)
         self.offset = offset
         self.samples_per_episode = samples_per_episode
         self.sampling_seed = sampling_seed
@@ -1134,6 +1107,8 @@ class OXEDataModule(pl.LightningDataModule):
         self.return_metadata = return_metadata
         self.persistent_iterator = persistent_iterator
         self.num_parallel_episodes = num_parallel_episodes
+        self.num_parallel_calls = num_parallel_calls
+        self.episode_prefetch_buffer=episode_prefetch_buffer
 
         # Will be set in setup()
         self.train_dataset = None
@@ -1146,16 +1121,6 @@ class OXEDataModule(pl.LightningDataModule):
         if len(self.dataset_configs) == 1:
             # Single dataset - use simple implementation
             cfg = self.dataset_configs[0]
-
-            # Validate required fields
-            if "train_split" not in cfg:
-                raise ValueError(f"Dataset '{cfg['name']}' missing required 'train_split'")
-            if "val_split" not in cfg:
-                raise ValueError(f"Dataset '{cfg['name']}' missing required 'val_split'")
-            if "offset" not in cfg:
-                raise ValueError(f"Dataset '{cfg['name']}' missing required 'offset'")
-            if "size" not in cfg:
-                raise ValueError(f"Dataset '{cfg['name']}' missing required 'size'")
 
             self.train_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
@@ -1172,6 +1137,8 @@ class OXEDataModule(pl.LightningDataModule):
                 seed=cfg.get("seed", self.sampling_seed),
                 precomputed_size=cfg["size"],
                 num_parallel_episodes=self.num_parallel_episodes,
+                num_parallel_calls=self.num_parallel_calls,
+                episode_prefetch_buffer=self.episode_prefetch_buffer,
             )
             self.val_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
@@ -1188,6 +1155,8 @@ class OXEDataModule(pl.LightningDataModule):
                 seed=cfg.get("seed", self.sampling_seed),
                 precomputed_size=cfg["size"],
                 num_parallel_episodes=self.num_parallel_episodes,
+                num_parallel_calls=self.num_parallel_calls,
+                episode_prefetch_buffer=self.episode_prefetch_buffer,
             )
             logger.info(f"✓ OXE DataModule initialized (single dataset)")
             logger.info(f"  - Dataset: {cfg['name']}")
@@ -1207,6 +1176,9 @@ class OXEDataModule(pl.LightningDataModule):
                 samples_per_episode=self.samples_per_episode,
                 seed=self.sampling_seed,
                 num_parallel_episodes=self.num_parallel_episodes,
+                num_parallel_calls=self.num_parallel_calls,
+                episode_prefetch_buffer=self.episode_prefetch_buffer,
+
             )
             self.val_dataset = MultiOXEFramePairDataset(
                 datasets=self.dataset_configs,
@@ -1220,6 +1192,8 @@ class OXEDataModule(pl.LightningDataModule):
                 samples_per_episode=self.samples_per_episode,
                 seed=self.sampling_seed,
                 num_parallel_episodes=self.num_parallel_episodes,
+                num_parallel_calls=self.num_parallel_calls,
+                episode_prefetch_buffer=self.episode_prefetch_buffer,
             )
             dataset_names = [cfg["name"] for cfg in self.dataset_configs]
             logger.info(f"✓ OXE DataModule initialized (multi-dataset)")

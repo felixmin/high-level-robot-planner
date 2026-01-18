@@ -39,3 +39,9 @@ prefetch_buffer: 16              # Increased for better I/O overlap
 persistent_iterator: true        # Keep iterator alive to avoid shuffle buffer refill
 samples_per_episode: 1           # LAPA-style: sample N pairs per episode (0 = all pairs)
 return_metadata: true            # Required for validation strategies
+sampling_seed: 42
+episode_prefetch_buffer: 0
+num_parallel_episodes: 1
+num_parallel_calls: 1
+val_episode_shuffle_buffer: 0
+val_pair_shuffle_buffer: 0

@@ -49,6 +49,53 @@ Key features:
 
 logger = logging.getLogger(__name__)
 
+# TensorFlow is used only for data input pipelines. When training with PyTorch on GPU,
+# letting TF see GPUs can trigger expensive device initialization/JIT compilation and
+# can contend for GPU memory. We disable TF GPU visibility once per process.
+_TF_GPU_DISABLED = False
+_TF_GPU_DISABLE_ERROR_LOGGED = False
+
+
+def _import_tensorflow_cpu_only():
+    import os
+    import sys
+
+    global _TF_GPU_DISABLED
+    global _TF_GPU_DISABLE_ERROR_LOGGED
+
+    tf = sys.modules.get("tensorflow")
+    if tf is not None:
+        if not _TF_GPU_DISABLED:
+            try:
+                tf.config.set_visible_devices([], "GPU")
+            except Exception as e:
+                if not _TF_GPU_DISABLE_ERROR_LOGGED:
+                    logger.info(f"TensorFlow GPU disable failed (tensorflow already imported): {e}")
+                    _TF_GPU_DISABLE_ERROR_LOGGED = True
+                pass
+            _TF_GPU_DISABLED = True
+        return tf
+
+    prev_cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    try:
+        import tensorflow as tf  # noqa: F401
+    finally:
+        if prev_cvd is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = prev_cvd
+
+    try:
+        tf.config.set_visible_devices([], "GPU")
+    except Exception as e:
+        if not _TF_GPU_DISABLE_ERROR_LOGGED:
+            logger.info(f"TensorFlow GPU disable failed (after import): {e}")
+            _TF_GPU_DISABLE_ERROR_LOGGED = True
+        pass
+    _TF_GPU_DISABLED = True
+    return tf
+
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, Optional, Tuple
 
@@ -214,44 +261,32 @@ class OXEFramePairDataset(IterableDataset):
     def __init__(
         self,
         dataset_name: str,
+        gcs_path: Optional[str],
         split: str,
         offset: int,
         prefetch_buffer: int,
         episode_shuffle_buffer: int,
         pair_shuffle_buffer: int,
-        image_size: int = 256,
-        num_parallel_calls: Optional[int] = None,  # None = AUTOTUNE
-        return_metadata: bool = False,
-        gcs_path: Optional[str] = None,
-        persistent_iterator: bool = True,  # Keep iterator alive to avoid shuffle buffer refill
-        samples_per_episode: int = 0,
-        seed: Optional[int] = None,
-        precomputed_size: Optional[int] = None,  # Avoid TF init in __len__
-        episode_prefetch_buffer: int = 1,  # Phase 3: overlap episode fetch/decode
-        num_parallel_episodes: int = 4,  # Phase 4: parallel episode processing via interleave
+        image_size: int,
+        num_parallel_calls: int,  # -1 = AUTOTUNE
+        return_metadata: bool,
+        persistent_iterator: bool,  # Keep iterator alive to avoid shuffle buffer refill
+        samples_per_episode: int,
+        seed: Optional[int],
+        precomputed_size: Optional[int],  # Avoid TF init in __len__
+        episode_prefetch_buffer: int,  # Phase 3: overlap episode fetch/decode
+        num_parallel_episodes: int,  # Phase 4: parallel episode processing via interleave
     ):
         super().__init__()
 
-        if dataset_name not in OXE_DATASETS and gcs_path is None:
+        if dataset_name not in OXE_DATASETS:
             raise ValueError(
                 f"Unknown dataset: {dataset_name}. "
                 f"Available: {list(OXE_DATASETS.keys())} or provide gcs_path"
             )
 
         self.config = OXE_DATASETS.get(dataset_name)
-        if gcs_path is not None:
-            # Override GCS path if provided
-            if self.config is None:
-                self.config = OXEDatasetConfig(name=dataset_name, gcs_path=gcs_path)
-            else:
-                self.config = OXEDatasetConfig(
-                    name=self.config.name,
-                    gcs_path=gcs_path,
-                    image_key=self.config.image_key,
-                    instruction_key=self.config.instruction_key,
-                    image_shape=self.config.image_shape,
-                    control_frequency_hz=self.config.control_frequency_hz,
-                )
+        self._gcs_path_override = gcs_path
 
         self.split = split
         self.offset = offset
@@ -324,7 +359,8 @@ class OXEFramePairDataset(IterableDataset):
         # Disable GPU for tf.data (we only use CPU for data loading)
         tf.config.set_visible_devices([], "GPU")
 
-        self._builder = tfds.builder_from_directory(self.config.gcs_path)
+        gcs_path = self._gcs_path_override or self.config.gcs_path
+        self._builder = tfds.builder_from_directory(gcs_path)
         self._num_episodes = self._builder.info.splits[
             self.split.split("[")[0]
         ].num_examples
@@ -352,11 +388,32 @@ class OXEFramePairDataset(IterableDataset):
         The per-episode pipeline must be TF-native (no `.numpy()`, no Python lists)
         so it can be traced safely by tf.data.
         """
-        import tensorflow as tf
+        tf = _import_tensorflow_cpu_only()
+
+        self._init_rng_for_worker()
 
         self._init_tfds()
-        self._init_rng_for_worker()
-        ds = self._builder.as_dataset(split=self.split)
+
+        import tensorflow_datasets as tfds
+
+        num_parallel_episodes = int(self.num_parallel_episodes)
+        num_parallel_calls = int(self.num_parallel_calls)
+        if num_parallel_calls == -1:
+            num_parallel_calls_tf = tf.data.AUTOTUNE
+        elif num_parallel_calls <= 0:
+            raise ValueError(
+                "OXEFramePairDataset.num_parallel_calls must be -1 (AUTOTUNE) or a positive integer."
+            )
+        else:
+            num_parallel_calls_tf = num_parallel_calls
+
+        read_config = tfds.ReadConfig(
+            try_autocache=False,
+            interleave_cycle_length=max(1, num_parallel_episodes),
+            num_parallel_calls_for_interleave_files=num_parallel_calls_tf,
+            num_parallel_calls_for_decode=num_parallel_calls_tf,
+        )
+        ds = self._builder.as_dataset(split=self.split, read_config=read_config)
 
         # Shard episodes across DataLoader workers to avoid duplicates when num_workers > 0.
         worker_info = torch.utils.data.get_worker_info()
@@ -385,10 +442,7 @@ class OXEFramePairDataset(IterableDataset):
         instruction_in_step = bool(self.config.instruction_in_step)
         robot_key = self.config.robot_key
         samples_per_episode = int(self.samples_per_episode) if self.samples_per_episode else 0
-        num_parallel_episodes = int(self.num_parallel_episodes)
-        num_parallel_calls = (
-            self.num_parallel_calls if self.num_parallel_calls is not None else tf.data.AUTOTUNE
-        )
+        num_parallel_calls = num_parallel_calls_tf
 
         offset_tf = tf.constant(offset, dtype=tf.int32)
         dataset_name_tf = tf.constant(dataset_name, dtype=tf.string)
@@ -424,6 +478,20 @@ class OXEFramePairDataset(IterableDataset):
             frame = tf.cond(needs_resize, _do_resize, lambda: tf.cast(frame, tf.uint8))
             return tf.ensure_shape(frame, [image_size, image_size, 3])
 
+        def _resize_frames_batch(frames: tf.Tensor) -> tf.Tensor:
+            frames = tf.cast(frames, tf.uint8)
+            shape = tf.shape(frames)
+            h = shape[1]
+            w = shape[2]
+            needs_resize = tf.logical_or(tf.not_equal(h, image_size), tf.not_equal(w, image_size))
+
+            def _do_resize():
+                resized = tf.image.resize(frames, [image_size, image_size])
+                return tf.cast(resized, tf.uint8)
+
+            frames = tf.cond(needs_resize, _do_resize, lambda: tf.cast(frames, tf.uint8))
+            return tf.ensure_shape(frames, [None, image_size, image_size, 3])
+
         worker_id = worker_info.id if worker_info is not None else 0
         num_shards = worker_info.num_workers if worker_info is not None else 1
         worker_id_tf = tf.constant(int(worker_id), dtype=tf.int32)
@@ -437,23 +505,6 @@ class OXEFramePairDataset(IterableDataset):
         def process_episode_to_pairs(ep_idx, episode):
             steps_ds = episode["steps"]
 
-            frames_ds = steps_ds.map(
-                lambda s: s["observation"][image_key],
-                num_parallel_calls=num_parallel_calls,
-            )
-            frames_ds = frames_ds.map(_resize_frame, num_parallel_calls=num_parallel_calls)
-            pairs_ds = tf.data.Dataset.zip((frames_ds, frames_ds.skip(offset))).map(
-                lambda f_t, f_tp: tf.ensure_shape(tf.stack([f_t, f_tp], axis=0), [2, image_size, image_size, 3]),
-                num_parallel_calls=num_parallel_calls,
-            )
-
-            if not return_metadata:
-                if samples_per_episode > 0:
-                    pairs_ds = pairs_ds.shuffle(per_episode_sample_shuffle, seed=self._tf_seed).take(
-                        samples_per_episode
-                    )
-                return pairs_ds
-
             episode_id_tf = tf.strings.join(
                 [
                     dataset_name_tf,
@@ -466,11 +517,64 @@ class OXEFramePairDataset(IterableDataset):
                 ]
             )
 
+            if not return_metadata:
+                frames_ds = steps_ds.map(
+                    lambda s: s["observation"][image_key],
+                    num_parallel_calls=num_parallel_calls,
+                )
+                frames_ds = frames_ds.batch(8).map(
+                    _resize_frames_batch, num_parallel_calls=num_parallel_calls
+                ).unbatch()
+
+                dummy_pair = tf.zeros([2, image_size, image_size, 3], dtype=tf.uint8)
+
+                def _init_state():
+                    frames_ta = tf.TensorArray(
+                        tf.uint8,
+                        size=offset,
+                        element_shape=(image_size, image_size, 3),
+                        clear_after_read=False,
+                    )
+                    step_idx = tf.constant(0, dtype=tf.int32)
+                    return frames_ta, step_idx
+
+                def _scan_fn(state, frame):
+                    frames_ta, step_idx = state
+                    pos = tf.math.mod(step_idx, offset_tf)
+                    ready = tf.greater_equal(step_idx, offset_tf)
+
+                    def _emit():
+                        start_frame = frames_ta.read(pos)
+                        pair = tf.stack([start_frame, frame], axis=0)
+                        pair = tf.ensure_shape(pair, [2, image_size, image_size, 3])
+                        return pair
+
+                    out_pair = tf.cond(ready, _emit, lambda: dummy_pair)
+                    frames_ta = frames_ta.write(pos, frame)
+                    return (frames_ta, step_idx + 1), out_pair
+
+                pairs_ds = frames_ds.scan(_init_state(), _scan_fn).skip(offset)
+                if samples_per_episode > 0:
+                    pairs_ds = pairs_ds.shuffle(
+                        per_episode_sample_shuffle, seed=self._tf_seed
+                    ).take(samples_per_episode)
+                return pairs_ds
+
             if robot_key:
                 robot_raw = episode["episode_metadata"][robot_key]
                 robot_tf = robot_raw if robot_raw.dtype == tf.string else tf.strings.as_string(robot_raw)
             else:
                 robot_tf = tf.constant("", dtype=tf.string)
+
+            def _extract_language(step):
+                if instruction_in_step:
+                    instr = step[instruction_key]
+                else:
+                    instr = step["observation"][instruction_key]
+                # String tensor (Bridge/RT-1) vs encoded ints (language_table)
+                if instr.dtype != tf.string:
+                    instr = tf.strings.unicode_encode(tf.cast(instr, tf.int32), "UTF-8")
+                return _strip_null_bytes(instr)
 
             def _extract_action(step):
                 if action_is_dict:
@@ -487,47 +591,105 @@ class OXEFramePairDataset(IterableDataset):
                 s = tf.cast(tf.reshape(s, [-1])[:state_dim], tf.float32)
                 return tf.ensure_shape(s, [state_dim])
 
-            actions_ds = steps_ds.map(_extract_action, num_parallel_calls=num_parallel_calls)
-            states_ds = steps_ds.map(_extract_state, num_parallel_calls=num_parallel_calls)
+            # Single-pass episode processing:
+            # Use a ring buffer via `Dataset.scan()` to emit endpoint pairs [t, t+offset]
+            # without building sliding windows of full image tensors (which can be very slow
+            # and memory-heavy for larger offsets).
+            def _step_to_features(step):
+                frame = step["observation"][image_key]
+                action = _extract_action(step)
+                state = _extract_state(step)
+                language = _extract_language(step)
+                return frame, action, state, language
 
-            # Sum actions[t : t+offset] (length offset) for each pair index t.
-            cumulative_action_ds = (
-                actions_ds.window(size=offset, shift=1, drop_remainder=True)
-                .flat_map(lambda w: w.batch(offset))
-                .map(lambda x: tf.reduce_sum(x, axis=0), num_parallel_calls=num_parallel_calls)
-            )
+            features_ds = steps_ds.map(_step_to_features, num_parallel_calls=num_parallel_calls)
 
-            if instruction_in_step:
-                language_ds = steps_ds.map(
-                    lambda s: _strip_null_bytes(s[instruction_key]),
-                    num_parallel_calls=num_parallel_calls,
+            def _resize_features_batch(frames, actions, states, languages):
+                return _resize_frames_batch(frames), actions, states, languages
+
+            features_ds = features_ds.batch(8).map(
+                _resize_features_batch, num_parallel_calls=num_parallel_calls
+            ).unbatch()
+
+            dummy_pair = tf.zeros([2, image_size, image_size, 3], dtype=tf.uint8)
+            dummy_action = tf.zeros([action_dim], dtype=tf.float32)
+            dummy_state = tf.zeros([state_dim], dtype=tf.float32)
+            dummy_lang = tf.constant("", dtype=tf.string)
+            dummy_idx = tf.constant(-1, dtype=tf.int32)
+
+            def _init_state():
+                frames_ta = tf.TensorArray(
+                    tf.uint8,
+                    size=offset,
+                    element_shape=(image_size, image_size, 3),
+                    clear_after_read=False,
                 )
-            else:
-                def _extract_obs_language(step):
-                    instr = step["observation"][instruction_key]
-                    if dataset_name in {
-                        "language_table",
-                        "language_table_blocktorelative_oracle_sim",
-                        "language_table_blocktoblock_oracle_sim",
-                        "language_table_blocktoabsolute_oracle_sim",
-                    }:
-                        instr = tf.strings.unicode_encode(tf.cast(instr, tf.int32), "UTF-8")
-                    return _strip_null_bytes(instr)
+                actions_ta = tf.TensorArray(
+                    tf.float32,
+                    size=offset,
+                    element_shape=(action_dim,),
+                    clear_after_read=False,
+                )
+                states_ta = tf.TensorArray(
+                    tf.float32,
+                    size=offset,
+                    element_shape=(state_dim,),
+                    clear_after_read=False,
+                )
+                langs_ta = tf.TensorArray(
+                    tf.string,
+                    size=offset,
+                    element_shape=(),
+                    clear_after_read=False,
+                )
+                action_sum = tf.zeros([action_dim], dtype=tf.float32)
+                step_idx = tf.constant(0, dtype=tf.int32)
+                return frames_ta, actions_ta, states_ta, langs_ta, action_sum, step_idx
 
-                language_ds = (
-                    steps_ds.map(_extract_obs_language, num_parallel_calls=num_parallel_calls)
-                    .take(1)
-                    .repeat()
+            def _scan_fn(state, features):
+                frames_ta, actions_ta, states_ta, langs_ta, action_sum, step_idx = state
+                frame, action, obs_state, language = features
+
+                pos = tf.math.mod(step_idx, offset_tf)
+                ready = tf.greater_equal(step_idx, offset_tf)
+
+                def _emit():
+                    start_frame = frames_ta.read(pos)
+                    start_state = states_ta.read(pos)
+                    start_lang = langs_ta.read(pos)
+                    pair = tf.stack([start_frame, frame], axis=0)
+                    pair = tf.ensure_shape(pair, [2, image_size, image_size, 3])
+                    frame_idx = tf.cast(step_idx - offset_tf, tf.int32)
+                    return pair, frame_idx, action_sum, start_state, start_lang
+
+                out_pair, out_frame_idx, out_action, out_init_state, out_lang = tf.cond(
+                    ready,
+                    _emit,
+                    lambda: (dummy_pair, dummy_idx, dummy_action, dummy_state, dummy_lang),
                 )
 
-            pairs_enum_ds = pairs_ds.enumerate()
-            zipped = tf.data.Dataset.zip((pairs_enum_ds, cumulative_action_ds, states_ds, language_ds))
+                old_action = tf.cond(ready, lambda: actions_ta.read(pos), lambda: dummy_action)
+                action_sum = action_sum + action - old_action
 
-            def _attach_meta(pair_enum, cumulative_action, initial_state, language):
-                frame_idx, pair = pair_enum
+                frames_ta = frames_ta.write(pos, frame)
+                actions_ta = actions_ta.write(pos, action)
+                states_ta = states_ta.write(pos, obs_state)
+                langs_ta = langs_ta.write(pos, language)
+
+                return (frames_ta, actions_ta, states_ta, langs_ta, action_sum, step_idx + 1), (
+                    out_pair,
+                    out_frame_idx,
+                    out_action,
+                    out_init_state,
+                    out_lang,
+                )
+
+            scanned_ds = features_ds.scan(_init_state(), _scan_fn).skip(offset)
+
+            def _to_pair_and_meta(pair, frame_idx, cumulative_action, initial_state, language):
                 meta = {
                     "episode_id": episode_id_tf,
-                    "frame_idx": tf.cast(frame_idx, tf.int32),
+                    "frame_idx": frame_idx,
                     "offset": offset_tf,
                     "language": language,
                     "dataset_type": dataset_name_tf,
@@ -538,15 +700,16 @@ class OXEFramePairDataset(IterableDataset):
                 }
                 return pair, meta
 
-            out_ds = zipped.map(_attach_meta, num_parallel_calls=num_parallel_calls)
+            out_ds = scanned_ds.map(_to_pair_and_meta, num_parallel_calls=num_parallel_calls)
             if samples_per_episode > 0:
                 out_ds = out_ds.shuffle(per_episode_sample_shuffle, seed=self._tf_seed).take(samples_per_episode)
             return out_ds
 
         tf_ds = ds.interleave(
             process_episode_to_pairs,
-            cycle_length=num_parallel_episodes,
-            num_parallel_calls=tf.data.AUTOTUNE,
+            cycle_length=max(1, num_parallel_episodes),
+            block_length=1,
+            num_parallel_calls=num_parallel_calls,
             deterministic=False,
         )
 
@@ -555,8 +718,12 @@ class OXEFramePairDataset(IterableDataset):
             tf_ds = tf_ds.shuffle(self.pair_shuffle_buffer, seed=self._tf_seed)
 
         # Prefetch for performance
-        prefetch_val = self.prefetch_buffer if self.prefetch_buffer > 0 else tf.data.AUTOTUNE
-        return tf_ds.prefetch(prefetch_val)
+        prefetch_buffer = int(self.prefetch_buffer)
+        if prefetch_buffer == -1:
+            return tf_ds.prefetch(tf.data.AUTOTUNE)
+        if prefetch_buffer <= 0:
+            return tf_ds
+        return tf_ds.prefetch(prefetch_buffer)
 
     def _get_or_create_pipeline(self):
         """Get existing pipeline or create new one (lazy, persistent)."""
@@ -648,36 +815,49 @@ class OXEFramePairDataset(IterableDataset):
             return str(val) if val else ""
 
         # Cache known values to avoid per-sample .numpy() calls
-        dataset_name = self.config.name
+        default_dataset_name = self.config.name
         offset = self.offset
 
         for item in tf_iter:
             if self.return_metadata:
                 pair_tf, meta_tf = item
-                pair_np = pair_tf.numpy()
-                pair_pt = (
-                    torch.from_numpy(pair_np).permute(3, 0, 1, 2).float() / 255.0
-                )
+                try:
+                    pair_pt = torch.utils.dlpack.from_dlpack(
+                        tf.experimental.dlpack.to_dlpack(pair_tf)
+                    ).permute(3, 0, 1, 2)
+                except Exception:
+                    pair_np = pair_tf.numpy()
+                    pair_pt = torch.from_numpy(pair_np).permute(3, 0, 1, 2)
 
                 episode_id = _decode_str(meta_tf["episode_id"].numpy())
                 language = _decode_str(meta_tf["language"].numpy())
                 robot = _decode_str(meta_tf["robot"].numpy())
+                dataset_name = (
+                    _decode_str(meta_tf["dataset_name"].numpy())
+                    if "dataset_name" in meta_tf
+                    else default_dataset_name
+                ) or default_dataset_name
 
                 meta = {
                     "episode_id": episode_id,
                     "frame_idx": int(meta_tf["frame_idx"].numpy()),
                     "offset": offset,
                     "language": language,
-                    "dataset_type": dataset_name,
                     "dataset_name": dataset_name,
+                    "dataset_type": dataset_name,
                     "action": meta_tf["action"].numpy(),
                     "initial_state": meta_tf["initial_state"].numpy(),
                     "robot": robot,
                 }
                 yield {"frames": pair_pt, **meta}
             else:
-                pair_np = item.numpy()
-                yield torch.from_numpy(pair_np).permute(3, 0, 1, 2).float() / 255.0
+                try:
+                    yield torch.utils.dlpack.from_dlpack(
+                        tf.experimental.dlpack.to_dlpack(item)
+                    ).permute(3, 0, 1, 2)
+                except Exception:
+                    pair_np = item.numpy()
+                    yield torch.from_numpy(pair_np).permute(3, 0, 1, 2)
 
 
 class MultiOXEFramePairDataset(IterableDataset):
@@ -690,38 +870,40 @@ class MultiOXEFramePairDataset(IterableDataset):
     Args:
         datasets: List of dataset configs, each with:
             - name: Dataset name (e.g., "bridge", "language_table")
-            - train_split: TFDS split string for training (REQUIRED)
-            - val_split: TFDS split string for validation (REQUIRED)
+            - train_split: TFDS split string for training
+            - val_split: TFDS split string for validation
             - weight: Sampling weight (default proportionate)
-            - offset: Frame offset for pairs (REQUIRED)
-            - size: Precomputed dataset size (REQUIRED)
+            - offset: Frame offset for pairs
+            - size: Precomputed dataset size
         image_size: Target image size (shared)
         prefetch_buffer: tf.data prefetch buffer size
-        episode_shuffle_buffer: Shuffle buffer for episodes (REQUIRED)
-        pair_shuffle_buffer: Shuffle buffer for pairs/samples (REQUIRED)
+        episode_shuffle_buffer: Shuffle buffer for episodes
+        pair_shuffle_buffer: Shuffle buffer for pairs/samples
         return_metadata: If True, return dict with metadata
         is_train: If True, use train_split; else use val_split
-        num_parallel_episodes: Number of episodes to process in parallel (default: 4)
+        num_parallel_episodes: Number of episodes to process in parallel
     """
 
     def __init__(
         self,
         datasets: list,
         prefetch_buffer: int,
+        episode_prefetch_buffer: int,
         episode_shuffle_buffer: int,
         pair_shuffle_buffer: int,
-        image_size: int = 256,
-        return_metadata: bool = True,
-        is_train: bool = True,
-        persistent_iterator: bool = True,  # Keep iterators alive to avoid shuffle buffer refill
-        samples_per_episode: int = 0,
-        seed: Optional[int] = None,
-        num_parallel_episodes: int = 4,
+        image_size: int,
+        return_metadata: bool,
+        is_train: bool,
+        persistent_iterator: bool,  # Keep iterators alive to avoid shuffle buffer refill
+        samples_per_episode: int,
+        seed: Optional[int],
+        num_parallel_episodes: int,
+        num_parallel_calls: int,
     ):
         super().__init__()
 
-        self.dataset_configs = datasets
         self.image_size = image_size
+        self.dataset_configs = datasets
         self.prefetch_buffer = prefetch_buffer
         self.return_metadata = return_metadata
         self.is_train = is_train
@@ -729,12 +911,16 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.samples_per_episode = samples_per_episode
         self.seed = seed
         self.num_parallel_episodes = num_parallel_episodes
+        self.num_parallel_calls = num_parallel_calls
+        self.episode_prefetch_buffer = episode_prefetch_buffer
         self.episode_shuffle_buffer = episode_shuffle_buffer
         self.pair_shuffle_buffer = pair_shuffle_buffer
 
         # Will be populated lazily
         self._datasets = None
         self._weights = None
+        self._persistent_pipeline = None
+        self._pipeline_iterator = None
 
     def _init_datasets(self):
         """Initialize individual datasets lazily."""
@@ -745,52 +931,57 @@ class MultiOXEFramePairDataset(IterableDataset):
 
         # Compute per-dataset shuffle buffers
         n_datasets = len(self.dataset_configs)
-        episode_buffer_per_ds = max(10, self.episode_shuffle_buffer // n_datasets) if self.is_train else 0
-        pair_buffer_per_ds = max(10, self.pair_shuffle_buffer // n_datasets) if self.is_train else 0
+        episode_prefetch_buffer = self.episode_prefetch_buffer // n_datasets if self.is_train else 0
+        if self.is_train and self.episode_shuffle_buffer > 0:
+            episode_buffer_per_ds = max(1, self.episode_shuffle_buffer // n_datasets)
+        else:
+            episode_buffer_per_ds = 0
+        # For multi-dataset sampling we apply ONE global pair shuffle buffer after
+        # tf.data mixes datasets. Avoid per-dataset pair shuffle buffers which
+        # multiply startup time and memory usage.
+        pair_buffer_per_ds = 0
+
+        # Avoid oversubscribing CPU/threadpools: each underlying dataset has its own
+        # interleave/map parallelism. If we pass the full parallelism to every dataset,
+        # total concurrency multiplies by number of datasets and can slow down.
+        if n_datasets > 0:
+            num_parallel_episodes_per_ds = max(1, int(self.num_parallel_episodes) // n_datasets)
+            if int(self.num_parallel_calls) == -1:
+                num_parallel_calls_per_ds = -1
+            else:
+                num_parallel_calls_per_ds = max(1, int(self.num_parallel_calls) // n_datasets)
+        else:
+            num_parallel_episodes_per_ds = int(self.num_parallel_episodes)
+            num_parallel_calls_per_ds = int(self.num_parallel_calls)
+
+        # Prefetch at the mixed pipeline level (one place). Avoid per-dataset
+        # prefetch buffers which multiply memory usage.
+        prefetch_buffer_per_ds = 0
 
         for cfg in self.dataset_configs:
-            # Require train_split and val_split explicitly
-            if "train_split" not in cfg:
-                raise ValueError(
-                    f"Dataset '{cfg['name']}' is missing required 'train_split' field."
-                )
-            if "val_split" not in cfg:
-                raise ValueError(
-                    f"Dataset '{cfg['name']}' is missing required 'val_split' field."
-                )
 
             # Get split based on train/val mode
             split = cfg["train_split"] if self.is_train else cfg["val_split"]
 
-            # Offset is required for each dataset
-            if "offset" not in cfg:
-                raise ValueError(
-                    f"Dataset '{cfg['name']}' is missing required 'offset' field. "
-                    f"Please specify offset in config/data/oxe/{cfg['name']}.yaml"
-                )
-
-            if "size" not in cfg or cfg["size"] is None:
-                raise ValueError(
-                    f"Dataset '{cfg['name']}' is missing required 'size' field. "
-                    f"Please specify size in config/data/oxe/{cfg['name']}.yaml"
-                )
             precomputed_size = int(cfg["size"])
 
             ds = OXEFramePairDataset(
-                dataset_name=cfg["name"],
-                split=split,
                 image_size=self.image_size,
+                dataset_name=cfg["name"],
+                gcs_path=cfg.get("gcs_path"),
+                split=split,
                 offset=cfg["offset"],
-                prefetch_buffer=self.prefetch_buffer,
+                prefetch_buffer=prefetch_buffer_per_ds,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
-                samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
-                seed=self._get_dataset_seed(cfg),
+                samples_per_episode=self.samples_per_episode,
+                num_parallel_episodes=num_parallel_episodes_per_ds,
+                num_parallel_calls=num_parallel_calls_per_ds,
                 precomputed_size=precomputed_size,
-                episode_prefetch_buffer=cfg.get("episode_prefetch_buffer", 1),
-                num_parallel_episodes=cfg.get("num_parallel_episodes", self.num_parallel_episodes),
+                episode_prefetch_buffer=episode_prefetch_buffer,
                 episode_shuffle_buffer=episode_buffer_per_ds,
                 pair_shuffle_buffer=pair_buffer_per_ds,
+                seed=self._get_dataset_seed(cfg),
             )
             self._datasets.append(ds)
 
@@ -806,6 +997,71 @@ class MultiOXEFramePairDataset(IterableDataset):
         # Derive deterministic per-dataset seed from global seed + dataset name.
         name_hash = zlib.crc32(str(cfg.get("name", "")).encode("utf-8")) & 0x7FFFFFFF
         return (int(self.seed) + int(name_hash)) & 0x7FFFFFFF
+
+    def reset_iterator(self):
+        """Force reset the underlying iterator (useful for cyclic sampling)."""
+        self._pipeline_iterator = None
+        if self._persistent_pipeline is not None:
+            self._pipeline_iterator = iter(self._persistent_pipeline)
+
+    def _create_tf_pipeline(self):
+        """
+        Create a single tf.data pipeline that mixes datasets with weights.
+
+        This avoids Python-side per-sample selection (which blocks parallelism)
+        and allows tf.data to overlap I/O and preprocessing across datasets.
+        """
+        tf = _import_tensorflow_cpu_only()
+
+        self._init_datasets()
+
+        tf_datasets = [ds._get_or_create_pipeline() for ds in self._datasets]
+        weights = [float(w) for w in self._weights]
+
+        seed = int(self.seed) if self.seed is not None else None
+        if seed is None:
+            mixed = tf.data.Dataset.sample_from_datasets(
+                tf_datasets,
+                weights=weights,
+                stop_on_empty_dataset=not self.is_train,
+            )
+        else:
+            mixed = tf.data.Dataset.sample_from_datasets(
+                tf_datasets,
+                weights=weights,
+                seed=seed,
+                stop_on_empty_dataset=not self.is_train,
+            )
+
+        if self.is_train:
+            mixed = mixed.repeat()
+
+            if self.pair_shuffle_buffer > 0:
+                if seed is None:
+                    mixed = mixed.shuffle(self.pair_shuffle_buffer)
+                else:
+                    mixed = mixed.shuffle(self.pair_shuffle_buffer, seed=seed)
+
+        prefetch_buffer = int(self.prefetch_buffer)
+        if prefetch_buffer == -1:
+            mixed = mixed.prefetch(tf.data.AUTOTUNE)
+        elif prefetch_buffer > 0:
+            mixed = mixed.prefetch(prefetch_buffer)
+
+        return mixed
+
+    def _get_or_create_pipeline(self):
+        if self._persistent_pipeline is None:
+            self._persistent_pipeline = self._create_tf_pipeline()
+        return self._persistent_pipeline
+
+    def _get_or_create_iterator(self):
+        tf_ds = self._get_or_create_pipeline()
+        if self.persistent_iterator:
+            if self._pipeline_iterator is None:
+                self._pipeline_iterator = iter(tf_ds)
+            return self._pipeline_iterator
+        return iter(tf_ds)
 
     def _compute_weights(
         self, datasets_config: list, sizes: list[int]
@@ -915,6 +1171,8 @@ class MultiOXEFramePairDataset(IterableDataset):
         datasets_to_cleanup = self._datasets
         self._datasets = None  # Clear reference first to prevent re-entry
         self._weights = None
+        self._persistent_pipeline = None
+        self._pipeline_iterator = None
 
         if datasets_to_cleanup is not None:
             for ds in datasets_to_cleanup:
@@ -936,54 +1194,45 @@ class MultiOXEFramePairDataset(IterableDataset):
             pass
 
     def __iter__(self):
-        """Interleave samples from all datasets based on weights with CYCLIC sampling."""
-        import random as _random
+        tf = _import_tensorflow_cpu_only()
+        tf_iter = self._get_or_create_iterator()
 
-        self._init_datasets()
+        def _decode_str(val) -> str:
+            if isinstance(val, bytes):
+                return val.decode("utf-8").rstrip("\x00")
+            return str(val) if val else ""
 
-        # Create iterators for each dataset
-        # NOTE: If iterators are already active (persistent), this continues them.
-        iterators = [iter(ds) for ds in self._datasets]
-        rng = _random.Random(self.seed) if self.seed is not None else _random.Random()
-        
-        # We loop for exactly __len__ steps to define the epoch length.
-        # This prevents distribution shift: even if a dataset runs out,
-        # we restart it so the mixing weights remain constant.
-        steps_total = len(self)
-        
-        for _ in range(steps_total):
-            # Choose dataset based on weights
-            # We select from ALL datasets, not just "active" ones
-            r = rng.random()
-            cumsum = 0
-            dataset_idx = 0
-            for i, w in enumerate(self._weights):
-                cumsum += w
-                if r <= cumsum:
-                    dataset_idx = i
-                    break
-            
-            # Fetch item from chosen dataset, handling exhaustion by cycling
-            try:
-                item = next(iterators[dataset_idx])
-                yield item
-            except StopIteration:
-                # Dataset exhausted: restart it immediately (Cycle)
-                # 1. Force reset the underlying iterator in the dataset object
-                self._datasets[dataset_idx].reset_iterator()
-                # 2. Get the new iterator
-                iterators[dataset_idx] = iter(self._datasets[dataset_idx])
-                # 3. Retry fetching (assumes dataset is not empty)
+        for item in tf_iter:
+            if self.return_metadata:
+                pair_tf, meta_tf = item
                 try:
-                    item = next(iterators[dataset_idx])
-                    yield item
-                except StopIteration as e:
-                    dataset_name = self.dataset_configs[dataset_idx].get(
-                        "name", f"dataset_{dataset_idx}"
-                    )
-                    raise RuntimeError(
-                        f"Dataset {dataset_name!r} is empty; cannot cycle iterator."
-                    ) from e
+                    pair_pt = torch.utils.dlpack.from_dlpack(
+                        tf.experimental.dlpack.to_dlpack(pair_tf)
+                    ).permute(3, 0, 1, 2)
+                except Exception:
+                    pair_np = pair_tf.numpy()
+                    pair_pt = torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+
+                meta = {
+                    "episode_id": _decode_str(meta_tf["episode_id"].numpy()),
+                    "frame_idx": int(meta_tf["frame_idx"].numpy()),
+                    "offset": int(meta_tf["offset"].numpy()),
+                    "language": _decode_str(meta_tf["language"].numpy()),
+                    "dataset_type": _decode_str(meta_tf["dataset_type"].numpy()),
+                    "dataset_name": _decode_str(meta_tf["dataset_name"].numpy()),
+                    "action": meta_tf["action"].numpy(),
+                    "initial_state": meta_tf["initial_state"].numpy(),
+                    "robot": _decode_str(meta_tf["robot"].numpy()),
+                }
+                yield {"frames": pair_pt, **meta}
+            else:
+                try:
+                    yield torch.utils.dlpack.from_dlpack(
+                        tf.experimental.dlpack.to_dlpack(item)
+                    ).permute(3, 0, 1, 2)
+                except Exception:
+                    pair_np = item.numpy()
+                    yield torch.from_numpy(pair_np).permute(3, 0, 1, 2)
 
 
 def get_oxe_dataset_info(dataset_name: str = "language_table") -> Dict[str, Any]:

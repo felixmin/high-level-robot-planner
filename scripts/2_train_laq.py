@@ -276,7 +276,7 @@ def main(cfg: DictConfig):
     profiler_type = None
     if training_config.get("profiler", {}).get("enabled", False):
         profiler_type = training_config.profiler.get("type", "simple")
-        dirpath = training_config.profiler.get("dirpath", "./profiles")
+        dirpath = str(output_dir / "profiles")
         filename = training_config.profiler.get("filename", "profile")
 
         if profiler_type == "simple":

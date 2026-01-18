@@ -238,6 +238,25 @@ class LAQTask(pl.LightningModule):
 
         return loss
 
+    def transfer_batch_to_device(
+        self,
+        batch: Any,
+        device: torch.device,
+        dataloader_idx: int,
+    ) -> Any:
+        batch = super().transfer_batch_to_device(batch, device, dataloader_idx)
+
+        if isinstance(batch, dict):
+            frames = batch.get("frames")
+            if isinstance(frames, torch.Tensor) and frames.dtype == torch.uint8:
+                batch["frames"] = frames.to(dtype=torch.float32).div_(255.0)
+            return batch
+
+        if isinstance(batch, torch.Tensor) and batch.dtype == torch.uint8:
+            return batch.to(dtype=torch.float32).div_(255.0)
+
+        return batch
+
     def validation_step(
         self,
         batch: torch.Tensor,
