@@ -348,8 +348,9 @@ class OXEFramePairDataset(IterableDataset):
         """
         Create tf.data pipeline for streaming frame pairs.
 
-        Phase 4: Uses interleave for parallel episode processing instead of
-        from_generator, enabling true parallelism across episodes.
+        Phase 4: Use `Dataset.interleave()` with a per-episode tf.data pipeline.
+        The per-episode pipeline must be TF-native (no `.numpy()`, no Python lists)
+        so it can be traced safely by tf.data.
         """
         import tensorflow as tf
 
@@ -362,288 +363,180 @@ class OXEFramePairDataset(IterableDataset):
         if worker_info is not None and worker_info.num_workers > 1:
             ds = ds.shard(num_shards=worker_info.num_workers, index=worker_info.id)
 
-        # Shuffle episodes if enabled (use episode_shuffle_buffer)
+        # Shuffle episodes
         if self.episode_shuffle_buffer > 0:
             ds = ds.shuffle(self.episode_shuffle_buffer, seed=self._tf_seed)
 
-        # Phase 3: Episode prefetch to overlap GCS fetch/decode with processing
-        # Keep buffer small (1-2) to avoid memory issues from prefetching whole episodes
+        # Prefetch episodes (keep small; each episode can be large)
         if self.episode_prefetch_buffer > 0:
             ds = ds.prefetch(self.episode_prefetch_buffer)
 
-        # Cache config values for use in closures
         image_key = self.config.image_key
         instruction_key = self.config.instruction_key
         state_key = self.config.state_key
-        offset = self.offset
-        image_size = self.image_size
-        return_metadata = self.return_metadata
+        offset = int(self.offset)
+        image_size = int(self.image_size)
+        return_metadata = bool(self.return_metadata)
         dataset_name = self.config.name
-        action_dim = self.config.action_dim
-        state_dim = self.config.state_dim
+        action_dim = int(self.config.action_dim)
+        state_dim = int(self.config.state_dim)
         action_key = self.config.action_key
-        action_is_dict = self.config.action_is_dict
-        instruction_in_step = self.config.instruction_in_step
+        action_is_dict = bool(self.config.action_is_dict)
+        instruction_in_step = bool(self.config.instruction_in_step)
         robot_key = self.config.robot_key
-        samples_per_episode = self.samples_per_episode
-        global_seed = self._tf_seed
-        num_parallel_episodes = self.num_parallel_episodes
+        samples_per_episode = int(self.samples_per_episode) if self.samples_per_episode else 0
+        num_parallel_episodes = int(self.num_parallel_episodes)
+        num_parallel_calls = (
+            self.num_parallel_calls if self.num_parallel_calls is not None else tf.data.AUTOTUNE
+        )
 
-        # Phase 4b: Stateless per-episode sampling for LAPA mode
-        # Seeded by (global_seed, episode_id) for determinism without shared state
-        def _stateless_sample_indices(episode_id_bytes: bytes, k: int, max_idx: int) -> list:
-            """Deterministic sampling based on episode identity."""
-            if global_seed is not None:
-                episode_hash = zlib.crc32(episode_id_bytes) & 0xFFFFFFFF
-                combined = (global_seed ^ episode_hash) & 0x7FFFFFFF
-            else:
-                combined = zlib.crc32(episode_id_bytes) & 0x7FFFFFFF
-            rng = random.Random(combined)
-            return rng.sample(range(max_idx), k=min(k, max_idx))
+        offset_tf = tf.constant(offset, dtype=tf.int32)
+        dataset_name_tf = tf.constant(dataset_name, dtype=tf.string)
+        per_episode_sample_shuffle = int(self.pair_shuffle_buffer) if self.pair_shuffle_buffer > 0 else 1000
+
+        def _strip_null_bytes(s: tf.Tensor) -> tf.Tensor:
+            s = tf.convert_to_tensor(s, dtype=tf.string)
+            return tf.strings.regex_replace(s, "\x00+$", "")
+
+        def _resize_pair(pair: tf.Tensor) -> tf.Tensor:
+            shape = tf.shape(pair)
+            h = shape[1]
+            w = shape[2]
+            needs_resize = tf.logical_or(tf.not_equal(h, image_size), tf.not_equal(w, image_size))
+
+            def _do_resize():
+                resized = tf.image.resize(pair, [image_size, image_size])
+                return tf.cast(resized, tf.uint8)
+
+            pair = tf.cond(needs_resize, _do_resize, lambda: tf.cast(pair, tf.uint8))
+            return tf.ensure_shape(pair, [2, image_size, image_size, 3])
+
+        def _resize_frame(frame: tf.Tensor) -> tf.Tensor:
+            shape = tf.shape(frame)
+            h = shape[0]
+            w = shape[1]
+            needs_resize = tf.logical_or(tf.not_equal(h, image_size), tf.not_equal(w, image_size))
+
+            def _do_resize():
+                resized = tf.image.resize(frame, [image_size, image_size])
+                return tf.cast(resized, tf.uint8)
+
+            frame = tf.cond(needs_resize, _do_resize, lambda: tf.cast(frame, tf.uint8))
+            return tf.ensure_shape(frame, [image_size, image_size, 3])
 
         def process_episode_to_pairs(episode):
-            """
-            Process a single episode and return a tf.data.Dataset of pairs.
+            steps_ds = episode["steps"]
 
-            Phase 4: This function is called by interleave, enabling parallel
-            episode processing. Each episode is processed independently.
-
-            Implementation notes:
-            - Uses .numpy() on tensors which requires eager execution (TF2 default).
-              When map_func returns a Dataset, interleave calls it in Python (not
-              graph-traced), so .numpy() works correctly.
-            - Materializes all pairs per episode into memory before yielding. This is
-              simpler than pure tf.data streaming but uses more memory per episode.
-              With num_parallel_episodes=4, peak memory ~ 4 episodes worth of frames.
-            - For a pure tf.data approach (no .numpy()), would need to convert all
-              RLDS tensor extraction to TF ops, which is complex due to heterogeneous
-              action formats and string handling across datasets.
-            """
-            episode_id_tensor = episode["episode_id"]
-            episode_id_bytes = (
-                episode_id_tensor.numpy()
-                if isinstance(episode_id_tensor, tf.Tensor)
-                else episode_id_tensor
+            frames_ds = steps_ds.map(
+                lambda s: s["observation"][image_key],
+                num_parallel_calls=num_parallel_calls,
             )
-            episode_id = (
-                episode_id_bytes.decode("utf-8")
-                if isinstance(episode_id_bytes, bytes)
-                else str(episode_id_bytes)
+            frames_ds = frames_ds.map(_resize_frame, num_parallel_calls=num_parallel_calls)
+            pairs_ds = tf.data.Dataset.zip((frames_ds, frames_ds.skip(offset))).map(
+                lambda f_t, f_tp: tf.ensure_shape(tf.stack([f_t, f_tp], axis=0), [2, image_size, image_size, 3]),
+                num_parallel_calls=num_parallel_calls,
             )
 
-            steps_list = list(episode["steps"])
-            n_steps = len(steps_list)
+            if not return_metadata:
+                if samples_per_episode > 0:
+                    pairs_ds = pairs_ds.shuffle(per_episode_sample_shuffle, seed=self._tf_seed).take(
+                        samples_per_episode
+                    )
+                return pairs_ds
 
-            # Skip episodes that are too short
-            min_steps = offset + 1
-            if n_steps < min_steps:
-                # Return empty dataset for short episodes
-                if return_metadata:
-                    return tf.data.Dataset.from_tensors(
-                        (
-                            tf.zeros((2, image_size, image_size, 3), dtype=tf.uint8),
-                            {
-                                "episode_id": "",
-                                "frame_idx": np.int32(-1),
-                                "offset": np.int32(offset),
-                                "language": "",
-                                "dataset_type": dataset_name,
-                                "dataset_name": dataset_name,
-                                "action": np.zeros(action_dim, dtype=np.float32),
-                                "initial_state": np.zeros(state_dim, dtype=np.float32),
-                                "robot": "",
-                            },
-                        )
-                    ).take(0)  # Empty dataset
-                else:
-                    return tf.data.Dataset.from_tensors(
-                        tf.zeros((2, image_size, image_size, 3), dtype=tf.uint8)
-                    ).take(0)
+            episode_id_tf = episode["episode_id"]
 
-            max_start_idx = n_steps - offset
+            if robot_key:
+                robot_raw = episode["episode_metadata"][robot_key]
+                robot_tf = robot_raw if robot_raw.dtype == tf.string else tf.strings.as_string(robot_raw)
+            else:
+                robot_tf = tf.constant("", dtype=tf.string)
 
-            # Extract robot type (episode-level metadata)
-            robot_type = ""
-            if return_metadata and robot_key:
-                robot_tensor = episode["episode_metadata"][robot_key]
-                robot_val = (
-                    robot_tensor.numpy()
-                    if isinstance(robot_tensor, tf.Tensor)
-                    else robot_tensor
-                )
-                robot_type = (
-                    robot_val.decode("utf-8")
-                    if isinstance(robot_val, bytes)
-                    else str(robot_val)
-                )
-
-            # Extract episode-level instruction
-            instruction = ""
-            if return_metadata:
-                first_step = steps_list[0]
-                if instruction_in_step:
-                    instruction = self._decode_tf_string(first_step[instruction_key])
-                else:
-                    instr_tensor = first_step["observation"][instruction_key]
-                    if instr_tensor.dtype == tf.string:
-                        instruction = instr_tensor.numpy().decode("utf-8").rstrip("\x00")
-                    else:
-                        instruction = (
-                            tf.strings.unicode_encode(
-                                tf.cast(instr_tensor, tf.int32), "UTF-8"
-                            )
-                            .numpy()
-                            .decode("utf-8")
-                            .rstrip("\x00")
-                        )
-
-            # Extract actions and compute prefix sums for O(1) cumulative action
-            action_prefix = None
-            states = None
-            step_instructions = None
-            if return_metadata:
+            def _extract_action(step):
                 if action_is_dict:
                     if not action_key:
-                        raise ValueError(
-                            "Config error: action_is_dict=True requires action_key to be set"
-                        )
-                    actions_tf = tf.stack([s["action"][action_key] for s in steps_list])
+                        raise ValueError("Config error: action_is_dict=True requires action_key")
+                    a = step["action"][action_key]
                 else:
-                    actions_tf = tf.stack([s["action"] for s in steps_list])
-                actions = actions_tf.numpy()[:, :action_dim].astype(np.float32)
+                    a = step["action"]
+                a = tf.cast(tf.reshape(a, [-1])[:action_dim], tf.float32)
+                return tf.ensure_shape(a, [action_dim])
 
-                action_prefix = np.cumsum(actions, axis=0, dtype=np.float32)
-                action_prefix = np.vstack(
-                    [np.zeros((1, action_dim), dtype=np.float32), action_prefix]
-                )
+            def _extract_state(step):
+                s = step["observation"][state_key]
+                s = tf.cast(tf.reshape(s, [-1])[:state_dim], tf.float32)
+                return tf.ensure_shape(s, [state_dim])
 
-                states_tf = tf.stack([s["observation"][state_key] for s in steps_list])
-                states = states_tf.numpy()[:, :state_dim].astype(np.float32)
+            actions_ds = steps_ds.map(_extract_action, num_parallel_calls=num_parallel_calls)
+            states_ds = steps_ds.map(_extract_state, num_parallel_calls=num_parallel_calls)
 
-                if instruction_in_step:
-                    step_instructions = [
-                        self._decode_tf_string(s[instruction_key]) for s in steps_list
-                    ]
+            # Sum actions[t : t+offset] (length offset) for each pair index t.
+            cumulative_action_ds = (
+                actions_ds.window(size=offset, shift=1, drop_remainder=True)
+                .flat_map(lambda w: w.batch(offset))
+                .map(lambda x: tf.reduce_sum(x, axis=0), num_parallel_calls=num_parallel_calls)
+            )
 
-            # Determine which frame indices to use
-            if samples_per_episode and samples_per_episode > 0:
-                # LAPA-style: sample pairs using stateless per-episode sampling
-                k = min(int(samples_per_episode), max_start_idx)
-                if k <= 0:
-                    # Return empty dataset
-                    if return_metadata:
-                        return tf.data.Dataset.from_tensors(
-                            (
-                                tf.zeros((2, image_size, image_size, 3), dtype=tf.uint8),
-                                {
-                                    "episode_id": "",
-                                    "frame_idx": np.int32(-1),
-                                    "offset": np.int32(offset),
-                                    "language": "",
-                                    "dataset_type": dataset_name,
-                                    "dataset_name": dataset_name,
-                                    "action": np.zeros(action_dim, dtype=np.float32),
-                                    "initial_state": np.zeros(state_dim, dtype=np.float32),
-                                    "robot": "",
-                                },
-                            )
-                        ).take(0)
-                    else:
-                        return tf.data.Dataset.from_tensors(
-                            tf.zeros((2, image_size, image_size, 3), dtype=tf.uint8)
-                        ).take(0)
-
-                # Stateless sampling for parallel-safe LAPA mode
-                t_indices = _stateless_sample_indices(
-                    episode_id_bytes if isinstance(episode_id_bytes, bytes) else episode_id_bytes.encode(),
-                    k,
-                    max_start_idx,
+            if instruction_in_step:
+                language_ds = steps_ds.map(
+                    lambda s: _strip_null_bytes(s[instruction_key]),
+                    num_parallel_calls=num_parallel_calls,
                 )
             else:
-                # Default: all pairs from episode
-                t_indices = list(range(max_start_idx))
+                def _extract_obs_language(step):
+                    instr = step["observation"][instruction_key]
+                    if dataset_name in {
+                        "language_table",
+                        "language_table_blocktorelative_oracle_sim",
+                        "language_table_blocktoblock_oracle_sim",
+                        "language_table_blocktoabsolute_oracle_sim",
+                    }:
+                        instr = tf.strings.unicode_encode(tf.cast(instr, tf.int32), "UTF-8")
+                    return _strip_null_bytes(instr)
 
-            # Extract all frames and resize in batch for efficiency
-            frames_raw = [s["observation"][image_key] for s in steps_list]
-            frames_tf = tf.stack(frames_raw)  # [T, H, W, C]
+                language_ds = (
+                    steps_ds.map(_extract_obs_language, num_parallel_calls=num_parallel_calls)
+                    .take(1)
+                    .repeat()
+                )
 
-            if frames_tf.shape[1] != image_size or frames_tf.shape[2] != image_size:
-                frames_tf = tf.image.resize(frames_tf, [image_size, image_size])
-            frames_tf = tf.cast(frames_tf, tf.uint8)
+            pairs_enum_ds = pairs_ds.enumerate()
+            zipped = tf.data.Dataset.zip((pairs_enum_ds, cumulative_action_ds, states_ds, language_ds))
 
-            # Build list of pairs and metadata
-            pairs = []
-            metas = []
-            for t in t_indices:
-                pair_tf = tf.stack([frames_tf[t], frames_tf[t + offset]], axis=0)
-                pairs.append(pair_tf)
-
-                if return_metadata:
-                    if instruction_in_step:
-                        instruction_t = step_instructions[t]
-                    else:
-                        instruction_t = instruction
-
-                    cumulative_action = action_prefix[t + offset] - action_prefix[t]
-                    initial_state = states[t]
-
-                    meta = {
-                        "episode_id": episode_id,
-                        "frame_idx": np.int32(t),
-                        "offset": np.int32(offset),
-                        "language": instruction_t,
-                        "dataset_type": dataset_name,
-                        "dataset_name": dataset_name,
-                        "action": cumulative_action.astype(np.float32),
-                        "initial_state": initial_state.astype(np.float32),
-                        "robot": robot_type,
-                    }
-                    metas.append(meta)
-
-            # Create dataset from pairs
-            if return_metadata:
-                # Stack pairs into a single tensor
-                pairs_tensor = tf.stack(pairs, axis=0)  # [N, 2, H, W, C]
-
-                # Convert metadata lists to dict of tensors
-                meta_dict = {
-                    "episode_id": tf.constant([m["episode_id"] for m in metas], dtype=tf.string),
-                    "frame_idx": tf.constant([m["frame_idx"] for m in metas], dtype=tf.int32),
-                    "offset": tf.constant([m["offset"] for m in metas], dtype=tf.int32),
-                    "language": tf.constant([m["language"] for m in metas], dtype=tf.string),
-                    "dataset_type": tf.constant([m["dataset_type"] for m in metas], dtype=tf.string),
-                    "dataset_name": tf.constant([m["dataset_name"] for m in metas], dtype=tf.string),
-                    "action": tf.constant([m["action"] for m in metas], dtype=tf.float32),
-                    "initial_state": tf.constant([m["initial_state"] for m in metas], dtype=tf.float32),
-                    "robot": tf.constant([m["robot"] for m in metas], dtype=tf.string),
+            def _attach_meta(pair_enum, cumulative_action, initial_state, language):
+                frame_idx, pair = pair_enum
+                meta = {
+                    "episode_id": episode_id_tf,
+                    "frame_idx": tf.cast(frame_idx, tf.int32),
+                    "offset": offset_tf,
+                    "language": language,
+                    "dataset_type": dataset_name_tf,
+                    "dataset_name": dataset_name_tf,
+                    "action": cumulative_action,
+                    "initial_state": initial_state,
+                    "robot": robot_tf,
                 }
+                return pair, meta
 
-                # Create dataset that zips pairs with metadata
-                pairs_ds = tf.data.Dataset.from_tensor_slices(pairs_tensor)
-                meta_ds = tf.data.Dataset.from_tensor_slices(meta_dict)
-                return tf.data.Dataset.zip((pairs_ds, meta_ds))
-            else:
-                pairs_tensor = tf.stack(pairs, axis=0)
-                return tf.data.Dataset.from_tensor_slices(pairs_tensor)
+            out_ds = zipped.map(_attach_meta, num_parallel_calls=num_parallel_calls)
+            if samples_per_episode > 0:
+                out_ds = out_ds.shuffle(per_episode_sample_shuffle, seed=self._tf_seed).take(samples_per_episode)
+            return out_ds
 
-        # Phase 4: Use interleave for parallel episode processing
-        # This enables tf.data to process multiple episodes concurrently
         tf_ds = ds.interleave(
             process_episode_to_pairs,
             cycle_length=num_parallel_episodes,
             num_parallel_calls=tf.data.AUTOTUNE,
-            deterministic=False,  # Allow out-of-order for better throughput
+            deterministic=False,
         )
 
-        # Apply shuffle at pair level for better mixing (use pair_shuffle_buffer)
+        # Pair-level shuffle for better mixing
         if self.pair_shuffle_buffer > 0:
             tf_ds = tf_ds.shuffle(self.pair_shuffle_buffer, seed=self._tf_seed)
 
         # Prefetch for performance
         prefetch_val = self.prefetch_buffer if self.prefetch_buffer > 0 else tf.data.AUTOTUNE
-        tf_ds = tf_ds.prefetch(prefetch_val)
-
-        return tf_ds
+        return tf_ds.prefetch(prefetch_val)
 
     def _get_or_create_pipeline(self):
         """Get existing pipeline or create new one (lazy, persistent)."""
