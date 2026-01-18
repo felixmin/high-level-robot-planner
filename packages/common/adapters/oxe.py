@@ -372,8 +372,23 @@ class OXEFramePairDataset(IterableDataset):
                 if isinstance(episode_id, bytes):
                     episode_id = episode_id.decode("utf-8")
 
-                steps = list(episode["steps"])
-                n_steps = len(steps)
+                steps_ds = episode["steps"]
+                steps_list = None
+
+                # Prefer cardinality to avoid materializing full episodes when
+                # `samples_per_episode` is small (especially 1).
+                n_steps = None
+                try:
+                    card_val = int(steps_ds.cardinality().numpy())
+                    # tf.data.UNKNOWN_CARDINALITY (-2) / INFINITE_CARDINALITY (-1)
+                    if card_val >= 0:
+                        n_steps = card_val
+                except Exception:
+                    n_steps = None
+
+                if n_steps is None:
+                    steps_list = list(steps_ds)
+                    n_steps = len(steps_list)
 
                 if n_steps < offset + 1:
                     continue
@@ -400,12 +415,13 @@ class OXEFramePairDataset(IterableDataset):
                 instruction = ""
                 if return_metadata:
                     try:
+                        first_step = steps_list[0] if steps_list is not None else next(iter(steps_ds.take(1)))
                         if instruction_in_step:
                             # Instruction at step level (e.g., RoboNet)
-                            instruction = self._decode_tf_string(steps[0].get(instruction_key))
-                        elif instruction_key in steps[0]["observation"]:
+                            instruction = self._decode_tf_string(first_step.get(instruction_key))
+                        elif instruction_key in first_step["observation"]:
                             # Instruction in observation dict (Bridge, RT-1, language_table)
-                            instr_tensor = steps[0]["observation"][instruction_key]
+                            instr_tensor = first_step["observation"][instruction_key]
                             # Check if it is a string tensor (Bridge) or encoded ints (language_table)
                             if instr_tensor.dtype == tf.string:
                                 # String tensor (e.g., Bridge natural_language_instruction)
@@ -428,28 +444,112 @@ class OXEFramePairDataset(IterableDataset):
                     k = min(int(self.samples_per_episode), max_start_idx)
                     if k <= 0:
                         continue
-                    if k == 1:
-                        t_indices = [self._rng.randrange(max_start_idx)]
-                    else:
-                        t_indices = self._rng.sample(range(max_start_idx), k=k)
+                    t_indices = [self._rng.randrange(max_start_idx)] if k == 1 else self._rng.sample(range(max_start_idx), k=k)
+
+                    # Fast path for sparse sampling: avoid materializing the full episode when possible.
+                    # This significantly reduces Python overhead when `samples_per_episode` is small (especially 1).
+                    if steps_list is None and k <= 2:
+                        for t in t_indices:
+                            # Grab just the needed window [t, ..., t+offset] (inclusive)
+                            try:
+                                window_steps = list(steps_ds.skip(t).take(offset + 1))
+                            except Exception:
+                                window_steps = []
+                            if len(window_steps) < offset + 1:
+                                continue
+
+                            step_t = window_steps[0]
+                            step_tp = window_steps[-1]
+
+                            pair_tf = tf.stack(
+                                [
+                                    step_t["observation"][image_key],
+                                    step_tp["observation"][image_key],
+                                ],
+                                axis=0,
+                            )  # [2, H, W, C]
+
+                            if pair_tf.shape[1] != image_size or pair_tf.shape[2] != image_size:
+                                pair_tf = tf.image.resize(pair_tf, [image_size, image_size])
+                                pair_tf = tf.cast(pair_tf, tf.uint8)
+
+                            pair = pair_tf.numpy()
+
+                            if return_metadata:
+                                if instruction_in_step:
+                                    instruction_t = self._decode_tf_string(step_t.get(instruction_key)) or instruction
+                                else:
+                                    instruction_t = instruction
+
+                                cumulative_action = np.zeros(action_dim, dtype=np.float32)
+                                if "action" in step_t:
+                                    try:
+                                        for ws in window_steps[:offset]:
+                                            if action_is_dict and action_key:
+                                                a = ws["action"][action_key].numpy()
+                                            else:
+                                                a = ws["action"].numpy()
+                                            a = np.asarray(a, dtype=np.float32).reshape(-1)[:action_dim]
+                                            cumulative_action += a
+                                    except Exception:
+                                        cumulative_action = np.zeros(action_dim, dtype=np.float32)
+
+                                initial_state = np.zeros(state_dim, dtype=np.float32)
+                                if state_key in step_t.get("observation", {}):
+                                    try:
+                                        s = step_t["observation"][state_key].numpy()
+                                        initial_state = np.asarray(s, dtype=np.float32).reshape(-1)[:state_dim]
+                                    except Exception:
+                                        initial_state = np.zeros(state_dim, dtype=np.float32)
+
+                                meta = {
+                                    "episode_id": episode_id,
+                                    "frame_idx": t,
+                                    "offset": offset,
+                                    "language": instruction_t,  # Standardized key (was: instruction)
+                                    "dataset_type": dataset_name,  # Use actual dataset name for filtering
+                                    "dataset_name": dataset_name,
+                                    "action": np.asarray(cumulative_action, dtype=np.float32),
+                                    "initial_state": np.asarray(initial_state, dtype=np.float32),
+                                    "robot": robot_type,  # Robot type for filtering (e.g., RoboNet)
+                                }
+                                yield pair, meta
+                            else:
+                                yield pair
+                        continue
+
+                    # Fallback: materialize full episode (more efficient when sampling many pairs)
+                    if steps_list is None:
+                        steps_list = list(steps_ds)
+                        n_steps = len(steps_list)
+                        if n_steps < offset + 1:
+                            continue
+                        max_start_idx = n_steps - offset
+                        if max_start_idx <= 0:
+                            continue
+                        # Re-sample indices against the materialized episode length to avoid OOB
+                        k = min(int(self.samples_per_episode), max_start_idx)
+                        if k <= 0:
+                            continue
+                        t_indices = [self._rng.randrange(max_start_idx)] if k == 1 else self._rng.sample(range(max_start_idx), k=k)
 
                     # Extract actions/states for the full episode once (small tensors; avoids per-sample TF->numpy overhead).
                     actions = None
-                    if return_metadata and "action" in steps[0]:
+                    if return_metadata and steps_list and "action" in steps_list[0]:
                         try:
                             if action_is_dict and action_key:
-                                actions_tf = tf.stack([s["action"][action_key] for s in steps])
+                                actions_tf = tf.stack([s["action"][action_key] for s in steps_list])
                                 actions = actions_tf.numpy()[:, :action_dim]
                             else:
-                                actions_tf = tf.stack([s["action"] for s in steps])
+                                actions_tf = tf.stack([s["action"] for s in steps_list])
                                 actions = actions_tf.numpy()[:, :action_dim]
                         except Exception:
                             actions = None
 
                     states = None
-                    if return_metadata and state_key in steps[0]["observation"]:
+                    if return_metadata and steps_list and state_key in steps_list[0]["observation"]:
                         try:
-                            states_tf = tf.stack([s["observation"][state_key] for s in steps])
+                            states_tf = tf.stack([s["observation"][state_key] for s in steps_list])
                             states = states_tf.numpy()[:, :state_dim]
                         except Exception:
                             states = None
@@ -457,8 +557,8 @@ class OXEFramePairDataset(IterableDataset):
                     for t in t_indices:
                         pair_tf = tf.stack(
                             [
-                                steps[t]["observation"][image_key],
-                                steps[t + offset]["observation"][image_key],
+                                steps_list[t]["observation"][image_key],
+                                steps_list[t + offset]["observation"][image_key],
                             ],
                             axis=0,
                         )  # [2, H, W, C]
@@ -472,7 +572,7 @@ class OXEFramePairDataset(IterableDataset):
                         if return_metadata:
                             # If language is step-level (e.g., RoboNet), use the sampled step's instruction.
                             if instruction_in_step:
-                                instruction_t = self._decode_tf_string(steps[t].get(instruction_key)) or instruction
+                                instruction_t = self._decode_tf_string(steps_list[t].get(instruction_key)) or instruction
                             else:
                                 instruction_t = instruction
 
@@ -505,6 +605,7 @@ class OXEFramePairDataset(IterableDataset):
                 else:
                     # Default (unchanged): yield all pairs from each episode.
                     # Extract all frames and resize in batch for efficiency.
+                    steps = steps_list if steps_list is not None else list(steps_ds)
                     frames_raw = [s["observation"][image_key] for s in steps]
                     frames = tf.stack(frames_raw)  # [T, H, W, C]
 
