@@ -424,7 +424,17 @@ class OXEFramePairDataset(IterableDataset):
             frame = tf.cond(needs_resize, _do_resize, lambda: tf.cast(frame, tf.uint8))
             return tf.ensure_shape(frame, [image_size, image_size, 3])
 
-        def process_episode_to_pairs(episode):
+        worker_id = worker_info.id if worker_info is not None else 0
+        num_shards = worker_info.num_workers if worker_info is not None else 1
+        worker_id_tf = tf.constant(int(worker_id), dtype=tf.int32)
+        num_shards_tf = tf.constant(int(num_shards), dtype=tf.int32)
+        colon_tf = tf.constant(":", dtype=tf.string)
+
+        # Enumerate episodes so we can construct a stable episode_id even when the
+        # underlying RLDS dataset does not provide an "episode_id" field.
+        ds = ds.enumerate()
+
+        def process_episode_to_pairs(ep_idx, episode):
             steps_ds = episode["steps"]
 
             frames_ds = steps_ds.map(
@@ -444,7 +454,17 @@ class OXEFramePairDataset(IterableDataset):
                     )
                 return pairs_ds
 
-            episode_id_tf = episode["episode_id"]
+            episode_id_tf = tf.strings.join(
+                [
+                    dataset_name_tf,
+                    colon_tf,
+                    tf.strings.as_string(num_shards_tf),
+                    colon_tf,
+                    tf.strings.as_string(worker_id_tf),
+                    colon_tf,
+                    tf.strings.as_string(ep_idx),
+                ]
+            )
 
             if robot_key:
                 robot_raw = episode["episode_metadata"][robot_key]
