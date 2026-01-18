@@ -7,25 +7,29 @@ datasets:
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     offset: 10                   # 1 second at 10Hz
-    weight: 0.1 # (442k episodes)
+    weight: 0.1                  # (442k episodes)
+    size: 11934000               # Precomputed: ~442k × 0.9 × 30 pairs (avoids TF init)
 
   - name: bridge
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     offset: 5                    # 1 second at 5Hz
     # weight: proportionate (25k episodes)
+    size: 1031130                # Precomputed: ~25.5k × 0.9 × 45 pairs
 
   - name: rt1
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     offset: 3                    # 1 second at 3Hz
     # weight: proportionate (87k episodes)
+    size: 2113650                # Precomputed: ~87k × 0.9 × 27 pairs
 
   - name: robonet
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     offset: 10                   # 1 second at 10Hz
     # weight: proportionate (83k episodes)
+    size: 1494000                # Precomputed: ~83k × 0.9 × 20 pairs
 
 # Shared settings
 offset: 5                        # Default offset (overridden per-dataset)

@@ -225,6 +225,8 @@ class OXEFramePairDataset(IterableDataset):
         persistent_iterator: bool = True,  # Keep iterator alive to avoid shuffle buffer refill
         samples_per_episode: int = 0,
         seed: Optional[int] = None,
+        precomputed_size: Optional[int] = None,  # Avoid TF init in __len__
+        episode_prefetch_buffer: int = 1,  # Phase 3: overlap episode fetch/decode
     ):
         super().__init__()
 
@@ -261,6 +263,8 @@ class OXEFramePairDataset(IterableDataset):
         self.seed = seed
         self._rng = random.Random(seed)
         self._tf_seed: Optional[int] = None
+        self._precomputed_size = precomputed_size
+        self.episode_prefetch_buffer = episode_prefetch_buffer
 
         # Lazy initialization of tf.data pipeline
         self._builder = None
@@ -294,16 +298,15 @@ class OXEFramePairDataset(IterableDataset):
 
     @staticmethod
     def _decode_tf_string(val: Any) -> str:
-        try:
-            if val is None:
-                return ""
-            if hasattr(val, "numpy"):
-                val = val.numpy()
-            if isinstance(val, bytes):
-                return val.decode("utf-8").rstrip("\x00")
-            return str(val).rstrip("\x00")
-        except Exception:
-            return ""
+        if val is None:
+            raise ValueError("Expected a string value, got None")
+        if hasattr(val, "numpy"):
+            val = val.numpy()
+        if isinstance(val, bytes):
+            return val.decode("utf-8").rstrip("\x00")
+        if isinstance(val, str):
+            return val.rstrip("\x00")
+        raise TypeError(f"Expected bytes/str for string value, got {type(val)}")
 
     def _init_tfds(self):
         """Initialize TFDS builder and dataset (lazy)."""
@@ -323,14 +326,19 @@ class OXEFramePairDataset(IterableDataset):
         ].num_examples
 
     def __len__(self):
-        """Approximate length based on episodes * avg pairs per episode."""
-        self._init_tfds()
-        # Estimate based on dataset-specific average episode length
-        avg_len = self.config.avg_episode_length
-        avg_pairs_per_episode = max(1, avg_len - self.offset)
-        if self.samples_per_episode and self.samples_per_episode > 0:
-            avg_pairs_per_episode = min(avg_pairs_per_episode, self.samples_per_episode)
-        return self._num_episodes * avg_pairs_per_episode
+        """
+        Approximate length based on episodes * avg pairs per episode.
+
+        IMPORTANT: If precomputed_size is set, returns that value directly to avoid
+        TensorFlow initialization. This prevents startup hangs and OOM issues when
+        DataLoader workers fork before TF is initialized.
+        """
+        if self._precomputed_size is not None:
+            return self._precomputed_size
+        raise ValueError(
+            "OXEFramePairDataset.__len__ requires precomputed_size to be provided "
+            "(to avoid initializing TensorFlow/TFDS inside DataLoader workers)."
+        )
 
     def _create_tf_pipeline(self):
         """Create tf.data pipeline for streaming frame pairs."""
@@ -349,6 +357,11 @@ class OXEFramePairDataset(IterableDataset):
         if self.shuffle_buffer > 0:
             ds = ds.shuffle(self.shuffle_buffer, seed=self._tf_seed)
 
+        # Phase 3: Episode prefetch to overlap GCS fetch/decode with processing
+        # Keep buffer small (1-2) to avoid memory issues from prefetching whole episodes
+        if self.episode_prefetch_buffer > 0:
+            ds = ds.prefetch(self.episode_prefetch_buffer)
+
         image_key = self.config.image_key
         instruction_key = self.config.instruction_key
         state_key = self.config.state_key
@@ -366,78 +379,91 @@ class OXEFramePairDataset(IterableDataset):
         def episode_to_pairs_generator():
             """Generator that yields frame pairs from episodes."""
             for episode in ds:
-                episode_id = episode.get("episode_id", b"unknown")
+                episode_id = episode["episode_id"]
                 if isinstance(episode_id, tf.Tensor):
                     episode_id = episode_id.numpy()
-                if isinstance(episode_id, bytes):
-                    episode_id = episode_id.decode("utf-8")
+                episode_id = (
+                    episode_id.decode("utf-8")
+                    if isinstance(episode_id, bytes)
+                    else str(episode_id)
+                )
 
-                steps_ds = episode["steps"]
-                steps_list = None
+                steps_list = list(episode["steps"])
+                n_steps = len(steps_list)
 
-                # Prefer cardinality to avoid materializing full episodes when
-                # `samples_per_episode` is small (especially 1).
-                n_steps = None
-                try:
-                    card_val = int(steps_ds.cardinality().numpy())
-                    # tf.data.UNKNOWN_CARDINALITY (-2) / INFINITE_CARDINALITY (-1)
-                    if card_val >= 0:
-                        n_steps = card_val
-                except Exception:
-                    n_steps = None
-
-                if n_steps is None:
-                    steps_list = list(steps_ds)
-                    n_steps = len(steps_list)
-
-                if n_steps < offset + 1:
-                    continue
+                min_steps = offset + 1
+                if n_steps < min_steps:
+                    raise ValueError(
+                        f"Episode {episode_id!r} has {n_steps} steps; need >= {min_steps} for offset={offset}"
+                    )
 
                 max_start_idx = n_steps - offset
-                if max_start_idx <= 0:
-                    continue
 
-                # Extract robot type from episode metadata if available
                 robot_type = ""
-                if return_metadata and robot_key and "episode_metadata" in episode:
-                    try:
-                        robot_tensor = episode["episode_metadata"].get(robot_key)
-                        if robot_tensor is not None:
-                            robot_val = robot_tensor.numpy()
-                            if isinstance(robot_val, bytes):
-                                robot_type = robot_val.decode("utf-8")
-                            else:
-                                robot_type = str(robot_val)
-                    except Exception:
-                        robot_type = ""
+                if return_metadata and robot_key:
+                    robot_tensor = episode["episode_metadata"][robot_key]
+                    robot_val = (
+                        robot_tensor.numpy()
+                        if isinstance(robot_tensor, tf.Tensor)
+                        else robot_tensor
+                    )
+                    robot_type = (
+                        robot_val.decode("utf-8")
+                        if isinstance(robot_val, bytes)
+                        else str(robot_val)
+                    )
 
-                # Get instruction (often the same for all steps in episode)
                 instruction = ""
                 if return_metadata:
-                    try:
-                        first_step = steps_list[0] if steps_list is not None else next(iter(steps_ds.take(1)))
-                        if instruction_in_step:
-                            # Instruction at step level (e.g., RoboNet)
-                            instruction = self._decode_tf_string(first_step.get(instruction_key))
-                        elif instruction_key in first_step["observation"]:
-                            # Instruction in observation dict (Bridge, RT-1, language_table)
-                            instr_tensor = first_step["observation"][instruction_key]
-                            # Check if it is a string tensor (Bridge) or encoded ints (language_table)
-                            if instr_tensor.dtype == tf.string:
-                                # String tensor (e.g., Bridge natural_language_instruction)
-                                instruction = instr_tensor.numpy().decode("utf-8")
-                            else:
-                                # Encoded int tensor (e.g., language_table)
-                                instruction = (
-                                    tf.strings.unicode_encode(
-                                        tf.cast(instr_tensor, tf.int32), "UTF-8"
-                                    )
-                                    .numpy()
-                                    .decode("utf-8")
-                                    .rstrip("\x00")
+                    first_step = steps_list[0]
+                    if instruction_in_step:
+                        instruction = self._decode_tf_string(first_step[instruction_key])
+                    else:
+                        instr_tensor = first_step["observation"][instruction_key]
+                        if instr_tensor.dtype == tf.string:
+                            instruction = instr_tensor.numpy().decode("utf-8").rstrip(
+                                "\x00"
+                            )
+                        else:
+                            instruction = (
+                                tf.strings.unicode_encode(
+                                    tf.cast(instr_tensor, tf.int32), "UTF-8"
                                 )
-                    except Exception:
-                        instruction = ""
+                                .numpy()
+                                .decode("utf-8")
+                                .rstrip("\x00")
+                            )
+
+                action_prefix = None
+                states = None
+                step_instructions = None
+                if return_metadata:
+                    if action_is_dict:
+                        if not action_key:
+                            raise ValueError(
+                                "Config error: action_is_dict=True requires action_key to be set"
+                            )
+                        actions_tf = tf.stack(
+                            [s["action"][action_key] for s in steps_list]
+                        )
+                    else:
+                        actions_tf = tf.stack([s["action"] for s in steps_list])
+                    actions = actions_tf.numpy()[:, :action_dim].astype(np.float32)
+
+                    action_prefix = np.cumsum(actions, axis=0, dtype=np.float32)
+                    action_prefix = np.vstack(
+                        [np.zeros((1, action_dim), dtype=np.float32), action_prefix]
+                    )
+
+                    states_tf = tf.stack(
+                        [s["observation"][state_key] for s in steps_list]
+                    )
+                    states = states_tf.numpy()[:, :state_dim].astype(np.float32)
+
+                    if instruction_in_step:
+                        step_instructions = [
+                            self._decode_tf_string(s[instruction_key]) for s in steps_list
+                        ]
 
                 if self.samples_per_episode and self.samples_per_episode > 0:
                     # LAPA-style: sample a small number of (t, t+offset) pairs per episode
@@ -445,114 +471,6 @@ class OXEFramePairDataset(IterableDataset):
                     if k <= 0:
                         continue
                     t_indices = [self._rng.randrange(max_start_idx)] if k == 1 else self._rng.sample(range(max_start_idx), k=k)
-
-                    # Fast path for sparse sampling: avoid materializing the full episode when possible.
-                    # This significantly reduces Python overhead when `samples_per_episode` is small (especially 1).
-                    if steps_list is None and k <= 2:
-                        for t in t_indices:
-                            # Grab just the needed window [t, ..., t+offset] (inclusive)
-                            try:
-                                window_steps = list(steps_ds.skip(t).take(offset + 1))
-                            except Exception:
-                                window_steps = []
-                            if len(window_steps) < offset + 1:
-                                continue
-
-                            step_t = window_steps[0]
-                            step_tp = window_steps[-1]
-
-                            pair_tf = tf.stack(
-                                [
-                                    step_t["observation"][image_key],
-                                    step_tp["observation"][image_key],
-                                ],
-                                axis=0,
-                            )  # [2, H, W, C]
-
-                            if pair_tf.shape[1] != image_size or pair_tf.shape[2] != image_size:
-                                pair_tf = tf.image.resize(pair_tf, [image_size, image_size])
-                                pair_tf = tf.cast(pair_tf, tf.uint8)
-
-                            pair = pair_tf.numpy()
-
-                            if return_metadata:
-                                if instruction_in_step:
-                                    instruction_t = self._decode_tf_string(step_t.get(instruction_key)) or instruction
-                                else:
-                                    instruction_t = instruction
-
-                                cumulative_action = np.zeros(action_dim, dtype=np.float32)
-                                if "action" in step_t:
-                                    try:
-                                        for ws in window_steps[:offset]:
-                                            if action_is_dict and action_key:
-                                                a = ws["action"][action_key].numpy()
-                                            else:
-                                                a = ws["action"].numpy()
-                                            a = np.asarray(a, dtype=np.float32).reshape(-1)[:action_dim]
-                                            cumulative_action += a
-                                    except Exception:
-                                        cumulative_action = np.zeros(action_dim, dtype=np.float32)
-
-                                initial_state = np.zeros(state_dim, dtype=np.float32)
-                                if state_key in step_t.get("observation", {}):
-                                    try:
-                                        s = step_t["observation"][state_key].numpy()
-                                        initial_state = np.asarray(s, dtype=np.float32).reshape(-1)[:state_dim]
-                                    except Exception:
-                                        initial_state = np.zeros(state_dim, dtype=np.float32)
-
-                                meta = {
-                                    "episode_id": episode_id,
-                                    "frame_idx": t,
-                                    "offset": offset,
-                                    "language": instruction_t,  # Standardized key (was: instruction)
-                                    "dataset_type": dataset_name,  # Use actual dataset name for filtering
-                                    "dataset_name": dataset_name,
-                                    "action": np.asarray(cumulative_action, dtype=np.float32),
-                                    "initial_state": np.asarray(initial_state, dtype=np.float32),
-                                    "robot": robot_type,  # Robot type for filtering (e.g., RoboNet)
-                                }
-                                yield pair, meta
-                            else:
-                                yield pair
-                        continue
-
-                    # Fallback: materialize full episode (more efficient when sampling many pairs)
-                    if steps_list is None:
-                        steps_list = list(steps_ds)
-                        n_steps = len(steps_list)
-                        if n_steps < offset + 1:
-                            continue
-                        max_start_idx = n_steps - offset
-                        if max_start_idx <= 0:
-                            continue
-                        # Re-sample indices against the materialized episode length to avoid OOB
-                        k = min(int(self.samples_per_episode), max_start_idx)
-                        if k <= 0:
-                            continue
-                        t_indices = [self._rng.randrange(max_start_idx)] if k == 1 else self._rng.sample(range(max_start_idx), k=k)
-
-                    # Extract actions/states for the full episode once (small tensors; avoids per-sample TF->numpy overhead).
-                    actions = None
-                    if return_metadata and steps_list and "action" in steps_list[0]:
-                        try:
-                            if action_is_dict and action_key:
-                                actions_tf = tf.stack([s["action"][action_key] for s in steps_list])
-                                actions = actions_tf.numpy()[:, :action_dim]
-                            else:
-                                actions_tf = tf.stack([s["action"] for s in steps_list])
-                                actions = actions_tf.numpy()[:, :action_dim]
-                        except Exception:
-                            actions = None
-
-                    states = None
-                    if return_metadata and steps_list and state_key in steps_list[0]["observation"]:
-                        try:
-                            states_tf = tf.stack([s["observation"][state_key] for s in steps_list])
-                            states = states_tf.numpy()[:, :state_dim]
-                        except Exception:
-                            states = None
 
                     for t in t_indices:
                         pair_tf = tf.stack(
@@ -565,109 +483,24 @@ class OXEFramePairDataset(IterableDataset):
 
                         if pair_tf.shape[1] != image_size or pair_tf.shape[2] != image_size:
                             pair_tf = tf.image.resize(pair_tf, [image_size, image_size])
-                            pair_tf = tf.cast(pair_tf, tf.uint8)
+                        pair_tf = tf.cast(pair_tf, tf.uint8)
 
-                        pair = pair_tf.numpy()
+                        # Phase 1: Yield TF tensor directly (no .numpy() here)
 
                         if return_metadata:
-                            # If language is step-level (e.g., RoboNet), use the sampled step's instruction.
+                            # Phase 2b: Use pre-decoded instructions
                             if instruction_in_step:
-                                instruction_t = self._decode_tf_string(steps_list[t].get(instruction_key)) or instruction
+                                instruction_t = step_instructions[t]
                             else:
                                 instruction_t = instruction
 
-                            # Compute accumulated action (sum of actions from t to t+offset)
-                            if actions is not None:
-                                cumulative_action = actions[t : t + offset].sum(axis=0)
-                            else:
-                                cumulative_action = np.zeros(action_dim, dtype=np.float32)
-
-                            # Get initial state at start of pair
-                            if states is not None:
-                                initial_state = states[t]
-                            else:
-                                initial_state = np.zeros(state_dim, dtype=np.float32)
+                            cumulative_action = action_prefix[t + offset] - action_prefix[t]
+                            initial_state = states[t]
 
                             meta = {
                                 "episode_id": episode_id,
-                                "frame_idx": t,
-                                "offset": offset,
-                                "language": instruction_t,  # Standardized key (was: instruction)
-                                "dataset_type": dataset_name,  # Use actual dataset name for filtering
-                                "dataset_name": dataset_name,
-                                "action": np.asarray(cumulative_action, dtype=np.float32),
-                                "initial_state": np.asarray(initial_state, dtype=np.float32),
-                                "robot": robot_type,  # Robot type for filtering (e.g., RoboNet)
-                            }
-                            yield pair, meta
-                        else:
-                            yield pair
-                else:
-                    # Default (unchanged): yield all pairs from each episode.
-                    # Extract all frames and resize in batch for efficiency.
-                    steps = steps_list if steps_list is not None else list(steps_ds)
-                    frames_raw = [s["observation"][image_key] for s in steps]
-                    frames = tf.stack(frames_raw)  # [T, H, W, C]
-
-                    # Resize if needed (batch resize is faster)
-                    if frames.shape[1] != image_size or frames.shape[2] != image_size:
-                        frames = tf.image.resize(frames, [image_size, image_size])
-                        frames = tf.cast(frames, tf.uint8)
-
-                    frames = frames.numpy()
-
-                    # Extract actions if available (for visualization)
-                    actions = None
-                    if return_metadata and "action" in steps[0]:
-                        try:
-                            if action_is_dict and action_key:
-                                # Dict-based actions (e.g., Bridge has world_vector, rotation_delta)
-                                actions_tf = tf.stack([s["action"][action_key] for s in steps])
-                                actions = actions_tf.numpy()
-                            else:
-                                # Flat action array (e.g., language_table, RoboNet)
-                                actions_tf = tf.stack([s["action"] for s in steps])
-                                actions = actions_tf.numpy()[:, :action_dim]
-                        except Exception:
-                            actions = None
-
-                    # Extract states if available
-                    states = None
-                    if return_metadata and state_key in steps[0]["observation"]:
-                        try:
-                            states_tf = tf.stack([s["observation"][state_key] for s in steps])
-                            states = states_tf.numpy()[:, :state_dim]
-                        except Exception:
-                            states = None
-
-                    # Generate pairs
-                    for t in range(max_start_idx):
-                        # Stack: [2, H, W, C]
-                        pair = np.stack([frames[t], frames[t + offset]], axis=0)
-
-                        if return_metadata:
-                            # If language is step-level (e.g., RoboNet), use per-step instruction.
-                            if instruction_in_step:
-                                instruction_t = self._decode_tf_string(steps[t].get(instruction_key)) or instruction
-                            else:
-                                instruction_t = instruction
-
-                            # Compute accumulated action (sum of actions from t to t+offset)
-                            if actions is not None:
-                                cumulative_action = actions[t : t + offset].sum(axis=0)
-                            else:
-                                cumulative_action = np.zeros(action_dim, dtype=np.float32)
-
-                            # Get initial state at start of pair
-                            if states is not None:
-                                initial_state = states[t]
-                            else:
-                                initial_state = np.zeros(state_dim, dtype=np.float32)
-
-                            meta = {
-                                "episode_id": episode_id,
-                                "frame_idx": t,
-                                "offset": offset,
+                                "frame_idx": np.int32(t),
+                                "offset": np.int32(offset),
                                 "language": instruction_t,  # Standardized key (was: instruction)
                                 "dataset_type": dataset_name,  # Use actual dataset name for filtering
                                 "dataset_name": dataset_name,
@@ -675,9 +508,52 @@ class OXEFramePairDataset(IterableDataset):
                                 "initial_state": initial_state.astype(np.float32),
                                 "robot": robot_type,  # Robot type for filtering (e.g., RoboNet)
                             }
-                            yield pair, meta
+                            yield pair_tf, meta  # Phase 1: yield TF tensor
                         else:
-                            yield pair
+                            yield pair_tf  # Phase 1: yield TF tensor
+                else:
+                    # Default: yield all pairs from each episode.
+                    # Extract all frames and resize in batch for efficiency.
+                    steps = steps_list
+                    frames_raw = [s["observation"][image_key] for s in steps]
+                    frames_tf = tf.stack(frames_raw)  # [T, H, W, C] - keep as TF tensor
+
+                    # Resize if needed (batch resize is faster)
+                    if frames_tf.shape[1] != image_size or frames_tf.shape[2] != image_size:
+                        frames_tf = tf.image.resize(frames_tf, [image_size, image_size])
+                    frames_tf = tf.cast(frames_tf, tf.uint8)
+
+                    # Phase 1: Keep frames as TF tensor (no .numpy() here)
+
+                    # Generate pairs
+                    for t in range(max_start_idx):
+                        # Phase 1: Use tf.stack to keep as TF tensor (no numpy conversion)
+                        pair_tf = tf.stack([frames_tf[t], frames_tf[t + offset]], axis=0)  # [2, H, W, C]
+
+                        if return_metadata:
+                            # Phase 2b: Use pre-decoded instructions
+                            if instruction_in_step:
+                                instruction_t = step_instructions[t]
+                            else:
+                                instruction_t = instruction
+
+                            cumulative_action = action_prefix[t + offset] - action_prefix[t]
+                            initial_state = states[t]
+
+                            meta = {
+                                "episode_id": episode_id,
+                                "frame_idx": np.int32(t),
+                                "offset": np.int32(offset),
+                                "language": instruction_t,  # Standardized key (was: instruction)
+                                "dataset_type": dataset_name,  # Use actual dataset name for filtering
+                                "dataset_name": dataset_name,
+                                "action": cumulative_action.astype(np.float32),
+                                "initial_state": initial_state.astype(np.float32),
+                                "robot": robot_type,  # Robot type for filtering (e.g., RoboNet)
+                            }
+                            yield pair_tf, meta  # Phase 1: yield TF tensor
+                        else:
+                            yield pair_tf  # Phase 1: yield TF tensor
 
         # Create tf.data.Dataset from generator
         if return_metadata:
@@ -725,7 +601,7 @@ class OXEFramePairDataset(IterableDataset):
             self._persistent_pipeline = self._create_tf_pipeline()
         return self._persistent_pipeline
 
-    def cleanup(self) -> None:
+    def cleanup(self, *, ignore_errors: bool = False) -> None:
         """
         Explicitly release TensorFlow resources.
 
@@ -734,8 +610,6 @@ class OXEFramePairDataset(IterableDataset):
 
         This method is idempotent - safe to call multiple times.
 
-        Uses extremely permissive error handling to ensure clean process exit
-        even if TensorFlow/GCS is in a bad state (e.g., killed mid-step).
         """
         # Idempotency check: skip if already cleaned up
         if self._cleaned_up:
@@ -744,55 +618,33 @@ class OXEFramePairDataset(IterableDataset):
         # Mark as cleaned up FIRST to prevent re-entry during exception handling
         self._cleaned_up = True
 
-        # Use BaseException to catch SystemExit, KeyboardInterrupt, etc.
-        # This ensures process can exit cleanly regardless of TF/GCS state
-        try:
-            if self._persistent_pipeline is not None:
-                del self._persistent_pipeline
-        except BaseException:
-            pass
-        finally:
-            self._persistent_pipeline = None
+        def _run(fn):
+            if not ignore_errors:
+                fn()
+                return
+            try:
+                fn()
+            except Exception:
+                logger.debug("Cleanup step failed", exc_info=True)
 
-        try:
-            if self._pipeline_iterator is not None:
-                del self._pipeline_iterator
-        except BaseException:
-            pass
-        finally:
-            self._pipeline_iterator = None
+        _run(lambda: setattr(self, "_persistent_pipeline", None))
+        _run(lambda: setattr(self, "_pipeline_iterator", None))
+        _run(lambda: setattr(self, "_builder", None))
 
-        try:
-            if self._builder is not None:
-                del self._builder
-        except BaseException:
-            pass
-        finally:
-            self._builder = None
+        import gc
 
-        # Garbage collection - skip if interpreter is shutting down
-        try:
-            import gc
-            gc.collect()
-        except BaseException:
-            pass
+        _run(gc.collect)
 
-        # Try to clear TensorFlow caches (may fail during shutdown)
-        try:
-            import tensorflow as tf
-            tf.keras.backend.clear_session()
-        except BaseException:
-            pass
+        import tensorflow as tf
 
-        try:
-            logger.debug(f"OXEFramePairDataset cleanup completed for {self.config.name}")
-        except BaseException:
-            pass  # Logging may fail during interpreter shutdown
+        _run(tf.keras.backend.clear_session)
+
+        logger.debug(f"OXEFramePairDataset cleanup completed for {self.config.name}")
 
     def __del__(self):
         """Cleanup on deletion."""
         try:
-            self.cleanup()
+            self.cleanup(ignore_errors=True)
         except Exception:
             pass
 
@@ -822,73 +674,47 @@ class OXEFramePairDataset(IterableDataset):
 
     def __iter__(self) -> Iterator:
         """Iterate over frame pairs."""
-        import tensorflow as tf
-
         # Get or create iterator (persistent by default to avoid shuffle buffer refill)
         tf_iter = self._get_or_create_iterator()
 
-        # Iterate and convert to PyTorch
-        for item in tf_iter:
-            try:
-                if self.return_metadata:
-                    pair_tf, meta_tf = item
-                    pair_np = pair_tf.numpy()
-                    # Convert [2, H, W, C] -> [C, 2, H, W] and normalize
-                    pair_pt = (
-                        torch.from_numpy(pair_np).permute(3, 0, 1, 2).float() / 255.0
-                    )
-                    # Convert metadata - use standardized keys
-                    dataset_name = (
-                        meta_tf["dataset_name"].numpy().decode("utf-8")
-                        if isinstance(meta_tf["dataset_name"].numpy(), bytes)
-                        else self.config.name
-                    )
-                    # Extract robot type
-                    robot = ""
-                    if "robot" in meta_tf:
-                        robot_val = meta_tf["robot"].numpy()
-                        if isinstance(robot_val, bytes):
-                            robot = robot_val.decode("utf-8")
-                        else:
-                            robot = str(robot_val) if robot_val else ""
+        # Helper to decode TF string tensors efficiently
+        def _decode_str(val) -> str:
+            """Decode bytes/str value, handling null bytes."""
+            if isinstance(val, bytes):
+                return val.decode("utf-8").rstrip("\x00")
+            return str(val) if val else ""
 
-                    meta = {
-                        "episode_id": (
-                            meta_tf["episode_id"].numpy().decode("utf-8")
-                            if isinstance(meta_tf["episode_id"].numpy(), bytes)
-                            else str(meta_tf["episode_id"].numpy())
-                        ),
-                        "frame_idx": int(meta_tf["frame_idx"].numpy()),
-                        "offset": int(meta_tf["offset"].numpy()),
-                        # Standardized key (was: instruction)
-                        "language": (
-                            meta_tf["language"].numpy().decode("utf-8").rstrip("\x00")
-                            if isinstance(meta_tf["language"].numpy(), bytes)
-                            else ""
-                        ),
-                        # Use dataset_name for both (enables bucket filtering by dataset)
-                        "dataset_type": dataset_name,
-                        "dataset_name": dataset_name,
-                        # Cumulative action between frames (for visualization)
-                        "action": meta_tf["action"].numpy().tolist(),
-                        # Initial state (for visualization)
-                        "initial_state": meta_tf["initial_state"].numpy().tolist(),
-                        # Robot type (for multi-robot datasets)
-                        "robot": robot,
-                    }
-                    yield {"frames": pair_pt, **meta}
-                else:
-                    pair_np = item.numpy()
-                    # Convert [2, H, W, C] -> [C, 2, H, W] and normalize
-                    pair_pt = (
-                        torch.from_numpy(pair_np).permute(3, 0, 1, 2).float() / 255.0
-                    )
-                    yield pair_pt
-            except tf.errors.OutOfRangeError:
-                break
-            except Exception as e:
-                logger.warning(f"Error processing OXE item: {e}")
-                continue
+        # Cache known values to avoid per-sample .numpy() calls
+        dataset_name = self.config.name
+        offset = self.offset
+
+        for item in tf_iter:
+            if self.return_metadata:
+                pair_tf, meta_tf = item
+                pair_np = pair_tf.numpy()
+                pair_pt = (
+                    torch.from_numpy(pair_np).permute(3, 0, 1, 2).float() / 255.0
+                )
+
+                episode_id = _decode_str(meta_tf["episode_id"].numpy())
+                language = _decode_str(meta_tf["language"].numpy())
+                robot = _decode_str(meta_tf["robot"].numpy())
+
+                meta = {
+                    "episode_id": episode_id,
+                    "frame_idx": int(meta_tf["frame_idx"].numpy()),
+                    "offset": offset,
+                    "language": language,
+                    "dataset_type": dataset_name,
+                    "dataset_name": dataset_name,
+                    "action": meta_tf["action"].numpy(),
+                    "initial_state": meta_tf["initial_state"].numpy(),
+                    "robot": robot,
+                }
+                yield {"frames": pair_pt, **meta}
+            else:
+                pair_np = item.numpy()
+                yield torch.from_numpy(pair_np).permute(3, 0, 1, 2).float() / 255.0
 
 
 class MultiOXEFramePairDataset(IterableDataset):
@@ -963,6 +789,13 @@ class MultiOXEFramePairDataset(IterableDataset):
                     f"Please specify offset in config/data/oxe/{cfg['name']}.yaml"
                 )
 
+            if "size" not in cfg or cfg["size"] is None:
+                raise ValueError(
+                    f"Dataset '{cfg['name']}' is missing required 'size' field. "
+                    f"Please specify size in config/data/oxe/{cfg['name']}.yaml"
+                )
+            precomputed_size = int(cfg["size"])
+
             ds = OXEFramePairDataset(
                 dataset_name=cfg["name"],
                 split=split,
@@ -974,11 +807,12 @@ class MultiOXEFramePairDataset(IterableDataset):
                 persistent_iterator=self.persistent_iterator,
                 samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
                 seed=self._get_dataset_seed(cfg),
+                precomputed_size=precomputed_size,
+                episode_prefetch_buffer=cfg.get("episode_prefetch_buffer", 1),
             )
             self._datasets.append(ds)
 
-        # Compute weights using mixed absolute mode
-        sizes = [len(ds) for ds in self._datasets]
+        sizes = [int(cfg["size"]) for cfg in self.dataset_configs]
         self._weights = self._compute_weights(self.dataset_configs, sizes)
 
     def _get_dataset_seed(self, cfg: dict) -> Optional[int]:
@@ -1088,15 +922,13 @@ class MultiOXEFramePairDataset(IterableDataset):
         self._init_datasets()
         return sum(len(ds) for ds in self._datasets)
 
-    def cleanup(self) -> None:
+    def cleanup(self, *, ignore_errors: bool = False) -> None:
         """
         Explicitly release TensorFlow resources from all underlying datasets.
 
         Call this when you are done with the dataset and want to free memory.
         This method is idempotent - safe to call multiple times.
 
-        Uses extremely permissive error handling to ensure clean process exit
-        even if TensorFlow/GCS is in a bad state.
         """
         datasets_to_cleanup = self._datasets
         self._datasets = None  # Clear reference first to prevent re-entry
@@ -1104,20 +936,20 @@ class MultiOXEFramePairDataset(IterableDataset):
 
         if datasets_to_cleanup is not None:
             for ds in datasets_to_cleanup:
-                try:
+                if not ignore_errors:
                     ds.cleanup()
-                except BaseException:
-                    pass  # Ignore all errors during shutdown
+                else:
+                    try:
+                        ds.cleanup(ignore_errors=True)
+                    except Exception:
+                        logger.debug("Dataset cleanup failed", exc_info=True)
 
-        try:
-            logger.debug("MultiOXEFramePairDataset cleanup completed")
-        except BaseException:
-            pass  # Logging may fail during interpreter shutdown
+        logger.debug("MultiOXEFramePairDataset cleanup completed")
 
     def __del__(self):
         """Cleanup on deletion."""
         try:
-            self.cleanup()
+            self.cleanup(ignore_errors=True)
         except Exception:
             pass
 
@@ -1163,9 +995,13 @@ class MultiOXEFramePairDataset(IterableDataset):
                 try:
                     item = next(iterators[dataset_idx])
                     yield item
-                except StopIteration:
-                    # Failsafe if dataset is truly empty
-                    continue
+                except StopIteration as e:
+                    dataset_name = self.dataset_configs[dataset_idx].get(
+                        "name", f"dataset_{dataset_idx}"
+                    )
+                    raise RuntimeError(
+                        f"Dataset {dataset_name!r} is empty; cannot cycle iterator."
+                    ) from e
 
 
 def get_oxe_dataset_info(dataset_name: str = "language_table") -> Dict[str, Any]:

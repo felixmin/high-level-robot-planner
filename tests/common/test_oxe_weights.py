@@ -319,11 +319,11 @@ class TestWeightingIntegration:
 
         monkeypatch.setattr(oxe, "OXEFramePairDataset", mock_oxe_dataset)
 
-        # Create and initialize
+        # Create and initialize (size is now required to avoid TF init)
         ds = MultiOXEFramePairDataset(
             datasets=[
-                {"name": "language_table", "offset": 5},
-                {"name": "bridge", "offset": 5, "weight": 0.4},
+                {"name": "language_table", "offset": 5, "size": 1000},
+                {"name": "bridge", "offset": 5, "weight": 0.4, "size": 1000},
             ],
             prefetch_buffer=0,
             image_size=64,

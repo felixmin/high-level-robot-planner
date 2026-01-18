@@ -200,9 +200,10 @@ class TestOXEFramePairDataset:
             # language replaces instruction
             assert "language" in item
 
-            # Check action and state are lists/floats
-            assert isinstance(item["action"], list)
-            assert isinstance(item["initial_state"], list)
+            # Check action and state are numpy arrays (Phase 2c optimization: keep as numpy)
+            import numpy as np
+            assert isinstance(item["action"], np.ndarray), f"Expected numpy array, got {type(item['action'])}"
+            assert isinstance(item["initial_state"], np.ndarray), f"Expected numpy array, got {type(item['initial_state'])}"
             break
 
         print("✓ Metadata correctly extracted")
@@ -236,6 +237,7 @@ class TestMultiOXEFramePairDataset:
                     "val_split": "train[50:60]",
                     "weight": 0.5,
                     "offset": 5,
+                    "size": 10000,  # Precomputed size (required)
                 },
                 {
                     "name": "bridge",
@@ -243,6 +245,7 @@ class TestMultiOXEFramePairDataset:
                     "val_split": "train[50:60]",
                     "weight": 0.5,
                     "offset": 5,
+                    "size": 10000,  # Precomputed size (required)
                 },
             ],
             prefetch_buffer=0,
@@ -289,8 +292,8 @@ class TestMultiOXEFramePairDataset:
 
         ds = MultiOXEFramePairDataset(
             datasets=[
-                {"name": "language_table", "train_split": "train[:30]", "weight": 0.5, "offset": 5},
-                {"name": "bridge", "train_split": "train[:30]", "weight": 0.5, "offset": 5},
+                {"name": "language_table", "train_split": "train[:30]", "weight": 0.5, "offset": 5, "size": 10000},
+                {"name": "bridge", "train_split": "train[:30]", "weight": 0.5, "offset": 5, "size": 10000},
             ],
             prefetch_buffer=0,
             image_size=64,
@@ -363,7 +366,7 @@ class TestMemoryStability:
 
         ds = MultiOXEFramePairDataset(
             datasets=[
-                {"name": "language_table", "train_split": "train[:30]", "weight": 1.0, "offset": 5},
+                {"name": "language_table", "train_split": "train[:30]", "weight": 1.0, "offset": 5, "size": 10000},
             ],
             prefetch_buffer=0,
             image_size=64,

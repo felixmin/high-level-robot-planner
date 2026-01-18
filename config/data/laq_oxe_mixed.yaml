@@ -13,18 +13,21 @@ datasets:
     val_split: "train[90%:]"
     offset: 5                    # 1 second at 5Hz
     weight: 0.4                  # Explicit: exactly 40% of samples
+    size: 1031130                # Precomputed: ~25.5k × 0.9 × 45 pairs (avoids TF init)
 
   - name: language_table
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     offset: 10                   # 1 second at 10Hz
     # weight omitted = proportionate (share of remaining 60%)
+    size: 11934000               # Precomputed: ~442k × 0.9 × 30 pairs
 
   - name: rt1
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     offset: 3                    # 1 second at 3Hz
     weight: proportionate        # Explicit proportionate (same as omitting)
+    size: 2113650                # Precomputed: ~87k × 0.9 × 27 pairs
 
 # Shared settings
 image_size: 256

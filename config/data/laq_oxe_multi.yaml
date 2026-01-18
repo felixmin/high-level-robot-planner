@@ -7,12 +7,14 @@ datasets:
     val_split: "train[90%:]"
     weight: 0.5                  # 50% of samples from language_table
     offset: 10                   # 1 second at 10Hz
+    size: 11934000               # Precomputed: ~442k episodes × 0.9 × 30 pairs (avoids TF init)
 
   - name: bridge
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     weight: 0.5                  # 50% of samples from bridge
     offset: 5                    # 1 second at 5Hz
+    size: 1031130                # Precomputed: ~25.5k episodes × 0.9 × 45 pairs (avoids TF init)
 
 # Shared settings (can be overridden per-dataset with 'offset')
 offset: 5                        # Default offset
