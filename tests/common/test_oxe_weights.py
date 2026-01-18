@@ -319,13 +319,15 @@ class TestWeightingIntegration:
 
         monkeypatch.setattr(oxe, "OXEFramePairDataset", mock_oxe_dataset)
 
-        # Create and initialize (size is now required to avoid TF init)
+        # Create and initialize (size, train_split, val_split required)
         ds = MultiOXEFramePairDataset(
             datasets=[
-                {"name": "language_table", "offset": 5, "size": 1000},
-                {"name": "bridge", "offset": 5, "weight": 0.4, "size": 1000},
+                {"name": "language_table", "train_split": "train[:90%]", "val_split": "train[90%:]", "offset": 5, "size": 1000},
+                {"name": "bridge", "train_split": "train[:90%]", "val_split": "train[90%:]", "offset": 5, "weight": 0.4, "size": 1000},
             ],
             prefetch_buffer=0,
+            episode_shuffle_buffer=10,
+            pair_shuffle_buffer=10,
             image_size=64,
         )
         ds._init_datasets()

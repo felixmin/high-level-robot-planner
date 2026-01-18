@@ -5,15 +5,16 @@ datasets:
   - name: language_table_blocktorelative_oracle_sim
     train_split: "train[:90%]"   # 180,000 episodes
     val_split: "train[90%:]"     # 20,000 episodes
+    offset: 10                   # 1 second at 10Hz
     weight: 1.0
+    size: 4860000                # Precomputed: ~180k × 0.9 × 30 pairs
 
 # Shared settings
 # oracle_sim episodes are 27-46 steps (mean ~34) at 10Hz
-# offset=10 means 1 second between frames
-offset: 10
 image_size: 256
 batch_size: 32
-num_workers: 0               # tf.data handles parallelism internally
-shuffle_buffer: 500          # Buffer for randomization
+num_workers: 0                   # tf.data handles parallelism internally
+episode_shuffle_buffer: 500      # Shuffle buffer for episodes
+pair_shuffle_buffer: 1000        # Shuffle buffer for frame pairs
 prefetch_buffer: 4
-return_metadata: true        # Required for validation strategies
+return_metadata: true            # Required for validation strategies

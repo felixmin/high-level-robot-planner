@@ -113,7 +113,8 @@ class TestOXEFramePairDataset:
             offset=5,
             prefetch_buffer=0,
             image_size=64,  # Small for speed
-            shuffle_buffer=10,
+            episode_shuffle_buffer=10,
+            pair_shuffle_buffer=10,
             return_metadata=True,
         )
         yield ds
@@ -131,7 +132,8 @@ class TestOXEFramePairDataset:
             offset=5,
             prefetch_buffer=0,
             image_size=64,
-            shuffle_buffer=10,
+            episode_shuffle_buffer=10,
+            pair_shuffle_buffer=10,
             return_metadata=True,
             samples_per_episode=1,
             seed=123,
@@ -250,7 +252,8 @@ class TestMultiOXEFramePairDataset:
             ],
             prefetch_buffer=0,
             image_size=64,
-            shuffle_buffer=10,
+            episode_shuffle_buffer=10,
+            pair_shuffle_buffer=10,
             return_metadata=True,
             is_train=True,
         )
@@ -292,12 +295,13 @@ class TestMultiOXEFramePairDataset:
 
         ds = MultiOXEFramePairDataset(
             datasets=[
-                {"name": "language_table", "train_split": "train[:30]", "weight": 0.5, "offset": 5, "size": 10000},
-                {"name": "bridge", "train_split": "train[:30]", "weight": 0.5, "offset": 5, "size": 10000},
+                {"name": "language_table", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 0.5, "offset": 5, "size": 10000},
+                {"name": "bridge", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 0.5, "offset": 5, "size": 10000},
             ],
             prefetch_buffer=0,
             image_size=64,
-            shuffle_buffer=10,
+            episode_shuffle_buffer=10,
+            pair_shuffle_buffer=10,
             return_metadata=False,
             is_train=True,
             samples_per_episode=1,
@@ -329,7 +333,8 @@ class TestMemoryStability:
             offset=5,
             prefetch_buffer=0,
             image_size=64,
-            shuffle_buffer=10,
+            episode_shuffle_buffer=10,
+            pair_shuffle_buffer=10,
             return_metadata=False,
         )
 
@@ -366,11 +371,12 @@ class TestMemoryStability:
 
         ds = MultiOXEFramePairDataset(
             datasets=[
-                {"name": "language_table", "train_split": "train[:30]", "weight": 1.0, "offset": 5, "size": 10000},
+                {"name": "language_table", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 1.0, "offset": 5, "size": 10000},
             ],
             prefetch_buffer=0,
             image_size=64,
-            shuffle_buffer=10,
+            episode_shuffle_buffer=10,
+            pair_shuffle_buffer=10,
             return_metadata=False,
             is_train=True,
         )
@@ -410,7 +416,8 @@ class TestRT1Dataset:
             offset=3,  # ~1 sec at 3Hz
             prefetch_buffer=0,
             image_size=64,
-            shuffle_buffer=5,
+            episode_shuffle_buffer=5,
+            pair_shuffle_buffer=5,
             return_metadata=True,
         )
         yield ds
@@ -469,7 +476,8 @@ class TestRoboNetDataset:
             offset=10,
             prefetch_buffer=0,
             image_size=64,
-            shuffle_buffer=5,
+            episode_shuffle_buffer=5,
+            pair_shuffle_buffer=5,
             return_metadata=True,
         )
         yield ds

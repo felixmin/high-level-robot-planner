@@ -4,15 +4,17 @@
 
 datasets:
   - name: rt1
-    train_split: "train[:90%]"  # ~78,491 episodes
-    val_split: "train[90%:]"    # ~8,721 episodes
+    train_split: "train[:90%]"   # ~78,491 episodes
+    val_split: "train[90%:]"     # ~8,721 episodes
+    offset: 3                    # ~1 second at 3Hz
     weight: 1.0
+    size: 2113650                # Precomputed: ~87k × 0.9 × 27 pairs
 
 # Shared settings
-offset: 3                    # ~1 second at 3Hz
 image_size: 256
 batch_size: 32
-num_workers: 0               # tf.data handles parallelism
-shuffle_buffer: 200          # Buffer size for shuffling
+num_workers: 0                   # tf.data handles parallelism
+episode_shuffle_buffer: 200      # Shuffle buffer for episodes
+pair_shuffle_buffer: 500         # Shuffle buffer for frame pairs
 prefetch_buffer: 4
-return_metadata: true        # Required for action/state scatter validation
+return_metadata: true            # Required for action/state scatter validation

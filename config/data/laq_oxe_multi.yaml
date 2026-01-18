@@ -5,22 +5,22 @@ datasets:
   - name: language_table
     train_split: "train[:90%]"
     val_split: "train[90%:]"
-    weight: 0.5                  # 50% of samples from language_table
     offset: 10                   # 1 second at 10Hz
-    size: 11934000               # Precomputed: ~442k episodes × 0.9 × 30 pairs (avoids TF init)
+    weight: 0.5                  # 50% of samples from language_table
+    size: 11934000               # Precomputed: ~442k episodes × 0.9 × 30 pairs
 
   - name: bridge
     train_split: "train[:90%]"
     val_split: "train[90%:]"
-    weight: 0.5                  # 50% of samples from bridge
     offset: 5                    # 1 second at 5Hz
-    size: 1031130                # Precomputed: ~25.5k episodes × 0.9 × 45 pairs (avoids TF init)
+    weight: 0.5                  # 50% of samples from bridge
+    size: 1031130                # Precomputed: ~25.5k episodes × 0.9 × 45 pairs
 
-# Shared settings (can be overridden per-dataset with 'offset')
-offset: 5                        # Default offset
+# Shared settings
 image_size: 256
 batch_size: 32
 num_workers: 0                   # tf.data handles parallelism
-shuffle_buffer: 200              # Split across datasets
+episode_shuffle_buffer: 200      # Shuffle buffer for episodes
+pair_shuffle_buffer: 500         # Shuffle buffer for frame pairs
 prefetch_buffer: 4
 return_metadata: true            # Required for validation strategies

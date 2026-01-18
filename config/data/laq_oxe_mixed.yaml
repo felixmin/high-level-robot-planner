@@ -33,7 +33,8 @@ datasets:
 image_size: 256
 batch_size: 32
 num_workers: 0                   # tf.data handles parallelism
-shuffle_buffer: 200              # Split across datasets
+episode_shuffle_buffer: 500      # Shuffle buffer for episodes
+pair_shuffle_buffer: 1000        # Shuffle buffer for frame pairs
 prefetch_buffer: 16              # Increased for better I/O overlap
 persistent_iterator: true        # Keep iterator alive to avoid shuffle buffer refill
 samples_per_episode: 1           # LAPA-style: sample N pairs per episode (0 = all pairs)

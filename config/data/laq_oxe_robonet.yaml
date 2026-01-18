@@ -4,15 +4,17 @@
 
 datasets:
   - name: robonet
-    train_split: "train[:90%]"  # ~74,498 episodes
-    val_split: "train[90%:]"    # ~8,277 episodes
+    train_split: "train[:90%]"   # ~74,498 episodes
+    val_split: "train[90%:]"     # ~8,277 episodes
+    offset: 10                   # ~1 second at estimated 10Hz
     weight: 1.0
+    size: 1494000                # Precomputed: ~83k × 0.9 × 20 pairs
 
 # Shared settings
-offset: 10                   # ~1 second at estimated 10Hz
 image_size: 256
 batch_size: 32
-num_workers: 0               # tf.data handles parallelism
-shuffle_buffer: 200          # Buffer size for shuffling
+num_workers: 0                   # tf.data handles parallelism
+episode_shuffle_buffer: 200      # Shuffle buffer for episodes
+pair_shuffle_buffer: 500         # Shuffle buffer for frame pairs
 prefetch_buffer: 4
-return_metadata: true        # Required for action/state scatter validation
+return_metadata: true            # Required for action/state scatter validation

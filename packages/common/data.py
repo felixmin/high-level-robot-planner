@@ -1067,10 +1067,13 @@ class OXEDataModule(pl.LightningDataModule):
         image_size: int = 256,
         batch_size: int = 32,
         num_workers: int = 0,  # IterableDataset + tf.data handles parallelism
-        shuffle_buffer: int = 200,
-        val_shuffle_buffer: int = 0,
+        episode_shuffle_buffer: int = 500,
+        pair_shuffle_buffer: int = 1000,
+        val_episode_shuffle_buffer: int = 0,
+        val_pair_shuffle_buffer: int = 0,
         return_metadata: bool = True,
         persistent_iterator: bool = True,
+        num_parallel_episodes: int = 4,
         # Legacy parameters (ignored but kept for config compatibility)
         name: Optional[str] = None,
         task: Optional[str] = None,
@@ -1080,10 +1083,11 @@ class OXEDataModule(pl.LightningDataModule):
         Args:
             datasets: List of dataset configs (new format), each with:
                 - name: Dataset name (e.g., "bridge", "language_table")
-                - train_split: TFDS split for training
-                - val_split: TFDS split for validation
-                - weight: Sampling weight (default 1.0)
-                - offset: Optional per-dataset offset override
+                - train_split: TFDS split for training (REQUIRED)
+                - val_split: TFDS split for validation (REQUIRED)
+                - offset: Frame offset for pairs (REQUIRED)
+                - size: Precomputed dataset size (REQUIRED)
+                - weight: Sampling weight (default proportionate)
             dataset_name: Name of OXE dataset (legacy single-dataset format)
             gcs_path: Override GCS path (optional, uses registry default)
             train_split: TFDS split for training (legacy format)
@@ -1092,9 +1096,11 @@ class OXEDataModule(pl.LightningDataModule):
             image_size: Target image size (will resize)
             batch_size: Batch size for dataloaders
             num_workers: DataLoader workers (0 recommended for IterableDataset)
-            shuffle_buffer: tf.data shuffle buffer size
+            episode_shuffle_buffer: Shuffle buffer for episodes
+            pair_shuffle_buffer: Shuffle buffer for frame pairs
             prefetch_buffer: tf.data prefetch buffer size
             return_metadata: If True, return dict with metadata
+            num_parallel_episodes: Number of episodes to process in parallel
         """
         super().__init__()
 
@@ -1120,11 +1126,14 @@ class OXEDataModule(pl.LightningDataModule):
         self.image_size = image_size
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.shuffle_buffer = shuffle_buffer
-        self.val_shuffle_buffer = val_shuffle_buffer
+        self.episode_shuffle_buffer = episode_shuffle_buffer
+        self.pair_shuffle_buffer = pair_shuffle_buffer
+        self.val_episode_shuffle_buffer = val_episode_shuffle_buffer
+        self.val_pair_shuffle_buffer = val_pair_shuffle_buffer
         self.prefetch_buffer = prefetch_buffer
         self.return_metadata = return_metadata
         self.persistent_iterator = persistent_iterator
+        self.num_parallel_episodes = num_parallel_episodes
 
         # Will be set in setup()
         self.train_dataset = None
@@ -1137,59 +1146,80 @@ class OXEDataModule(pl.LightningDataModule):
         if len(self.dataset_configs) == 1:
             # Single dataset - use simple implementation
             cfg = self.dataset_configs[0]
+
+            # Validate required fields
+            if "train_split" not in cfg:
+                raise ValueError(f"Dataset '{cfg['name']}' missing required 'train_split'")
+            if "val_split" not in cfg:
+                raise ValueError(f"Dataset '{cfg['name']}' missing required 'val_split'")
+            if "offset" not in cfg:
+                raise ValueError(f"Dataset '{cfg['name']}' missing required 'offset'")
+            if "size" not in cfg:
+                raise ValueError(f"Dataset '{cfg['name']}' missing required 'size'")
+
             self.train_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
                 gcs_path=cfg.get("gcs_path"),
-                split=cfg.get("train_split", "train[:90%]"),
-                offset=cfg.get("offset", self.offset),
+                split=cfg["train_split"],
+                offset=cfg["offset"],
                 image_size=self.image_size,
-                shuffle_buffer=self.shuffle_buffer,
+                episode_shuffle_buffer=self.episode_shuffle_buffer,
+                pair_shuffle_buffer=self.pair_shuffle_buffer,
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
                 samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
                 seed=cfg.get("seed", self.sampling_seed),
+                precomputed_size=cfg["size"],
+                num_parallel_episodes=self.num_parallel_episodes,
             )
             self.val_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
                 gcs_path=cfg.get("gcs_path"),
-                split=cfg.get("val_split", "train[90%:]"),
-                offset=cfg.get("offset", self.offset),
+                split=cfg["val_split"],
+                offset=cfg["offset"],
                 image_size=self.image_size,
-                shuffle_buffer=self.val_shuffle_buffer,
+                episode_shuffle_buffer=self.val_episode_shuffle_buffer,
+                pair_shuffle_buffer=self.val_pair_shuffle_buffer,
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
                 samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
                 seed=cfg.get("seed", self.sampling_seed),
+                precomputed_size=cfg["size"],
+                num_parallel_episodes=self.num_parallel_episodes,
             )
             logger.info(f"✓ OXE DataModule initialized (single dataset)")
             logger.info(f"  - Dataset: {cfg['name']}")
-            logger.info(f"  - Train split: {cfg.get('train_split', 'train[:90%]')}")
-            logger.info(f"  - Val split: {cfg.get('val_split', 'train[90%:]')}")
+            logger.info(f"  - Train split: {cfg['train_split']}")
+            logger.info(f"  - Val split: {cfg['val_split']}")
         else:
             # Multiple datasets - use interleaving
             self.train_dataset = MultiOXEFramePairDataset(
                 datasets=self.dataset_configs,
                 image_size=self.image_size,
-                shuffle_buffer=self.shuffle_buffer,
+                episode_shuffle_buffer=self.episode_shuffle_buffer,
+                pair_shuffle_buffer=self.pair_shuffle_buffer,
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 is_train=True,
                 persistent_iterator=self.persistent_iterator,
                 samples_per_episode=self.samples_per_episode,
                 seed=self.sampling_seed,
+                num_parallel_episodes=self.num_parallel_episodes,
             )
             self.val_dataset = MultiOXEFramePairDataset(
                 datasets=self.dataset_configs,
                 image_size=self.image_size,
-                shuffle_buffer=self.val_shuffle_buffer,
+                episode_shuffle_buffer=self.val_episode_shuffle_buffer,
+                pair_shuffle_buffer=self.val_pair_shuffle_buffer,
                 prefetch_buffer=self.prefetch_buffer,
                 return_metadata=self.return_metadata,
                 is_train=False,
                 persistent_iterator=self.persistent_iterator,
                 samples_per_episode=self.samples_per_episode,
                 seed=self.sampling_seed,
+                num_parallel_episodes=self.num_parallel_episodes,
             )
             dataset_names = [cfg["name"] for cfg in self.dataset_configs]
             logger.info(f"✓ OXE DataModule initialized (multi-dataset)")
@@ -1199,8 +1229,8 @@ class OXEDataModule(pl.LightningDataModule):
         logger.info(f"  - Samples per episode: {self.samples_per_episode if self.samples_per_episode else 'all'}")
         logger.info(f"  - Sampling seed: {self.sampling_seed}")
         logger.info(f"  - Image size: {self.image_size}")
-        logger.info(f"  - Shuffle buffer: {self.shuffle_buffer}")
-        logger.info(f"  - Val shuffle buffer: {self.val_shuffle_buffer}")
+        logger.info(f"  - Episode shuffle buffer: {self.episode_shuffle_buffer}")
+        logger.info(f"  - Pair shuffle buffer: {self.pair_shuffle_buffer}")
 
     def train_dataloader(self):
         """Create training dataloader."""
