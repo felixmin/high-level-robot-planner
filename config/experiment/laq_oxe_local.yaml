@@ -12,6 +12,7 @@ defaults:
   - /training@training: laq_optimizer
   - /cluster@cluster: local_dev
 
+
 experiment:
   name: laq_oxe_local
   description: "Minimal local OXE run (no shuffle/prefetch/autotune)"
@@ -33,7 +34,7 @@ data:
   val_episode_shuffle_buffer: 0
   val_pair_shuffle_buffer: 0
   episode_prefetch_buffer: 0
-  prefetch_buffer: 32
+  prefetch_buffer: 1
   num_parallel_episodes: 1
   num_parallel_calls: 1
   # Multi-dataset only: sample blocks per-dataset in tf.data to reduce

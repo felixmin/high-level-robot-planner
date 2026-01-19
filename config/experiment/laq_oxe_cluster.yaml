@@ -10,11 +10,13 @@ defaults:
   - /model@model: laq
   - /data@data: laq_oxe_all
   - /training@training: laq_optimizer
-  - /cluster@cluster: local_dev
+  - /cluster@cluster: mcml_h100
+  - optional /user_config: local
+
 
 experiment:
-  name: laq_oxe_local
-  description: "Minimal local OXE run (no shuffle/prefetch/autotune)"
+  name: laq_oxe_cluster
+  description: "Cluster LAQ OXE run"
 
 model:
   flow:
@@ -33,7 +35,7 @@ data:
   val_episode_shuffle_buffer: 0
   val_pair_shuffle_buffer: 0
   episode_prefetch_buffer: 0
-  prefetch_buffer: 32
+  prefetch_buffer: 1
   num_parallel_episodes: 1
   num_parallel_calls: 1
   # Multi-dataset only: sample blocks per-dataset in tf.data to reduce
@@ -65,6 +67,8 @@ data:
   sampling_seed: 0
 
 training:
+  optimizer:
+    lr: 1.0e-4
   enable_progress_bar: true
   enable_model_summary: true
   scheduler:
