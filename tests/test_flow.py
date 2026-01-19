@@ -293,6 +293,28 @@ class TestLAQWithFlow:
             # No flow config
         })
 
+    @pytest.fixture
+    def laq_config_with_flow_disabled(self):
+        """Create minimal LAQ config with flow explicitly disabled."""
+        from omegaconf import OmegaConf
+        # Use image_size=128, patch_size=16 for 8x8 grid (supported by NSVQ)
+        return OmegaConf.create({
+            "dim": 64,
+            "quant_dim": 16,
+            "codebook_size": 8,
+            "image_size": 128,
+            "patch_size": 16,
+            "spatial_depth": 2,
+            "temporal_depth": 2,
+            "dim_head": 16,
+            "heads": 4,
+            "code_seq_len": 1,
+            "use_aux_loss": False,
+            "flow": {
+                "enabled": False,
+            },
+        })
+
     def test_flow_config_parsed(self, laq_config_with_flow, training_config):
         """Test that flow config is correctly parsed in task."""
         from laq.task import LAQTask
@@ -313,6 +335,19 @@ class TestLAQWithFlow:
 
         task = LAQTask(
             model_config=laq_config_without_flow,
+            training_config=training_config,
+        )
+
+        assert task.model.flow_config is None
+        assert task.model.flow_decoder is None
+        assert task.model.flow_teacher is None
+
+    def test_no_flow_when_explicitly_disabled(self, laq_config_with_flow_disabled, training_config):
+        """Test that flow is disabled when configured with enabled=false."""
+        from laq.task import LAQTask
+
+        task = LAQTask(
+            model_config=laq_config_with_flow_disabled,
             training_config=training_config,
         )
 

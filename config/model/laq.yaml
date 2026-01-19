@@ -51,6 +51,8 @@ codebook_replace_schedule:
 # Enriches latent space with motion information via RAFT knowledge distillation
 # To enable, set flow config in experiment (see laq_oxe_all_val_3.yaml)
 # flow:
+#   enabled: true        # Set false to disable flow without removing the block
 #   model: raft_small    # "raft_small" or "raft_large"
 #   loss_weight: 0.1     # Weight for flow loss in total loss
-#   decoder_depth: 8     # Transformer depth for flow decoder
+#   decoder_depth: 4     # Transformer depth for flow decoder
+#   warmup_steps: 10000

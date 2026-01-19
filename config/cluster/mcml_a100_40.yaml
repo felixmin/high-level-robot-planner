@@ -1,0 +1,20 @@
+# MCML H100 Single Node Configuration
+# Single node on MCML H100 partition
+
+name: mcml_a100
+
+compute:
+  num_nodes: 1
+  gpus_per_node: 1
+  time_limit: "15:00:00"
+
+slurm:
+  enabled: true
+  partition: mcml-hgx-a100-40x8
+  qos: mcml
+  account: null  # Set if needed
+
+container:
+  # Default to a per-user container path on DSSHOME. Override via
+  # `cluster.container.image=/path/to/container.sqsh` if needed.
+  image: ${oc.env:HOME}/workspace/containers/lam.sqsh

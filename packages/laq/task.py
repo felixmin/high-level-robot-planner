@@ -89,12 +89,27 @@ class LAQTask(pl.LightningModule):
         flow_config = None
         if "flow" in model_config and model_config.flow is not None:
             flow_cfg = model_config.flow
-            flow_config = FlowConfig(
-                model=flow_cfg.model,
-                loss_weight=flow_cfg.loss_weight,
-                decoder_depth=flow_cfg.decoder_depth,
-                warmup_steps=flow_cfg.get("warmup_steps", 0),
-            )
+            flow_enabled = bool(flow_cfg.get("enabled", True))
+            if flow_enabled:
+                try:
+                    flow_config = FlowConfig(
+                        model=flow_cfg.model,
+                        loss_weight=flow_cfg.loss_weight,
+                        decoder_depth=flow_cfg.decoder_depth,
+                        warmup_steps=flow_cfg.get("warmup_steps", 0),
+                    )
+                except Exception as exc:
+                    raise ValueError(
+                        "Invalid flow config. Expected:\n"
+                        "  model.flow: null  # to disable\n"
+                        "  # or\n"
+                        "  model.flow:\n"
+                        "    enabled: true\n"
+                        "    model: raft_small|raft_large\n"
+                        "    loss_weight: <float>\n"
+                        "    decoder_depth: <int>\n"
+                        "    warmup_steps: <int, optional>\n"
+                    ) from exc
 
         # Build codebook replacement schedule if specified
         codebook_replace_schedule = None

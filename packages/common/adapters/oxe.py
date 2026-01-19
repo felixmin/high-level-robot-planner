@@ -909,11 +909,11 @@ class MultiOXEFramePairDataset(IterableDataset):
         seed: Optional[int],
         num_parallel_episodes: int,
         num_parallel_calls: int,
-        mix_block_length: int = 1,
-        parallelism_mode: str = "divide",
-        per_dataset_prefetch_buffer: int = 0,
-        mixing_strategy: str = "sample",
-        private_threadpool_size: int = 0,  # 0 = use shared global threadpool
+        mix_block_length: int,
+        parallelism_mode: str,
+        per_dataset_prefetch_buffer: int,
+        mixing_strategy: str,
+        private_threadpool_size: int,  # 0 = use shared global threadpool
     ):
         super().__init__()
 
