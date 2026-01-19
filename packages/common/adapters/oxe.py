@@ -529,6 +529,28 @@ class OXEFramePairDataset(IterableDataset):
                     lambda s: s["observation"][image_key],
                     num_parallel_calls=num_parallel_calls,
                 )
+
+                # Fast path: if we only take a single sample per episode and do not
+                # need per-episode sampling shuffle, avoid the scan + batch(8)/unbatch
+                # pipeline. Taking just `offset+1` frames and forming the first pair
+                # is much cheaper and avoids decoding/resizing unnecessary frames.
+                if samples_per_episode == 1 and per_episode_sample_shuffle <= 0:
+                    # We still have to iterate through `offset` intermediate frames to
+                    # reach the target frame, but we can avoid resizing them (only the
+                    # first + last frame of the pair are needed). Batch the prefix once
+                    # so we don't read/decode frames twice.
+                    frames_prefix = frames_ds.take(offset + 1).batch(
+                        offset + 1, drop_remainder=True
+                    )
+
+                    def _make_one_pair(frames):
+                        first_frame = _resize_frame(frames[0])
+                        last_frame = _resize_frame(frames[-1])
+                        pair = tf.stack([first_frame, last_frame], axis=0)
+                        return tf.ensure_shape(pair, [2, image_size, image_size, 3])
+
+                    return frames_prefix.map(_make_one_pair, num_parallel_calls=1)
+
                 frames_ds = frames_ds.batch(8).map(
                     _resize_frames_batch, num_parallel_calls=num_parallel_calls
                 ).unbatch()
