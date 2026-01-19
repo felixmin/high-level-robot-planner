@@ -448,7 +448,12 @@ class OXEFramePairDataset(IterableDataset):
 
         offset_tf = tf.constant(offset, dtype=tf.int32)
         dataset_name_tf = tf.constant(dataset_name, dtype=tf.string)
-        per_episode_sample_shuffle = int(self.pair_shuffle_buffer) if self.pair_shuffle_buffer > 0 else 1000
+        # When `pair_shuffle_buffer` is 0, users expect "no shuffling" rather than a
+        # hidden, large per-episode shuffle buffer (which can be very expensive when
+        # `samples_per_episode` is small).
+        #
+        # Also treat a buffer of 1 as effectively "no shuffle" (it cannot randomize).
+        per_episode_sample_shuffle = int(self.pair_shuffle_buffer) if self.pair_shuffle_buffer > 1 else 0
 
         def _strip_null_bytes(s: tf.Tensor) -> tf.Tensor:
             s = tf.convert_to_tensor(s, dtype=tf.string)
@@ -557,9 +562,11 @@ class OXEFramePairDataset(IterableDataset):
 
                 pairs_ds = frames_ds.scan(_init_state(), _scan_fn).skip(offset)
                 if samples_per_episode > 0:
-                    pairs_ds = pairs_ds.shuffle(
-                        per_episode_sample_shuffle, seed=self._tf_seed
-                    ).take(samples_per_episode)
+                    if per_episode_sample_shuffle > 0:
+                        pairs_ds = pairs_ds.shuffle(
+                            per_episode_sample_shuffle, seed=self._tf_seed
+                        )
+                    pairs_ds = pairs_ds.take(samples_per_episode)
                 return pairs_ds
 
             if robot_key:
@@ -704,7 +711,9 @@ class OXEFramePairDataset(IterableDataset):
 
             out_ds = scanned_ds.map(_to_pair_and_meta, num_parallel_calls=num_parallel_calls)
             if samples_per_episode > 0:
-                out_ds = out_ds.shuffle(per_episode_sample_shuffle, seed=self._tf_seed).take(samples_per_episode)
+                if per_episode_sample_shuffle > 0:
+                    out_ds = out_ds.shuffle(per_episode_sample_shuffle, seed=self._tf_seed)
+                out_ds = out_ds.take(samples_per_episode)
             return out_ds
 
         tf_ds = ds.interleave(
