@@ -10,7 +10,7 @@ compute:
 
 slurm:
   enabled: true
-  partition: mcml-hgx-a100-40x8
+  partition: mcml-dgx-a100-40x8
   qos: mcml
   account: null  # Set if needed
 

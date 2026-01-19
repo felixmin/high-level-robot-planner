@@ -223,7 +223,9 @@ class NSVQ(torch.nn.Module):
         # Just return the tensor of "quantized_input" as vector quantized version of the input data.
         
         quantized_input = self.decode(quantized_input, batch_size)
-        return quantized_input, perplexity, self.codebooks_used.cpu().numpy(), min_indices.reshape(batch_size, -1)
+        # NOTE: Avoid unconditional GPU->CPU sync/transfer in the hot path.
+        # Callers that need CPU/numpy stats should explicitly request/convert them.
+        return quantized_input, perplexity, self.codebooks_used, min_indices.reshape(batch_size, -1)
 
     def _get_replacement_indices(self):
         """
