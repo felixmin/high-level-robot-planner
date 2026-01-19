@@ -327,8 +327,8 @@ def main(cfg: DictConfig):
         log_every_n_steps=10,
         val_check_interval=val_check_interval,  # Configurable validation frequency
         limit_val_batches=limit_val_batches,  # Limit validation batches
-        enable_progress_bar=True,
-        enable_model_summary=True,
+        enable_progress_bar=bool(training_config.get("enable_progress_bar", True)),
+        enable_model_summary=bool(training_config.get("enable_model_summary", True)),
     )
 
     logger.info(f"✓ Trainer initialized")

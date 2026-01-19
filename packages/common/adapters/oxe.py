@@ -276,6 +276,7 @@ class OXEFramePairDataset(IterableDataset):
         precomputed_size: Optional[int],  # Avoid TF init in __len__
         episode_prefetch_buffer: int,  # Phase 3: overlap episode fetch/decode
         num_parallel_episodes: int,  # Phase 4: parallel episode processing via interleave
+        private_threadpool_size: int = 0,  # 0 = use shared global threadpool
     ):
         super().__init__()
 
@@ -304,6 +305,7 @@ class OXEFramePairDataset(IterableDataset):
         self.num_parallel_episodes = num_parallel_episodes
         self.episode_shuffle_buffer = episode_shuffle_buffer
         self.pair_shuffle_buffer = pair_shuffle_buffer
+        self.private_threadpool_size = private_threadpool_size
 
         # Lazy initialization of tf.data pipeline
         self._builder = None
@@ -713,6 +715,14 @@ class OXEFramePairDataset(IterableDataset):
             deterministic=False,
         )
 
+        # Apply tf.data options (private thread pool, non-determinism for speed)
+        options = tf.data.Options()
+        options.experimental_deterministic = False
+        options.experimental_slack = True
+        if self.private_threadpool_size > 0:
+            options.threading.private_threadpool_size = self.private_threadpool_size
+        tf_ds = tf_ds.with_options(options)
+
         # Pair-level shuffle for better mixing
         if self.pair_shuffle_buffer > 0:
             tf_ds = tf_ds.shuffle(self.pair_shuffle_buffer, seed=self._tf_seed)
@@ -899,12 +909,20 @@ class MultiOXEFramePairDataset(IterableDataset):
         seed: Optional[int],
         num_parallel_episodes: int,
         num_parallel_calls: int,
+        mix_block_length: int = 1,
+        parallelism_mode: str = "divide",
+        per_dataset_prefetch_buffer: int = 0,
+        mixing_strategy: str = "sample",
+        private_threadpool_size: int = 0,  # 0 = use shared global threadpool
     ):
         super().__init__()
 
         self.image_size = image_size
         self.dataset_configs = datasets
         self.prefetch_buffer = prefetch_buffer
+        self.per_dataset_prefetch_buffer = int(per_dataset_prefetch_buffer)
+        if self.per_dataset_prefetch_buffer < 0:
+            raise ValueError("per_dataset_prefetch_buffer must be >= 0")
         self.return_metadata = return_metadata
         self.is_train = is_train
         self.persistent_iterator = persistent_iterator
@@ -915,6 +933,18 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.episode_prefetch_buffer = episode_prefetch_buffer
         self.episode_shuffle_buffer = episode_shuffle_buffer
         self.pair_shuffle_buffer = pair_shuffle_buffer
+        self.mix_block_length = int(mix_block_length)
+        if self.mix_block_length <= 0:
+            raise ValueError("mix_block_length must be a positive integer")
+        self.parallelism_mode = str(parallelism_mode)
+        if self.parallelism_mode not in {"divide", "sqrt", "full"}:
+            raise ValueError(
+                "parallelism_mode must be one of: 'divide', 'sqrt', 'full'"
+            )
+        self.mixing_strategy = str(mixing_strategy)
+        if self.mixing_strategy not in {"sample", "choose", "python"}:
+            raise ValueError("mixing_strategy must be one of: 'sample', 'choose', 'python'")
+        self.private_threadpool_size = int(private_threadpool_size)
 
         # Will be populated lazily
         self._datasets = None
@@ -927,15 +957,36 @@ class MultiOXEFramePairDataset(IterableDataset):
         if self._datasets is not None:
             return
 
-        self._datasets = []
+        # Compute weights first (from config-provided sizes) so we can drop datasets
+        # with zero weight early. This makes weight=0 act as a true disable switch
+        # and avoids unnecessary TFDS pipelines.
+        sizes = [int(cfg["size"]) for cfg in self.dataset_configs]
+        weights_all = self._compute_weights(self.dataset_configs, sizes)
 
-        # Compute per-dataset shuffle buffers
-        n_datasets = len(self.dataset_configs)
-        episode_prefetch_buffer = self.episode_prefetch_buffer // n_datasets if self.is_train else 0
+        kept: list[tuple[dict, float]] = []
+        for cfg, w in zip(self.dataset_configs, weights_all):
+            if float(w) <= 0.0:
+                name = cfg.get("name", "<unknown>")
+                logger.info(f"Dropping dataset '{name}' with non-positive weight={w:.6f}")
+                continue
+            kept.append((cfg, float(w)))
+
+        if not kept:
+            raise ValueError("All datasets have non-positive weight; nothing to sample.")
+
+        self._datasets = []
+        self._weights = [w for _, w in kept]
+
+        # Compute per-dataset shuffle buffers for the kept datasets.
+        n_datasets = len(kept)
+        episode_prefetch_buffer = (
+            self.episode_prefetch_buffer // n_datasets if self.is_train else 0
+        )
         if self.is_train and self.episode_shuffle_buffer > 0:
             episode_buffer_per_ds = max(1, self.episode_shuffle_buffer // n_datasets)
         else:
             episode_buffer_per_ds = 0
+
         # For multi-dataset sampling we apply ONE global pair shuffle buffer after
         # tf.data mixes datasets. Avoid per-dataset pair shuffle buffers which
         # multiply startup time and memory usage.
@@ -944,21 +995,30 @@ class MultiOXEFramePairDataset(IterableDataset):
         # Avoid oversubscribing CPU/threadpools: each underlying dataset has its own
         # interleave/map parallelism. If we pass the full parallelism to every dataset,
         # total concurrency multiplies by number of datasets and can slow down.
-        if n_datasets > 0:
-            num_parallel_episodes_per_ds = max(1, int(self.num_parallel_episodes) // n_datasets)
-            if int(self.num_parallel_calls) == -1:
-                num_parallel_calls_per_ds = -1
-            else:
-                num_parallel_calls_per_ds = max(1, int(self.num_parallel_calls) // n_datasets)
+        if self.parallelism_mode == "full":
+            divisor = 1.0
+        elif self.parallelism_mode == "sqrt":
+            divisor = float(n_datasets) ** 0.5
         else:
-            num_parallel_episodes_per_ds = int(self.num_parallel_episodes)
-            num_parallel_calls_per_ds = int(self.num_parallel_calls)
+            divisor = float(n_datasets)
+
+        num_parallel_episodes_per_ds = max(
+            1, int(float(self.num_parallel_episodes) / divisor)
+        )
+        if int(self.num_parallel_calls) == -1:
+            num_parallel_calls_per_ds = -1
+        else:
+            num_parallel_calls_per_ds = max(
+                1, int(float(self.num_parallel_calls) / divisor)
+            )
 
         # Prefetch at the mixed pipeline level (one place). Avoid per-dataset
-        # prefetch buffers which multiply memory usage.
-        prefetch_buffer_per_ds = 0
+        # prefetch buffers which multiply memory usage. For multi-dataset mixing,
+        # a *small* per-dataset prefetch can help keep `sample_from_datasets()`
+        # from blocking when it switches datasets.
+        prefetch_buffer_per_ds = int(self.per_dataset_prefetch_buffer)
 
-        for cfg in self.dataset_configs:
+        for cfg, _w in kept:
 
             # Get split based on train/val mode
             split = cfg["train_split"] if self.is_train else cfg["val_split"]
@@ -982,11 +1042,9 @@ class MultiOXEFramePairDataset(IterableDataset):
                 episode_shuffle_buffer=episode_buffer_per_ds,
                 pair_shuffle_buffer=pair_buffer_per_ds,
                 seed=self._get_dataset_seed(cfg),
+                private_threadpool_size=self.private_threadpool_size,
             )
             self._datasets.append(ds)
-
-        sizes = [int(cfg["size"]) for cfg in self.dataset_configs]
-        self._weights = self._compute_weights(self.dataset_configs, sizes)
 
     def _get_dataset_seed(self, cfg: dict) -> Optional[int]:
         # If an explicit per-dataset seed is provided, use it as-is.
@@ -1018,20 +1076,58 @@ class MultiOXEFramePairDataset(IterableDataset):
         tf_datasets = [ds._get_or_create_pipeline() for ds in self._datasets]
         weights = [float(w) for w in self._weights]
 
+        # Reduce per-element cross-dataset switching overhead by sampling blocks from the
+        # same dataset and unbatching afterwards. This keeps the external element type
+        # identical while amortizing `sample_from_datasets()` bookkeeping.
+        mix_block_length = int(self.mix_block_length)
+        if mix_block_length > 1 and len(tf_datasets) > 1:
+            tf_datasets = [
+                ds.batch(mix_block_length, drop_remainder=True) for ds in tf_datasets
+            ]
+
         seed = int(self.seed) if self.seed is not None else None
-        if seed is None:
-            mixed = tf.data.Dataset.sample_from_datasets(
-                tf_datasets,
-                weights=weights,
-                stop_on_empty_dataset=not self.is_train,
-            )
+        if len(tf_datasets) == 1:
+            mixed = tf_datasets[0]
+        elif self.mixing_strategy == "choose":
+            # Approximate weighted sampling by repeating indices proportional to weights
+            # and shuffling the selector. This can be faster than
+            # `sample_from_datasets()` in some settings.
+            scale = 100
+            counts = [max(1, int(round(w * scale))) for w in weights]
+            selector_indices = []
+            for i, c in enumerate(counts):
+                selector_indices.extend([i] * int(c))
+            selector_ds = tf.data.Dataset.from_tensor_slices(
+                tf.constant(selector_indices, dtype=tf.int64)
+            ).repeat()
+            if self.is_train:
+                if seed is None:
+                    selector_ds = selector_ds.shuffle(len(selector_indices))
+                else:
+                    selector_ds = selector_ds.shuffle(len(selector_indices), seed=seed)
+            mixed = tf.data.Dataset.choose_from_datasets(tf_datasets, selector_ds)
         else:
-            mixed = tf.data.Dataset.sample_from_datasets(
-                tf_datasets,
-                weights=weights,
-                seed=seed,
-                stop_on_empty_dataset=not self.is_train,
-            )
+            if seed is None:
+                mixed = tf.data.Dataset.sample_from_datasets(
+                    tf_datasets,
+                    weights=weights,
+                    stop_on_empty_dataset=not self.is_train,
+                )
+            else:
+                mixed = tf.data.Dataset.sample_from_datasets(
+                    tf_datasets,
+                    weights=weights,
+                    seed=seed,
+                    stop_on_empty_dataset=not self.is_train,
+                )
+
+        if mix_block_length > 1 and len(tf_datasets) > 1:
+            mixed = mixed.unbatch()
+
+        options = tf.data.Options()
+        options.experimental_deterministic = False
+        options.experimental_slack = True
+        mixed = mixed.with_options(options)
 
         if self.is_train:
             mixed = mixed.repeat()
@@ -1186,6 +1282,81 @@ class MultiOXEFramePairDataset(IterableDataset):
 
         logger.debug("MultiOXEFramePairDataset cleanup completed")
 
+    def _iter_python_mixing(self, tf, _decode_str):
+        """
+        Python-level mixing: iterate individual dataset tf.data pipelines and mix
+        samples using Python random selection instead of tf.data.sample_from_datasets().
+
+        This can avoid tf.data coordination overhead that occurs when sample_from_datasets()
+        switches between pipelines, at the cost of some Python overhead.
+        """
+        import random as _random
+
+        self._init_datasets()
+
+        # Create iterators for each dataset's tf.data pipeline
+        iterators = [iter(ds._get_or_create_pipeline()) for ds in self._datasets]
+        weights = list(self._weights)
+        rng = _random.Random(self.seed) if self.seed is not None else _random.Random()
+
+        # Loop for __len__ steps to define epoch length
+        steps_total = len(self)
+
+        for _ in range(steps_total):
+            # Choose dataset based on weights using cumulative probability
+            r = rng.random()
+            cumsum = 0.0
+            dataset_idx = 0
+            for i, w in enumerate(weights):
+                cumsum += w
+                if r <= cumsum:
+                    dataset_idx = i
+                    break
+
+            # Fetch item from chosen dataset, cycling if exhausted
+            try:
+                item = next(iterators[dataset_idx])
+            except StopIteration:
+                # Dataset exhausted: reset its iterator and retry
+                self._datasets[dataset_idx].reset_iterator()
+                iterators[dataset_idx] = iter(self._datasets[dataset_idx]._get_or_create_pipeline())
+                try:
+                    item = next(iterators[dataset_idx])
+                except StopIteration:
+                    continue  # Failsafe if dataset is truly empty
+
+            # Convert item to PyTorch format (same as main __iter__)
+            if self.return_metadata:
+                pair_tf, meta_tf = item
+                try:
+                    pair_pt = torch.utils.dlpack.from_dlpack(
+                        tf.experimental.dlpack.to_dlpack(pair_tf)
+                    ).permute(3, 0, 1, 2)
+                except Exception:
+                    pair_np = pair_tf.numpy()
+                    pair_pt = torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+
+                meta = {
+                    "episode_id": _decode_str(meta_tf["episode_id"].numpy()),
+                    "frame_idx": int(meta_tf["frame_idx"].numpy()),
+                    "offset": int(meta_tf["offset"].numpy()),
+                    "language": _decode_str(meta_tf["language"].numpy()),
+                    "dataset_type": _decode_str(meta_tf["dataset_type"].numpy()),
+                    "dataset_name": _decode_str(meta_tf["dataset_name"].numpy()),
+                    "action": meta_tf["action"].numpy(),
+                    "initial_state": meta_tf["initial_state"].numpy(),
+                    "robot": _decode_str(meta_tf["robot"].numpy()),
+                }
+                yield {"frames": pair_pt, **meta}
+            else:
+                try:
+                    yield torch.utils.dlpack.from_dlpack(
+                        tf.experimental.dlpack.to_dlpack(item)
+                    ).permute(3, 0, 1, 2)
+                except Exception:
+                    pair_np = item.numpy()
+                    yield torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+
     def __del__(self):
         """Cleanup on deletion."""
         try:
@@ -1195,12 +1366,18 @@ class MultiOXEFramePairDataset(IterableDataset):
 
     def __iter__(self):
         tf = _import_tensorflow_cpu_only()
-        tf_iter = self._get_or_create_iterator()
 
         def _decode_str(val) -> str:
             if isinstance(val, bytes):
                 return val.decode("utf-8").rstrip("\x00")
             return str(val) if val else ""
+
+        # Python-level mixing: iterate individual dataset pipelines and mix in Python
+        if self.mixing_strategy == "python" and len(self._datasets or []) > 1:
+            yield from self._iter_python_mixing(tf, _decode_str)
+            return
+
+        tf_iter = self._get_or_create_iterator()
 
         for item in tf_iter:
             if self.return_metadata:

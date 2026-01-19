@@ -49,3 +49,13 @@ submit:
   cache_dir: cache
   # Deprecated/ignored by submit_job.py (Slurm stdout/err goes into the run directory).
   slurm_logs_dir: slurm
+
+# Lightweight benchmarking knobs (used by scripts/bench_oxe_dataloader.py)
+benchmark:
+  warmup_steps: 20
+  steps: 200
+  # Optional: sleep after each batch fetch to simulate model compute time
+  # and let tf.data prefetch overlap (0 disables).
+  compute_sleep_s: 0.0
+  tf_profile: false
+  torch_profile: false

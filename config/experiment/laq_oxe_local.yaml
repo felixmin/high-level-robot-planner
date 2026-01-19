@@ -64,6 +64,27 @@ data:
   prefetch_buffer: 64
   num_parallel_episodes: 32
   num_parallel_calls: 32
+  # Multi-dataset only: sample blocks per-dataset in tf.data to reduce
+  # `sample_from_datasets()` coordination overhead (1 = per-sample mixing).
+  multi_dataset_mix_block_length: 1
+  # Multi-dataset only: how to allocate `num_parallel_*` across datasets.
+  # - divide: treat `num_parallel_*` as total budget and split across datasets (default)
+  # - sqrt: split by sqrt(n_datasets) (middle ground)
+  # - full: pass full `num_parallel_*` to each dataset (can oversubscribe)
+  multi_dataset_parallelism_mode: divide
+  # Multi-dataset only: optional small per-dataset prefetch to reduce
+  # `sample_from_datasets()` switching stalls (0 disables).
+  multi_dataset_per_dataset_prefetch_buffer: 0
+  # Multi-dataset only: mixing implementation.
+  # - sample: tf.data `sample_from_datasets()` (default)
+  # - choose: `choose_from_datasets()` with a shuffled selector (approx weighted)
+  multi_dataset_mixing_strategy: sample
+  # Multi-dataset only: private thread pool size for each dataset pipeline.
+  # 0 = use shared global threadpool (recommended for batch_size>=256)
+  # >0 = each pipeline gets its own threadpool (helps for batch_size<=128)
+  # - batch_size=128: private_threadpool=64 gives +20% throughput
+  # - batch_size=256: shared threadpool (0) is faster
+  multi_dataset_private_threadpool_size: 0
 
   # Reduce output/overhead
   return_metadata: false
@@ -74,6 +95,8 @@ data:
 training:
   epochs: 1
   max_steps: 5
+  enable_progress_bar: false
+  enable_model_summary: false
   scheduler:
     type: none
   profiler:
