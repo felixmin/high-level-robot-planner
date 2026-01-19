@@ -27,6 +27,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Ca
 
 
 from common.data import LAQDataModule, OXEDataModule
+from common.adapters.huggingface_oxe import HFOXEDataModule
 from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
 from foundation.callbacks import ThroughputLoggingCallback, ThroughputLoggingConfig
 from common.logging import set_seed, count_parameters
@@ -89,8 +90,15 @@ def main(cfg: DictConfig):
     # Detect data module type based on config
     data_config = {k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
 
-    if "dataset_name" in cfg.data or "datasets" in cfg.data:
-        # OXE streaming dataset (single or multi-dataset)
+    if cfg.data.get("backend") == "huggingface":
+        # HuggingFace-based OXE dataset (no TensorFlow required)
+        logger.info("✓ Using HuggingFace backend (jxu124/OpenX-Embodiment)")
+        datamodule = HFOXEDataModule(**data_config)
+        datamodule.setup()
+        logger.info(f"  - Batch size: {cfg.data.batch_size}")
+        logger.info(f"  - Datasets: {[d['name'] for d in cfg.data.datasets]}")
+    elif "dataset_name" in cfg.data or "datasets" in cfg.data:
+        # OXE streaming dataset (single or multi-dataset) - TensorFlow backend
         datamodule = OXEDataModule(**data_config)
         datamodule.setup()
         logger.info(f"  - Batch size: {cfg.data.batch_size}")
