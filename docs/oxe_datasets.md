@@ -55,18 +55,31 @@ Create a config file in `config/data/`:
 
 ```yaml
 # config/data/laq_oxe_bridge.yaml
-dataset_name: bridge
-train_split: "train[:90%]"
-val_split: "train[90%:]"
-offset: 5  # Frame offset in steps (~1 second at 5Hz)
+datasets:
+  - name: bridge
+    train_split: "train[:90%]"
+    val_split: "train[90%:]"
+    offset: 5
+    weight: 1.0
+    size: 1031130
+
 samples_per_episode: 0  # 0 = use all (t, t+offset) pairs in each episode; set to 1 for LAPA-style
-sampling_seed: null  # Optional: makes per-episode sampling and shuffles reproducible
+sampling_seed: 42
 image_size: 256
 batch_size: 32
 num_workers: 0  # tf.data handles parallelism
-shuffle_buffer: 2000
-prefetch_buffer: 4
+episode_queue_shuffle_buffer: 500
+intra_episode_sample_shuffle_buffer: 0
+global_stream_shuffle_buffer: 500
+val_episode_queue_shuffle_buffer: 0
+val_intra_episode_sample_shuffle_buffer: 0
+val_global_stream_shuffle_buffer: 0
+final_stream_prefetch_buffer: 4
+episode_queue_prefetch_buffer: 0
+num_parallel_episodes: 1
+num_parallel_calls: 1
 return_metadata: true  # Required for validation strategies
+persistent_iterator: true
 ```
 
 ### TFDS Split Syntax
@@ -135,16 +148,27 @@ print(info)
 # Load samples
 ds = OXEFramePairDataset(
     dataset_name="bridge",
+    gcs_path=None,
     split="train[:10]",
     offset=5,
+	    final_stream_prefetch_buffer=0,
+    episode_queue_shuffle_buffer=0,
+    intra_episode_sample_shuffle_buffer=0,
     image_size=256,
+    num_parallel_calls=1,
     return_metadata=True,
+    persistent_iterator=False,
+    samples_per_episode=0,
+    seed=None,
+    precomputed_size=None,
+	    episode_queue_prefetch_buffer=0,
+    num_parallel_episodes=1,
 )
 
 for sample in ds:
     print(f"Frames: {sample['frames'].shape}")
     print(f"Action: {sample['action']}")
-    print(f"Instruction: {sample['instruction']}")
+    print(f"Language: {sample['language']}")
     break
 ```
 
@@ -158,8 +182,8 @@ OXE datasets provide the following metadata when `return_metadata=True`:
     "episode_id": str,  # Unique episode identifier
     "frame_idx": int,  # Starting frame index
     "offset": int,  # Frame offset between pair
-    "instruction": str,  # Language instruction
-    "dataset_type": "oxe",  # Always "oxe"
+    "language": str,  # Language instruction
+    "dataset_type": str,  # Matches dataset_name (e.g., "bridge")
     "dataset_name": str,  # e.g., "language_table", "bridge"
     "action": List[float],  # Cumulative action between frames
     "initial_state": List[float],  # Robot state at frame_idx
@@ -196,18 +220,18 @@ OXE datasets provide the following metadata when `return_metadata=True`:
 
 ## Performance Tips
 
-1. **Shuffle buffer**: Set based on dataset image size to avoid OOM
+1. **Episode queue shuffle buffer**: Set based on dataset size to avoid OOM
    ```yaml
    # language_table (360x640 images) - can use larger buffer
-   shuffle_buffer: 2000
+   episode_queue_shuffle_buffer: 2000
 
    # bridge (480x640 images) - use smaller buffer
-   shuffle_buffer: 500
+   episode_queue_shuffle_buffer: 500
    ```
 
 2. **Prefetch**: Use 2-4 for smooth pipelining
    ```yaml
-   prefetch_buffer: 4
+   final_stream_prefetch_buffer: 4
    ```
 
 3. **Batch size**: OXE streaming can handle larger batches than local disk I/O
@@ -270,7 +294,7 @@ Could not read dataset info from gs://...
 
 ### Out of Memory
 **Cause**: Shuffle buffer too large
-**Solution**: Reduce `shuffle_buffer` to 500-1000
+**Solution**: Reduce `episode_queue_shuffle_buffer` to 500-1000
 
 ## References
 

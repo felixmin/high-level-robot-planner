@@ -3,7 +3,7 @@
 
 defaults:
   - _self_
-  - experiment: laq_debug  # Default experiment (override with experiment=X)
+  - experiment: laq_hf_local  # Default experiment (override with experiment=X)
   - override hydra/hydra_logging: disabled  # Disable Hydra's own logging
   - override hydra/job_logging: none        # We handle logging ourselves
 

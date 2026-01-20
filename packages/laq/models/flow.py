@@ -74,16 +74,7 @@ class RAFTTeacher(nn.Module):
     def __init__(self, model_name: FlowModelType, chunk_size: int = 64):
         super().__init__()
         self._model_name = model_name
-        self._model: Optional[nn.Module] = None
-        self._transforms = None
-        # Sub-batch RAFT inference to avoid cuDNN grid_sample failures at large batch sizes
-        # (RAFT's internal correlation lookups can hit unsupported cuDNN paths when B is big).
         self._chunk_size = chunk_size
-
-    def _load_model(self, device: torch.device) -> nn.Module:
-        """Lazy-load RAFT model on first use."""
-        if self._model is not None:
-            return self._model
 
         from torchvision.models.optical_flow import (
             raft_small, raft_large,
@@ -100,15 +91,15 @@ class RAFTTeacher(nn.Module):
             logger.info("Loaded RAFT-Large optical flow teacher")
 
         # Store official transforms for proper normalization
+        # Registered as submodule so it moves to device automatically
         self._transforms = weights.transforms()
 
-        model = model.to(device)
         model.eval()
         for p in model.parameters():
             p.requires_grad = False
-
+        
+        # Registered as submodule so it moves to device automatically
         self._model = model
-        return model
 
     @torch.no_grad()
     def compute_flow(
@@ -126,8 +117,6 @@ class RAFTTeacher(nn.Module):
         Returns:
             flow: Optical flow field [B, 2, H, W] (dx, dy per pixel)
         """
-        model = self._load_model(frame1.device)
-
         # Remove time dimension: [B, C, 1, H, W] -> [B, C, H, W]
         img1 = frame1.squeeze(2)
         img2 = frame2.squeeze(2)
@@ -162,7 +151,7 @@ class RAFTTeacher(nn.Module):
 
                 # RAFT returns list of flow predictions at different refinement levels
                 # Take the last (most refined) prediction
-                flow_predictions = model(img1_t, img2_t)
+                flow_predictions = self._model(img1_t, img2_t)
                 flow_chunks.append(flow_predictions[-1].float())
 
         return torch.cat(flow_chunks, dim=0)

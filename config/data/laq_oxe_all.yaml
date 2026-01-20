@@ -36,15 +36,22 @@ offset: 5                        # Default offset (overridden per-dataset)
 image_size: 256
 batch_size: 32
 num_workers: 0                   # tf.data handles parallelism
-episode_shuffle_buffer: 500      # Shuffle buffer for episodes
-pair_shuffle_buffer: 1000        # Shuffle buffer for frame pairs
-prefetch_buffer: -1              # -1 for AUTOTUNE, 0 disables prefetch
+episode_queue_shuffle_buffer: 500           # Shuffle buffer for episode queue
+intra_episode_sample_shuffle_buffer: 0      # Shuffle within an episode (only when sampling pairs)
+global_stream_shuffle_buffer: 1000          # Final global blender
+final_stream_prefetch_buffer: -1 # -1 for AUTOTUNE, 0 disables prefetch
 persistent_iterator: true        # Keep iterator alive to avoid shuffle buffer refill
 samples_per_episode: 0           # LAPA-style: sample N pairs per episode (0 = all pairs)
 return_metadata: true            # Required for validation strategies
 sampling_seed: 42
-episode_prefetch_buffer: 0
+episode_queue_prefetch_buffer: 0
 num_parallel_episodes: 1
 num_parallel_calls: 1
-val_episode_shuffle_buffer: 0
-val_pair_shuffle_buffer: 0
+multi_dataset_mix_block_length: 1
+multi_dataset_parallelism_mode: divide
+per_dataset_stream_prefetch_buffer: 0
+multi_dataset_mixing_strategy: sample
+per_dataset_private_threadpool_size: 0
+val_episode_queue_shuffle_buffer: 0
+val_intra_episode_sample_shuffle_buffer: 0
+val_global_stream_shuffle_buffer: 0

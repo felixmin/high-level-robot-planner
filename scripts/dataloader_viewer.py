@@ -100,10 +100,30 @@ def create_datamodule(config: Dict[str, Any], batch_size: int, include_bridge: b
 
     if is_oxe_config(config):
         # Use small shuffle buffer for fast loading in viewer
-        config["shuffle_buffer"] = min(config.get("shuffle_buffer", 50), 50)
-        config["val_shuffle_buffer"] = 0  # No shuffling for val
-        config["prefetch_buffer"] = 2
-        logger.info(f"Creating OXEDataModule (shuffle_buffer={config['shuffle_buffer']})")
+        config["episode_queue_shuffle_buffer"] = min(
+            int(config.get("episode_queue_shuffle_buffer", 50)), 50
+        )
+        config["intra_episode_sample_shuffle_buffer"] = int(
+            config.get("intra_episode_sample_shuffle_buffer", 0)
+        )
+        config["global_stream_shuffle_buffer"] = min(
+            int(config.get("global_stream_shuffle_buffer", 50)), 50
+        )
+        config["val_episode_queue_shuffle_buffer"] = 0  # No shuffling for val
+        config["val_intra_episode_sample_shuffle_buffer"] = 0
+        config["val_global_stream_shuffle_buffer"] = 0
+        config["final_stream_prefetch_buffer"] = 2
+        config["per_dataset_stream_prefetch_buffer"] = int(
+            config.get("per_dataset_stream_prefetch_buffer", 0)
+        )
+        config["episode_queue_prefetch_buffer"] = int(
+            config.get("episode_queue_prefetch_buffer", 0)
+        )
+        logger.info(
+            "Creating OXEDataModule "
+            f"(episode_queue_shuffle_buffer={config['episode_queue_shuffle_buffer']}, "
+            f"global_stream_shuffle_buffer={config['global_stream_shuffle_buffer']})"
+        )
         datamodule = OXEDataModule(**config)
     else:
         # Limit pairs for faster loading

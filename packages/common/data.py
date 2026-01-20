@@ -1054,27 +1054,29 @@ class OXEDataModule(pl.LightningDataModule):
     def __init__(
         self,
         offset: int,
-        prefetch_buffer: int,
+        final_stream_prefetch_buffer: int,
         datasets: Optional[list],
         samples_per_episode: int,
         sampling_seed: Optional[int],
         image_size: int,
         batch_size: int,
         num_workers: int,  # IterableDataset + tf.data handles parallelism
-        episode_shuffle_buffer: int,
-        pair_shuffle_buffer: int,
-        val_episode_shuffle_buffer: int,
-        val_pair_shuffle_buffer: int,
+        episode_queue_shuffle_buffer: int,
+        intra_episode_sample_shuffle_buffer: int,
+        global_stream_shuffle_buffer: int,
+        val_episode_queue_shuffle_buffer: int,
+        val_intra_episode_sample_shuffle_buffer: int,
+        val_global_stream_shuffle_buffer: int,
         return_metadata: bool,
         persistent_iterator: bool,
         num_parallel_episodes: int,
         num_parallel_calls: int,
-        episode_prefetch_buffer: int,
-        multi_dataset_mix_block_length: int = 1,
-        multi_dataset_parallelism_mode: str = "divide",
-        multi_dataset_per_dataset_prefetch_buffer: int = 0,
-        multi_dataset_mixing_strategy: str = "sample",
-        multi_dataset_private_threadpool_size: int = 0,
+        episode_queue_prefetch_buffer: int,
+        multi_dataset_mix_block_length: int,
+        multi_dataset_parallelism_mode: str,
+        per_dataset_stream_prefetch_buffer: int,
+        multi_dataset_mixing_strategy: str,
+        per_dataset_private_threadpool_size: int,
     ):
         """
         Args:
@@ -1089,9 +1091,10 @@ class OXEDataModule(pl.LightningDataModule):
             image_size: Target image size (will resize)
             batch_size: Batch size for dataloaders
             num_workers: DataLoader workers (0 recommended for IterableDataset)
-            episode_shuffle_buffer: Shuffle buffer for episodes
-            pair_shuffle_buffer: Shuffle buffer for frame pairs
-            prefetch_buffer: tf.data prefetch buffer size
+            episode_queue_shuffle_buffer: Shuffle buffer for episode queue
+            intra_episode_sample_shuffle_buffer: Shuffle buffer for per-episode samples
+            global_stream_shuffle_buffer: Shuffle buffer for global sample stream
+            final_stream_prefetch_buffer: tf.data prefetch buffer size (after sample stream is formed)
             return_metadata: If True, return dict with metadata
             num_parallel_episodes: Number of episodes to process in parallel
         """
@@ -1104,25 +1107,23 @@ class OXEDataModule(pl.LightningDataModule):
         self.image_size = image_size
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.episode_shuffle_buffer = episode_shuffle_buffer
-        self.pair_shuffle_buffer = pair_shuffle_buffer
-        self.val_episode_shuffle_buffer = val_episode_shuffle_buffer
-        self.val_pair_shuffle_buffer = val_pair_shuffle_buffer
-        self.prefetch_buffer = prefetch_buffer
+        self.episode_queue_shuffle_buffer = episode_queue_shuffle_buffer
+        self.intra_episode_sample_shuffle_buffer = intra_episode_sample_shuffle_buffer
+        self.global_stream_shuffle_buffer = global_stream_shuffle_buffer
+        self.val_episode_queue_shuffle_buffer = val_episode_queue_shuffle_buffer
+        self.val_intra_episode_sample_shuffle_buffer = val_intra_episode_sample_shuffle_buffer
+        self.val_global_stream_shuffle_buffer = val_global_stream_shuffle_buffer
+        self.final_stream_prefetch_buffer = final_stream_prefetch_buffer
         self.return_metadata = return_metadata
         self.persistent_iterator = persistent_iterator
         self.num_parallel_episodes = num_parallel_episodes
         self.num_parallel_calls = num_parallel_calls
-        self.episode_prefetch_buffer=episode_prefetch_buffer
+        self.episode_queue_prefetch_buffer = episode_queue_prefetch_buffer
         self.multi_dataset_mix_block_length = int(multi_dataset_mix_block_length)
         self.multi_dataset_parallelism_mode = str(multi_dataset_parallelism_mode)
-        self.multi_dataset_per_dataset_prefetch_buffer = int(
-            multi_dataset_per_dataset_prefetch_buffer
-        )
+        self.per_dataset_stream_prefetch_buffer = int(per_dataset_stream_prefetch_buffer)
         self.multi_dataset_mixing_strategy = str(multi_dataset_mixing_strategy)
-        self.multi_dataset_private_threadpool_size = int(
-            multi_dataset_private_threadpool_size
-        )
+        self.per_dataset_private_threadpool_size = int(per_dataset_private_threadpool_size)
 
         # Will be set in setup()
         self.train_dataset = None
@@ -1142,9 +1143,9 @@ class OXEDataModule(pl.LightningDataModule):
                 split=cfg["train_split"],
                 offset=cfg["offset"],
                 image_size=self.image_size,
-                episode_shuffle_buffer=self.episode_shuffle_buffer,
-                pair_shuffle_buffer=self.pair_shuffle_buffer,
-                prefetch_buffer=self.prefetch_buffer,
+                episode_queue_shuffle_buffer=self.episode_queue_shuffle_buffer,
+                intra_episode_sample_shuffle_buffer=self.intra_episode_sample_shuffle_buffer,
+                final_stream_prefetch_buffer=self.final_stream_prefetch_buffer,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
                 samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
@@ -1152,7 +1153,8 @@ class OXEDataModule(pl.LightningDataModule):
                 precomputed_size=cfg["size"],
                 num_parallel_episodes=self.num_parallel_episodes,
                 num_parallel_calls=self.num_parallel_calls,
-                episode_prefetch_buffer=self.episode_prefetch_buffer,
+                episode_queue_prefetch_buffer=self.episode_queue_prefetch_buffer,
+                private_threadpool_size=self.per_dataset_private_threadpool_size,
             )
             self.val_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
@@ -1160,9 +1162,9 @@ class OXEDataModule(pl.LightningDataModule):
                 split=cfg["val_split"],
                 offset=cfg["offset"],
                 image_size=self.image_size,
-                episode_shuffle_buffer=self.val_episode_shuffle_buffer,
-                pair_shuffle_buffer=self.val_pair_shuffle_buffer,
-                prefetch_buffer=self.prefetch_buffer,
+                episode_queue_shuffle_buffer=self.val_episode_queue_shuffle_buffer,
+                intra_episode_sample_shuffle_buffer=self.val_intra_episode_sample_shuffle_buffer,
+                final_stream_prefetch_buffer=self.final_stream_prefetch_buffer,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
                 samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
@@ -1170,7 +1172,8 @@ class OXEDataModule(pl.LightningDataModule):
                 precomputed_size=cfg["size"],
                 num_parallel_episodes=self.num_parallel_episodes,
                 num_parallel_calls=self.num_parallel_calls,
-                episode_prefetch_buffer=self.episode_prefetch_buffer,
+                episode_queue_prefetch_buffer=self.episode_queue_prefetch_buffer,
+                private_threadpool_size=self.per_dataset_private_threadpool_size,
             )
             logger.info(f"✓ OXE DataModule initialized (single dataset)")
             logger.info(f"  - Dataset: {cfg['name']}")
@@ -1181,10 +1184,11 @@ class OXEDataModule(pl.LightningDataModule):
             self.train_dataset = MultiOXEFramePairDataset(
                 datasets=self.dataset_configs,
                 image_size=self.image_size,
-                episode_shuffle_buffer=self.episode_shuffle_buffer,
-                pair_shuffle_buffer=self.pair_shuffle_buffer,
-                prefetch_buffer=self.prefetch_buffer,
-                per_dataset_prefetch_buffer=self.multi_dataset_per_dataset_prefetch_buffer,
+                episode_queue_shuffle_buffer=self.episode_queue_shuffle_buffer,
+                intra_episode_sample_shuffle_buffer=self.intra_episode_sample_shuffle_buffer,
+                global_stream_shuffle_buffer=self.global_stream_shuffle_buffer,
+                final_stream_prefetch_buffer=self.final_stream_prefetch_buffer,
+                per_dataset_stream_prefetch_buffer=self.per_dataset_stream_prefetch_buffer,
                 return_metadata=self.return_metadata,
                 is_train=True,
                 persistent_iterator=self.persistent_iterator,
@@ -1192,19 +1196,20 @@ class OXEDataModule(pl.LightningDataModule):
                 seed=self.sampling_seed,
                 num_parallel_episodes=self.num_parallel_episodes,
                 num_parallel_calls=self.num_parallel_calls,
-                episode_prefetch_buffer=self.episode_prefetch_buffer,
+                episode_queue_prefetch_buffer=self.episode_queue_prefetch_buffer,
                 mix_block_length=self.multi_dataset_mix_block_length,
                 parallelism_mode=self.multi_dataset_parallelism_mode,
                 mixing_strategy=self.multi_dataset_mixing_strategy,
-                private_threadpool_size=self.multi_dataset_private_threadpool_size,
+                per_dataset_private_threadpool_size=self.per_dataset_private_threadpool_size,
             )
             self.val_dataset = MultiOXEFramePairDataset(
                 datasets=self.dataset_configs,
                 image_size=self.image_size,
-                episode_shuffle_buffer=self.val_episode_shuffle_buffer,
-                pair_shuffle_buffer=self.val_pair_shuffle_buffer,
-                prefetch_buffer=self.prefetch_buffer,
-                per_dataset_prefetch_buffer=self.multi_dataset_per_dataset_prefetch_buffer,
+                episode_queue_shuffle_buffer=self.val_episode_queue_shuffle_buffer,
+                intra_episode_sample_shuffle_buffer=self.val_intra_episode_sample_shuffle_buffer,
+                global_stream_shuffle_buffer=self.val_global_stream_shuffle_buffer,
+                final_stream_prefetch_buffer=self.final_stream_prefetch_buffer,
+                per_dataset_stream_prefetch_buffer=self.per_dataset_stream_prefetch_buffer,
                 return_metadata=self.return_metadata,
                 is_train=False,
                 persistent_iterator=self.persistent_iterator,
@@ -1212,11 +1217,11 @@ class OXEDataModule(pl.LightningDataModule):
                 seed=self.sampling_seed,
                 num_parallel_episodes=self.num_parallel_episodes,
                 num_parallel_calls=self.num_parallel_calls,
-                episode_prefetch_buffer=self.episode_prefetch_buffer,
+                episode_queue_prefetch_buffer=self.episode_queue_prefetch_buffer,
                 mix_block_length=self.multi_dataset_mix_block_length,
                 parallelism_mode=self.multi_dataset_parallelism_mode,
                 mixing_strategy=self.multi_dataset_mixing_strategy,
-                private_threadpool_size=self.multi_dataset_private_threadpool_size,
+                per_dataset_private_threadpool_size=self.per_dataset_private_threadpool_size,
             )
             dataset_names = [cfg["name"] for cfg in self.dataset_configs]
             logger.info(f"✓ OXE DataModule initialized (multi-dataset)")
@@ -1226,8 +1231,13 @@ class OXEDataModule(pl.LightningDataModule):
         logger.info(f"  - Samples per episode: {self.samples_per_episode if self.samples_per_episode else 'all'}")
         logger.info(f"  - Sampling seed: {self.sampling_seed}")
         logger.info(f"  - Image size: {self.image_size}")
-        logger.info(f"  - Episode shuffle buffer: {self.episode_shuffle_buffer}")
-        logger.info(f"  - Pair shuffle buffer: {self.pair_shuffle_buffer}")
+        logger.info(f"  - Episode queue shuffle buffer: {self.episode_queue_shuffle_buffer}")
+        logger.info(
+            f"  - Intra-episode sample shuffle buffer: {self.intra_episode_sample_shuffle_buffer}"
+        )
+        logger.info(
+            f"  - Global stream shuffle buffer (multi-dataset only): {self.global_stream_shuffle_buffer}"
+        )
 
     def train_dataloader(self):
         """Create training dataloader."""

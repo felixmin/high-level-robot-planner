@@ -26,13 +26,11 @@ model:
 
 # Data - use smaller subset for sweep
 data:
-  dataset_name: language_table_blocktorelative_oracle_sim
-  train_split: "train[:90%]"
-  val_split: "train[90%:]"
-  offset: 10
   batch_size: 32
-  shuffle_buffer: 1000
-  prefetch_buffer: 4
+  episode_queue_shuffle_buffer: 1000
+  intra_episode_sample_shuffle_buffer: 0
+  global_stream_shuffle_buffer: 1000
+  final_stream_prefetch_buffer: 4
   return_metadata: true
 
 # Training

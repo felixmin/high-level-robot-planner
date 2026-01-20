@@ -252,8 +252,9 @@ class OXEFramePairDataset(IterableDataset):
         split: TFDS split string (e.g., "train", "train[:1000]")
         offset: Frame offset for pairs (in steps, not seconds)
         image_size: Target image size (will resize if different)
-        shuffle_buffer: Size of shuffle buffer (0 to disable)
-        prefetch_buffer: tf.data prefetch buffer size
+        episode_queue_shuffle_buffer: Shuffle buffer for incoming episodes (0 to disable)
+        intra_episode_sample_shuffle_buffer: Shuffle buffer for per-episode samples (0 to disable)
+        final_stream_prefetch_buffer: tf.data prefetch buffer size (after pair stream is formed)
         num_parallel_calls: Parallelism for tf.data operations (default: AUTOTUNE)
         return_metadata: If True, return dict with metadata
     """
@@ -264,9 +265,9 @@ class OXEFramePairDataset(IterableDataset):
         gcs_path: Optional[str],
         split: str,
         offset: int,
-        prefetch_buffer: int,
-        episode_shuffle_buffer: int,
-        pair_shuffle_buffer: int,
+        final_stream_prefetch_buffer: int,
+        episode_queue_shuffle_buffer: int,
+        intra_episode_sample_shuffle_buffer: int,
         image_size: int,
         num_parallel_calls: int,  # -1 = AUTOTUNE
         return_metadata: bool,
@@ -274,7 +275,7 @@ class OXEFramePairDataset(IterableDataset):
         samples_per_episode: int,
         seed: Optional[int],
         precomputed_size: Optional[int],  # Avoid TF init in __len__
-        episode_prefetch_buffer: int,  # Phase 3: overlap episode fetch/decode
+        episode_queue_prefetch_buffer: int,  # Phase 3: overlap episode fetch/decode
         num_parallel_episodes: int,  # Phase 4: parallel episode processing via interleave
         private_threadpool_size: int = 0,  # 0 = use shared global threadpool
     ):
@@ -292,7 +293,7 @@ class OXEFramePairDataset(IterableDataset):
         self.split = split
         self.offset = offset
         self.image_size = image_size
-        self.prefetch_buffer = prefetch_buffer
+        self.final_stream_prefetch_buffer = final_stream_prefetch_buffer
         self.num_parallel_calls = num_parallel_calls
         self.return_metadata = return_metadata
         self.persistent_iterator = persistent_iterator
@@ -301,11 +302,12 @@ class OXEFramePairDataset(IterableDataset):
         self._rng = random.Random(seed)
         self._tf_seed: Optional[int] = None
         self._precomputed_size = precomputed_size
-        self.episode_prefetch_buffer = episode_prefetch_buffer
+        self.episode_queue_prefetch_buffer = episode_queue_prefetch_buffer
         self.num_parallel_episodes = num_parallel_episodes
-        self.episode_shuffle_buffer = episode_shuffle_buffer
-        self.pair_shuffle_buffer = pair_shuffle_buffer
         self.private_threadpool_size = private_threadpool_size
+
+        self.episode_queue_shuffle_buffer = int(episode_queue_shuffle_buffer)
+        self.intra_episode_sample_shuffle_buffer = int(intra_episode_sample_shuffle_buffer)
 
         # Lazy initialization of tf.data pipeline
         self._builder = None
@@ -422,13 +424,15 @@ class OXEFramePairDataset(IterableDataset):
         if worker_info is not None and worker_info.num_workers > 1:
             ds = ds.shard(num_shards=worker_info.num_workers, index=worker_info.id)
 
-        # Shuffle episodes
-        if self.episode_shuffle_buffer > 0:
-            ds = ds.shuffle(self.episode_shuffle_buffer, seed=self._tf_seed)
+        # Shuffle the queue of episodes ("tickets") before processing.
+        if self.episode_queue_shuffle_buffer > 0:
+            ds = ds.shuffle(self.episode_queue_shuffle_buffer, seed=self._tf_seed)
 
         # Prefetch episodes (keep small; each episode can be large)
-        if self.episode_prefetch_buffer > 0:
-            ds = ds.prefetch(self.episode_prefetch_buffer)
+        if int(self.episode_queue_prefetch_buffer) == -1:
+            ds = ds.prefetch(tf.data.AUTOTUNE)
+        elif int(self.episode_queue_prefetch_buffer) > 0:
+            ds = ds.prefetch(self.episode_queue_prefetch_buffer)
 
         image_key = self.config.image_key
         instruction_key = self.config.instruction_key
@@ -448,29 +452,20 @@ class OXEFramePairDataset(IterableDataset):
 
         offset_tf = tf.constant(offset, dtype=tf.int32)
         dataset_name_tf = tf.constant(dataset_name, dtype=tf.string)
-        # When `pair_shuffle_buffer` is 0, users expect "no shuffling" rather than a
-        # hidden, large per-episode shuffle buffer (which can be very expensive when
-        # `samples_per_episode` is small).
+        # When `intra_episode_sample_shuffle_buffer` is 0, users expect "no shuffling"
+        # rather than a hidden, large per-episode shuffle buffer (which can be very
+        # expensive when `samples_per_episode` is small).
         #
         # Also treat a buffer of 1 as effectively "no shuffle" (it cannot randomize).
-        per_episode_sample_shuffle = int(self.pair_shuffle_buffer) if self.pair_shuffle_buffer > 1 else 0
+        per_episode_sample_shuffle = (
+            int(self.intra_episode_sample_shuffle_buffer)
+            if self.intra_episode_sample_shuffle_buffer > 1
+            else 0
+        )
 
         def _strip_null_bytes(s: tf.Tensor) -> tf.Tensor:
             s = tf.convert_to_tensor(s, dtype=tf.string)
             return tf.strings.regex_replace(s, "\x00+$", "")
-
-        def _resize_pair(pair: tf.Tensor) -> tf.Tensor:
-            shape = tf.shape(pair)
-            h = shape[1]
-            w = shape[2]
-            needs_resize = tf.logical_or(tf.not_equal(h, image_size), tf.not_equal(w, image_size))
-
-            def _do_resize():
-                resized = tf.image.resize(pair, [image_size, image_size])
-                return tf.cast(resized, tf.uint8)
-
-            pair = tf.cond(needs_resize, _do_resize, lambda: tf.cast(pair, tf.uint8))
-            return tf.ensure_shape(pair, [2, image_size, image_size, 3])
 
         def _resize_frame(frame: tf.Tensor) -> tf.Tensor:
             shape = tf.shape(frame)
@@ -754,12 +749,8 @@ class OXEFramePairDataset(IterableDataset):
             options.threading.private_threadpool_size = self.private_threadpool_size
         tf_ds = tf_ds.with_options(options)
 
-        # Pair-level shuffle for better mixing
-        if self.pair_shuffle_buffer > 0:
-            tf_ds = tf_ds.shuffle(self.pair_shuffle_buffer, seed=self._tf_seed)
-
         # Prefetch for performance
-        prefetch_buffer = int(self.prefetch_buffer)
+        prefetch_buffer = int(self.final_stream_prefetch_buffer)
         if prefetch_buffer == -1:
             return tf_ds.prefetch(tf.data.AUTOTUNE)
         if prefetch_buffer <= 0:
@@ -917,9 +908,10 @@ class MultiOXEFramePairDataset(IterableDataset):
             - offset: Frame offset for pairs
             - size: Precomputed dataset size
         image_size: Target image size (shared)
-        prefetch_buffer: tf.data prefetch buffer size
-        episode_shuffle_buffer: Shuffle buffer for episodes
-        pair_shuffle_buffer: Shuffle buffer for pairs/samples
+        final_stream_prefetch_buffer: tf.data prefetch buffer size (after mixing)
+        episode_queue_shuffle_buffer: Shuffle buffer for incoming episodes (0 to disable)
+        intra_episode_sample_shuffle_buffer: Shuffle buffer for per-episode samples (0 to disable)
+        global_stream_shuffle_buffer: Shuffle buffer for the final mixed stream (0 to disable)
         return_metadata: If True, return dict with metadata
         is_train: If True, use train_split; else use val_split
         num_parallel_episodes: Number of episodes to process in parallel
@@ -928,10 +920,11 @@ class MultiOXEFramePairDataset(IterableDataset):
     def __init__(
         self,
         datasets: list,
-        prefetch_buffer: int,
-        episode_prefetch_buffer: int,
-        episode_shuffle_buffer: int,
-        pair_shuffle_buffer: int,
+        final_stream_prefetch_buffer: int,
+        episode_queue_prefetch_buffer: int,
+        episode_queue_shuffle_buffer: int,
+        intra_episode_sample_shuffle_buffer: int,
+        global_stream_shuffle_buffer: int,
         image_size: int,
         return_metadata: bool,
         is_train: bool,
@@ -942,18 +935,18 @@ class MultiOXEFramePairDataset(IterableDataset):
         num_parallel_calls: int,
         mix_block_length: int,
         parallelism_mode: str,
-        per_dataset_prefetch_buffer: int,
+        per_dataset_stream_prefetch_buffer: int,
         mixing_strategy: str,
-        private_threadpool_size: int,  # 0 = use shared global threadpool
+        per_dataset_private_threadpool_size: int,  # 0 = use shared global threadpool
     ):
         super().__init__()
 
         self.image_size = image_size
         self.dataset_configs = datasets
-        self.prefetch_buffer = prefetch_buffer
-        self.per_dataset_prefetch_buffer = int(per_dataset_prefetch_buffer)
-        if self.per_dataset_prefetch_buffer < 0:
-            raise ValueError("per_dataset_prefetch_buffer must be >= 0")
+        self.final_stream_prefetch_buffer = final_stream_prefetch_buffer
+        self.per_dataset_stream_prefetch_buffer = int(per_dataset_stream_prefetch_buffer)
+        if self.per_dataset_stream_prefetch_buffer < 0:
+            raise ValueError("per_dataset_stream_prefetch_buffer must be >= 0")
         self.return_metadata = return_metadata
         self.is_train = is_train
         self.persistent_iterator = persistent_iterator
@@ -961,9 +954,10 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.seed = seed
         self.num_parallel_episodes = num_parallel_episodes
         self.num_parallel_calls = num_parallel_calls
-        self.episode_prefetch_buffer = episode_prefetch_buffer
-        self.episode_shuffle_buffer = episode_shuffle_buffer
-        self.pair_shuffle_buffer = pair_shuffle_buffer
+        self.episode_queue_prefetch_buffer = episode_queue_prefetch_buffer
+        self.episode_queue_shuffle_buffer = int(episode_queue_shuffle_buffer)
+        self.intra_episode_sample_shuffle_buffer = int(intra_episode_sample_shuffle_buffer)
+        self.global_stream_shuffle_buffer = int(global_stream_shuffle_buffer)
         self.mix_block_length = int(mix_block_length)
         if self.mix_block_length <= 0:
             raise ValueError("mix_block_length must be a positive integer")
@@ -975,7 +969,7 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.mixing_strategy = str(mixing_strategy)
         if self.mixing_strategy not in {"sample", "choose", "python"}:
             raise ValueError("mixing_strategy must be one of: 'sample', 'choose', 'python'")
-        self.private_threadpool_size = int(private_threadpool_size)
+        self.per_dataset_private_threadpool_size = int(per_dataset_private_threadpool_size)
 
         # Will be populated lazily
         self._datasets = None
@@ -1011,17 +1005,18 @@ class MultiOXEFramePairDataset(IterableDataset):
         # Compute per-dataset shuffle buffers for the kept datasets.
         n_datasets = len(kept)
         episode_prefetch_buffer = (
-            self.episode_prefetch_buffer // n_datasets if self.is_train else 0
+            self.episode_queue_prefetch_buffer // n_datasets if self.is_train else 0
         )
-        if self.is_train and self.episode_shuffle_buffer > 0:
-            episode_buffer_per_ds = max(1, self.episode_shuffle_buffer // n_datasets)
+        if self.is_train and self.episode_queue_shuffle_buffer > 0:
+            episode_buffer_per_ds = max(
+                1, int(self.episode_queue_shuffle_buffer) // n_datasets
+            )
         else:
             episode_buffer_per_ds = 0
 
-        # For multi-dataset sampling we apply ONE global pair shuffle buffer after
-        # tf.data mixes datasets. Avoid per-dataset pair shuffle buffers which
-        # multiply startup time and memory usage.
-        pair_buffer_per_ds = 0
+        # Avoid per-dataset global stream shuffles when mixing datasets. Apply one
+        # global blender after mixing (see `_create_tf_pipeline()`).
+        global_stream_shuffle_buffer_per_ds = 0
 
         # Avoid oversubscribing CPU/threadpools: each underlying dataset has its own
         # interleave/map parallelism. If we pass the full parallelism to every dataset,
@@ -1047,7 +1042,7 @@ class MultiOXEFramePairDataset(IterableDataset):
         # prefetch buffers which multiply memory usage. For multi-dataset mixing,
         # a *small* per-dataset prefetch can help keep `sample_from_datasets()`
         # from blocking when it switches datasets.
-        prefetch_buffer_per_ds = int(self.per_dataset_prefetch_buffer)
+        prefetch_buffer_per_ds = int(self.per_dataset_stream_prefetch_buffer)
 
         for cfg, _w in kept:
 
@@ -1062,18 +1057,18 @@ class MultiOXEFramePairDataset(IterableDataset):
                 gcs_path=cfg.get("gcs_path"),
                 split=split,
                 offset=cfg["offset"],
-                prefetch_buffer=prefetch_buffer_per_ds,
+                final_stream_prefetch_buffer=prefetch_buffer_per_ds,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
                 samples_per_episode=self.samples_per_episode,
                 num_parallel_episodes=num_parallel_episodes_per_ds,
                 num_parallel_calls=num_parallel_calls_per_ds,
                 precomputed_size=precomputed_size,
-                episode_prefetch_buffer=episode_prefetch_buffer,
-                episode_shuffle_buffer=episode_buffer_per_ds,
-                pair_shuffle_buffer=pair_buffer_per_ds,
+                episode_queue_prefetch_buffer=episode_prefetch_buffer,
+                episode_queue_shuffle_buffer=episode_buffer_per_ds,
+                intra_episode_sample_shuffle_buffer=self.intra_episode_sample_shuffle_buffer,
                 seed=self._get_dataset_seed(cfg),
-                private_threadpool_size=self.private_threadpool_size,
+                private_threadpool_size=self.per_dataset_private_threadpool_size,
             )
             self._datasets.append(ds)
 
@@ -1163,13 +1158,13 @@ class MultiOXEFramePairDataset(IterableDataset):
         if self.is_train:
             mixed = mixed.repeat()
 
-            if self.pair_shuffle_buffer > 0:
+            if self.global_stream_shuffle_buffer > 0:
                 if seed is None:
-                    mixed = mixed.shuffle(self.pair_shuffle_buffer)
+                    mixed = mixed.shuffle(self.global_stream_shuffle_buffer)
                 else:
-                    mixed = mixed.shuffle(self.pair_shuffle_buffer, seed=seed)
+                    mixed = mixed.shuffle(self.global_stream_shuffle_buffer, seed=seed)
 
-        prefetch_buffer = int(self.prefetch_buffer)
+        prefetch_buffer = int(self.final_stream_prefetch_buffer)
         if prefetch_buffer == -1:
             mixed = mixed.prefetch(tf.data.AUTOTUNE)
         elif prefetch_buffer > 0:
@@ -1417,9 +1412,11 @@ class MultiOXEFramePairDataset(IterableDataset):
                     pair_pt = torch.utils.dlpack.from_dlpack(
                         tf.experimental.dlpack.to_dlpack(pair_tf)
                     ).permute(3, 0, 1, 2)
-                except Exception:
-                    pair_np = pair_tf.numpy()
-                    pair_pt = torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+                except Exception as e:
+                    logger.error(f"dlpack tf to pytorch failed: {e}")
+                    raise
+                    # pair_np = pair_tf.numpy()
+                    # pair_pt = torch.from_numpy(pair_np).permute(3, 0, 1, 2)
 
                 meta = {
                     "episode_id": _decode_str(meta_tf["episode_id"].numpy()),

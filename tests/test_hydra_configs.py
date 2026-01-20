@@ -17,14 +17,14 @@ def config_dir():
 class TestExperimentConfigs:
     """Test experiment configuration composition."""
 
-    def test_laq_debug_config(self, config_dir):
-        """Test LAQ debug configuration loads correctly."""
+    def test_laq_hf_local_config(self, config_dir):
+        """Test HuggingFace LAQ configuration loads correctly."""
         with initialize_config_dir(version_base=None, config_dir=config_dir):
-            cfg = compose(config_name="config", overrides=["experiment=laq_debug"])
+            cfg = compose(config_name="config", overrides=["experiment=laq_hf_local"])
 
             # Validate experiment metadata
-            assert cfg.experiment.name == "laq_debug"
-            assert "debug" in cfg.experiment.description.lower()
+            assert cfg.experiment.name == "laq_hf_local"
+            assert "huggingface" in cfg.experiment.description.lower()
 
             # Validate model config (LAPA ViT-based LAQ)
             assert cfg.model.name == "laq_vit"
@@ -32,41 +32,43 @@ class TestExperimentConfigs:
             assert cfg.model.codebook_size == 8
             assert cfg.model.patch_size == 32
 
-            # Validate data config (uses multi-dataset)
-            assert hasattr(cfg.data, "sources")
-            assert cfg.data.batch_size == 4
+            # Validate data config
+            assert cfg.data.backend == "huggingface"
+            assert hasattr(cfg.data, "datasets")
+            assert len(cfg.data.datasets) >= 1
 
             # Validate training config
-            assert cfg.training.epochs == 3
+            assert cfg.training.epochs == 100
             assert hasattr(cfg.training, "optimizer")
             assert cfg.training.optimizer.type == "AdamW"
-            assert bool(cfg.training.dataset_usage_logger.enabled) is True
+            assert bool(cfg.training.dataset_usage_logger.enabled) is False
             assert bool(cfg.training.dataset_usage_logger.log_on_validation_end) is True
 
             # Validate cluster config
             assert cfg.cluster.name == "local_dev"
             assert bool(cfg.cluster.slurm.enabled) is False
 
-    def test_laq_full_config(self, config_dir):
-        """Test LAQ full configuration loads correctly."""
+    def test_laq_oxe_local_config(self, config_dir):
+        """Test OXE local configuration loads correctly."""
         with initialize_config_dir(version_base=None, config_dir=config_dir):
-            cfg = compose(config_name="config", overrides=["experiment=laq_full"])
+            cfg = compose(config_name="config", overrides=["experiment=laq_oxe_local"])
 
-            # Validate experiment (uses openx_v1 not laq_full)
-            assert cfg.experiment.name == "laq_openx_v1"
-            assert "openx" in cfg.experiment.description.lower()
+            # Validate experiment
+            assert cfg.experiment.name == "laq_oxe_local"
+            assert "oxe" in cfg.experiment.description.lower()
 
             # Validate model (same LAPA ViT LAQ model)
             assert cfg.model.name == "laq_vit"
             assert cfg.model.codebook_size == 8
 
-            # Validate training (full training with 100 epochs)
-            assert cfg.training.epochs == 100
+            # Validate data (OXE-style)
+            assert hasattr(cfg.data, "datasets")
+            assert len(cfg.data.datasets) == 4
+            assert hasattr(cfg.data, "episode_queue_shuffle_buffer")
+            assert hasattr(cfg.data, "global_stream_shuffle_buffer")
 
             # Validate cluster config (H100 single node)
-            assert cfg.cluster.name == "lrz_h100"
-            assert cfg.cluster.compute.num_nodes == 1
-            assert cfg.cluster.compute.gpus_per_node == 1
+            assert cfg.cluster.name == "local_dev"
 
     def test_vla_7b_config(self, config_dir):
         """Test VLA 7B configuration loads correctly."""
@@ -84,7 +86,8 @@ class TestExperimentConfigs:
             assert cfg.model.llm.model_name == "meta-llama/Llama-2-7b-hf"
 
             # Validate latent-labeled data
-            assert cfg.data.dataset_name == "bridge"
+            assert hasattr(cfg.data, "datasets")
+            assert cfg.data.datasets[0].name == "bridge"
             assert cfg.data.return_metadata is True
 
             # Validate FSDP training
@@ -109,7 +112,7 @@ class TestExperimentConfigs:
             assert cfg.model.vla.model_name == "nvidia/Cosmos-Reason2-2B"
             assert cfg.model.action_tokens.codebook_size == 4096
             assert cfg.model.action_tokens.code_seq_len == 1
-            assert cfg.data.val_shuffle_buffer == 200
+            assert cfg.data.val_episode_queue_shuffle_buffer == 200
             assert cfg.training.validation.check_interval == 100
             assert cfg.training.validation.limit_batches == 4
             assert bool(cfg.training.validation.visualization.enabled) is True
@@ -146,7 +149,7 @@ class TestConfigComposition:
             cfg = compose(
                 config_name="config",
                 overrides=[
-                    "experiment=laq_debug",
+                    "experiment=laq_hf_local",
                     "data.batch_size=16",
                     "training.optimizer.lr=5e-5",
                     "seed=123",
@@ -159,7 +162,7 @@ class TestConfigComposition:
             assert cfg.seed == 123
 
             # Verify base config still loaded
-            assert cfg.experiment.name == "laq_debug"
+            assert cfg.experiment.name == "laq_hf_local"
 
     def test_nested_overrides(self, config_dir):
         """Test deeply nested configuration overrides."""
@@ -167,7 +170,7 @@ class TestConfigComposition:
             cfg = compose(
                 config_name="config",
                 overrides=[
-                    "experiment=laq_debug",
+                    "experiment=laq_hf_local",
                     "model.dim=512",
                     "training.optimizer.betas=[0.95,0.999]",
                 ],
@@ -179,7 +182,7 @@ class TestConfigComposition:
     def test_config_is_valid_omegaconf(self, config_dir):
         """Test that loaded config is a valid OmegaConf DictConfig."""
         with initialize_config_dir(version_base=None, config_dir=config_dir):
-            cfg = compose(config_name="config", overrides=["experiment=laq_debug"])
+            cfg = compose(config_name="config", overrides=["experiment=laq_hf_local"])
 
             # Should be DictConfig, not plain dict
             assert OmegaConf.is_config(cfg)
@@ -191,7 +194,20 @@ class TestExperimentConsistency:
 
     @pytest.mark.parametrize(
         "experiment",
-        ["laq_debug", "laq_full", "laq_normal", "vla_7b", "vla_cosmos2_tokens_debug", "vla_cosmos2_tokens"],
+        [
+            "laq_compare_sweep",
+            "laq_hf_local",
+            "laq_lr_sweep",
+            "laq_oxe_all_val",
+            "laq_oxe_all_val_3",
+            "laq_oxe_cluster",
+            "laq_oxe_eval",
+            "laq_oxe_local",
+            "laq_oxe_local_debug",
+            "vla_7b",
+            "vla_cosmos2_tokens_debug",
+            "vla_cosmos2_tokens",
+        ],
     )
     def test_all_experiments_load(self, config_dir, experiment):
         """Test that all available experiments load successfully."""
@@ -208,25 +224,6 @@ class TestExperimentConsistency:
             # Experiment should have name and description
             assert cfg.experiment.name is not None
             assert cfg.experiment.description is not None
-
-    def test_laq_normal_config(self, config_dir):
-        """Test LAQ normal training configuration loads correctly."""
-        with initialize_config_dir(version_base=None, config_dir=config_dir):
-            cfg = compose(config_name="config", overrides=["experiment=laq_normal"])
-
-            # Validate experiment
-            assert cfg.experiment.name == "laq_normal"
-
-            # Validate model (same as debug)
-            assert cfg.model.name == "laq_vit"
-            assert cfg.model.dim == 1024
-
-            # Validate data config (uses multi-dataset)
-            assert hasattr(cfg.data, "sources")
-
-            # Validate training (5000 epochs)
-            assert cfg.training.epochs == 5000
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

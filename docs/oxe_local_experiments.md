@@ -9,12 +9,12 @@
 
 ## Key knobs
 - `data.batch_size`: larger batches push more work to GPU but increase per-batch load time.
-- `data.episode_shuffle_buffer` / `data.pair_shuffle_buffer`: fill time increases with buffer size (large buffers delay startup), but once filled the pipeline mixes samples better and keeps the dataloader busy. We explored values from 0 up to 5 000.
-- `data.prefetch_buffer`: controls tf.data prefetch; 32/64 gave consistent gains, -1 enables AUTOTUNE.
+- `data.episode_queue_shuffle_buffer` / `data.global_stream_shuffle_buffer`: fill time increases with buffer size (large buffers delay startup), but once filled the pipeline mixes samples better and keeps the dataloader busy. We explored values from 0 up to 5 000.
+- `data.final_stream_prefetch_buffer`: controls tf.data prefetch; 32/64 gave consistent gains, -1 enables AUTOTUNE.
 - `data.num_parallel_episodes` & `data.num_parallel_calls`: higher values add TF-side concurrency; we now split them per dataset to avoid oversubscription.
 - `data.multi_dataset_parallelism_mode`: how to allocate `num_parallel_*` across datasets (`divide`/`sqrt`/`full`).
 - `data.multi_dataset_mix_block_length`: sample blocks per dataset before switching (reduces tf.data mixing overhead at the cost of coarser mixing).
-- `data.multi_dataset_per_dataset_prefetch_buffer`: optional small per-dataset prefetch to reduce mixing stalls (in addition to global `data.prefetch_buffer`).
+- `data.per_dataset_stream_prefetch_buffer`: optional small per-dataset prefetch to reduce mixing stalls (in addition to global `data.final_stream_prefetch_buffer`).
 - `data.multi_dataset_mixing_strategy`: use `sample_from_datasets()` vs `choose_from_datasets()` (selector-based).
 - `data.num_workers`: stayed at 0 (tf.data already parallelized). Future work can enable Torch workers once iterable length issues are resolved.
 - `training.max_steps` / `data.samples_per_episode`: longer runs (600 steps) fill shuffle buffers and expose steady-state behaviors; short runs (≤300) focus on short iteration time.
@@ -23,16 +23,16 @@
 ## Experiment results
 | Run label | Overrides (diff from `laq_oxe_local`) | Dataloader % (SimpleProfiler) | Peak RSS (MB) | Wall time | Notes |
 |-----------|----------------------------------------|------------------------------|--------------|-----------|-------|
-| base | `batch_size=24`, `prefetch_buffer=64`, no shuffle/pair buffers, 32 episodes/calls | ~77% | ~9 000 | ~1:32 | Quick startup, shuffle disabled—dataloader dominates. |
-| batch32 + shuffle200/1000 | added `batch_size=32`, `episode_shuffle_buffer=200`, `pair_shuffle_buffer=1000`, prefetch=32, 16 episodes/calls | ~77% | ~13 600 | ~1:39 | Shuffle buffers now fill; dataloader still majority of time. |
-| batch32 + shuffle200/5000 + long run | same as above but shuffle pair=5 000, `prefetch_buffer=64`, `max_steps=600`, `num_parallel_*`=32 | ~83% | ~15 800 | ~3:53 | Shuffle takes longer to fill but keeps pipeline busy; GPU still underutilized. |
+| base | `batch_size=24`, `final_stream_prefetch_buffer=64`, no shuffle/pair buffers, 32 episodes/calls | ~77% | ~9 000 | ~1:32 | Quick startup, shuffle disabled—dataloader dominates. |
+| batch32 + shuffle200/1000 | added `batch_size=32`, `episode_queue_shuffle_buffer=200`, `global_stream_shuffle_buffer=1000`, prefetch=32, 16 episodes/calls | ~77% | ~13 600 | ~1:39 | Shuffle buffers now fill; dataloader still majority of time. |
+| batch32 + shuffle200/5000 + long run | same as above but shuffle pair=5 000, `final_stream_prefetch_buffer=64`, `max_steps=600`, `num_parallel_*`=32 | ~83% | ~15 800 | ~3:53 | Shuffle takes longer to fill but keeps pipeline busy; GPU still underutilized. |
 | batch32 + shuffle200/0 + prefetch32 | removed pair shuffle (reset to 0), prefetch=32, `num_parallel_*`=16, short run | ~78% | ~9 000 | ~2:54 | Lower memory, dataloader still dominant, shows shuffle buffer critical for mixing. |
 | batch32 + shuffle200/1000 + concurrent runs | `num_parallel_*`=32, prefetch=64, pair shuffle=1 000, `max_steps=600` | ~82% | ~15–15.8k | ~3:53 | Final baseline for ongoing tuning: shuffle buffers on, dataloader still consuming ~80% of time; GPU remains the bottleneck target. |
 
 ## Findings
 - The dataloader (tf.data interleave + shuffle/prefetch) absorbs 75–83% of execution time even after aggressive parallelism—GPU utilization stays low.
 - Large shuffle buffers (1 000–5 000) are feasible locally; they fill in a few minutes for this small split and then sustain throughput, but they raise RSS and delay startup.
-- Increasing `prefetch_buffer` and `batch_size` improves overlap but not enough to shift the bottleneck.
+- Increasing `final_stream_prefetch_buffer` and `batch_size` improves overlap but not enough to shift the bottleneck.
 - Next steps: enable PyTorch `num_workers` once iterable length issues are solved and keep tuning shuffle/prefetch concurrency to raise GPU utilization while monitoring RAM.
 
 ## Run archive
@@ -40,10 +40,10 @@ Each row below points to the corresponding `runs/<timestamp>_laq_oxe_local` fold
 
 | Run dir | Main overrides | Notes |
 |---------|----------------|-------|
-| `2026-01-18_19-28-30_laq_oxe_local` | `batch_size=24`, `prefetch_buffer=64`, no shuffle | Baseline, quick turnaround with minimal buffers. |
+| `2026-01-18_19-28-30_laq_oxe_local` | `batch_size=24`, `final_stream_prefetch_buffer=64`, no shuffle | Baseline, quick turnaround with minimal buffers. |
 | `2026-01-18_19-35-18_laq_oxe_local` | `batch_size=16` → `32`, `prefetch=32`, shuffle=200/5000 | Added pair shuffle and TF parallelism (used for the “batch32 + shuffle…” rows). |
 | `2026-01-18_20-27-48_laq_oxe_local` | `batch_size=32`, `prefetch=32`, `num_parallel_*`=16, long run | Used for the long/steady-state column with shuffle buffers reducing to 0 and prefetch 32. |
-| `2026-01-18_20-33-49_laq_oxe_local` | `batch_size=32`, `prefetch=32`, shuffle=200/1000, `num_parallel_*`=16, `max_steps=600` | Candidate for the final shuffle-heavy baseline with `pair_shuffle_buffer=1000`. |
+| `2026-01-18_20-33-49_laq_oxe_local` | `batch_size=32`, `prefetch=32`, shuffle=200/1000, `num_parallel_*`=16, `max_steps=600` | Candidate for the final shuffle-heavy baseline with `global_stream_shuffle_buffer=1000`. |
 | `2026-01-18_20-44-10_laq_oxe_local` | `batch_size=32`, `prefetch=64`, shuffle=200/5000, `num_parallel_*`=32 | Largest shuffle buffer run; detailed profiler captured at `profiles/fit-fit-profile.txt`. |
 
 ---
@@ -118,7 +118,7 @@ The ~43 pairs/s gap (191 vs 148) must come from:
 
 | Run | Config | it/s | samples/s | Notes |
 |-----|--------|------|-----------|-------|
-| shuffle_buffers | `batch_size=128`, `episode_prefetch=4`, `episode_shuffle=100`, `pair_shuffle=500` | 1.10 | 140.8 | **Worse** - shuffle fill time adds overhead |
+| shuffle_buffers | `batch_size=128`, `episode_prefetch=4`, `episode_queue_shuffle_buffer=100`, `global_stream_shuffle_buffer=500` | 1.10 | 140.8 | **Worse** - shuffle fill time adds overhead |
 | batch256 | `batch_size=256` | 0.66 | 169 | Slightly better samples/s but slower convergence |
 | image128 | `batch_size=128`, `image_size=128` | 1.48 | 189 | 27% faster (not viable for production) |
 
@@ -214,7 +214,7 @@ To reduce per-element `sample_from_datasets()` overhead, we now optionally sampl
 - Config: `data.multi_dataset_mix_block_length=N` (wired in `OXEDataModule`)
 
 Additional mitigation knob:
-- `data.multi_dataset_per_dataset_prefetch_buffer`: enable a small per-dataset prefetch to reduce “dataset switch” stalls.
+- `data.per_dataset_stream_prefetch_buffer`: enable a small per-dataset prefetch to reduce “dataset switch” stalls.
 - `data.multi_dataset_mixing_strategy=choose`: try `choose_from_datasets()` (selector-based) as an alternative to `sample_from_datasets()` (benchmarked below; worse so far).
 
 Result: block-wise mixing (`multi_dataset_mix_block_length=8`) did **not** help in our quick test (slightly worse).
@@ -370,8 +370,8 @@ Final training run with optimal single-dataset configuration:
    - Less frequent pipeline switching
 
 **Recommendation**:
-- **batch_size ≤ 128**: Use `multi_dataset_private_threadpool_size: 64`
-- **batch_size ≥ 256**: Use `multi_dataset_private_threadpool_size: 0` (shared pool)
+- **batch_size ≤ 128**: Use `per_dataset_private_threadpool_size: 64`
+- **batch_size ≥ 256**: Use `per_dataset_private_threadpool_size: 0` (shared pool)
 
 ### Next Steps
 

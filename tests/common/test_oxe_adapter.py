@@ -76,6 +76,7 @@ def _offline_oxe_tfds() -> None:
             )
             meta = {
                 "dataset_name": dataset_name,
+                "dataset_type": dataset_name,
                 "episode_id": episode_id,
                 "frame_idx": tf.cast(idx, tf.int32),
                 "offset": offset,
@@ -109,13 +110,21 @@ class TestOXEFramePairDataset:
         # Use a small split for fast testing
         ds = OXEFramePairDataset(
             dataset_name="language_table",
+            gcs_path=None,
             split="train[:100]",  # Just 100 episodes
             offset=5,
-            prefetch_buffer=0,
+            final_stream_prefetch_buffer=0,
+            episode_queue_shuffle_buffer=10,
+            intra_episode_sample_shuffle_buffer=0,
             image_size=64,  # Small for speed
-            episode_shuffle_buffer=10,
-            pair_shuffle_buffer=10,
+            num_parallel_calls=1,
             return_metadata=True,
+            persistent_iterator=True,
+            samples_per_episode=0,
+            seed=123,
+            precomputed_size=1000,
+            episode_queue_prefetch_buffer=0,
+            num_parallel_episodes=1,
         )
         yield ds
         # Cleanup after test
@@ -128,15 +137,21 @@ class TestOXEFramePairDataset:
 
         ds = OXEFramePairDataset(
             dataset_name="language_table",
+            gcs_path=None,
             split="train[:100]",
             offset=5,
-            prefetch_buffer=0,
+            final_stream_prefetch_buffer=0,
+            episode_queue_shuffle_buffer=10,
+            intra_episode_sample_shuffle_buffer=10,
             image_size=64,
-            episode_shuffle_buffer=10,
-            pair_shuffle_buffer=10,
+            num_parallel_calls=1,
             return_metadata=True,
             samples_per_episode=1,
             seed=123,
+            persistent_iterator=True,
+            precomputed_size=1000,
+            episode_queue_prefetch_buffer=0,
+            num_parallel_episodes=1,
         )
         yield ds
         ds.cleanup()
@@ -250,12 +265,24 @@ class TestMultiOXEFramePairDataset:
                     "size": 10000,  # Precomputed size (required)
                 },
             ],
-            prefetch_buffer=0,
+            final_stream_prefetch_buffer=0,
+            episode_queue_prefetch_buffer=0,
             image_size=64,
-            episode_shuffle_buffer=10,
-            pair_shuffle_buffer=10,
+            episode_queue_shuffle_buffer=10,
+            intra_episode_sample_shuffle_buffer=0,
+            global_stream_shuffle_buffer=10,
             return_metadata=True,
             is_train=True,
+            persistent_iterator=True,
+            samples_per_episode=0,
+            seed=123,
+            num_parallel_episodes=1,
+            num_parallel_calls=1,
+            mix_block_length=1,
+            parallelism_mode="divide",
+            per_dataset_stream_prefetch_buffer=0,
+            mixing_strategy="sample",
+            per_dataset_private_threadpool_size=0,
         )
         yield ds
         ds.cleanup()
@@ -298,14 +325,24 @@ class TestMultiOXEFramePairDataset:
                 {"name": "language_table", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 0.5, "offset": 5, "size": 10000},
                 {"name": "bridge", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 0.5, "offset": 5, "size": 10000},
             ],
-            prefetch_buffer=0,
+            final_stream_prefetch_buffer=0,
+            episode_queue_prefetch_buffer=0,
             image_size=64,
-            episode_shuffle_buffer=10,
-            pair_shuffle_buffer=10,
+            episode_queue_shuffle_buffer=10,
+            intra_episode_sample_shuffle_buffer=0,
+            global_stream_shuffle_buffer=10,
             return_metadata=False,
             is_train=True,
             samples_per_episode=1,
             seed=123,
+            persistent_iterator=True,
+            num_parallel_episodes=1,
+            num_parallel_calls=1,
+            mix_block_length=1,
+            parallelism_mode="divide",
+            per_dataset_stream_prefetch_buffer=0,
+            mixing_strategy="sample",
+            per_dataset_private_threadpool_size=0,
         )
         ds._init_datasets()
         assert ds._datasets is not None
@@ -329,13 +366,21 @@ class TestMemoryStability:
 
         ds = OXEFramePairDataset(
             dataset_name="language_table",
+            gcs_path=None,
             split="train[:50]",
             offset=5,
-            prefetch_buffer=0,
+            final_stream_prefetch_buffer=0,
+            episode_queue_shuffle_buffer=10,
+            intra_episode_sample_shuffle_buffer=0,
             image_size=64,
-            episode_shuffle_buffer=10,
-            pair_shuffle_buffer=10,
+            num_parallel_calls=1,
             return_metadata=False,
+            persistent_iterator=True,
+            samples_per_episode=0,
+            seed=123,
+            precomputed_size=1000,
+            episode_queue_prefetch_buffer=0,
+            num_parallel_episodes=1,
         )
 
         # Simulate multiple epochs
@@ -373,12 +418,24 @@ class TestMemoryStability:
             datasets=[
                 {"name": "language_table", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 1.0, "offset": 5, "size": 10000},
             ],
-            prefetch_buffer=0,
+            final_stream_prefetch_buffer=0,
+            episode_queue_prefetch_buffer=0,
             image_size=64,
-            episode_shuffle_buffer=10,
-            pair_shuffle_buffer=10,
+            episode_queue_shuffle_buffer=10,
+            intra_episode_sample_shuffle_buffer=0,
+            global_stream_shuffle_buffer=10,
             return_metadata=False,
             is_train=True,
+            persistent_iterator=True,
+            samples_per_episode=0,
+            seed=123,
+            num_parallel_episodes=1,
+            num_parallel_calls=1,
+            mix_block_length=1,
+            parallelism_mode="divide",
+            per_dataset_stream_prefetch_buffer=0,
+            mixing_strategy="sample",
+            per_dataset_private_threadpool_size=0,
         )
 
         memory_samples = []
@@ -412,13 +469,21 @@ class TestRT1Dataset:
 
         ds = OXEFramePairDataset(
             dataset_name="rt1",
+            gcs_path=None,
             split="train[:10]",  # Just 10 episodes
             offset=3,  # ~1 sec at 3Hz
-            prefetch_buffer=0,
+            final_stream_prefetch_buffer=0,
+            episode_queue_shuffle_buffer=5,
+            intra_episode_sample_shuffle_buffer=0,
             image_size=64,
-            episode_shuffle_buffer=5,
-            pair_shuffle_buffer=5,
+            num_parallel_calls=1,
             return_metadata=True,
+            persistent_iterator=True,
+            samples_per_episode=0,
+            seed=123,
+            precomputed_size=1000,
+            episode_queue_prefetch_buffer=0,
+            num_parallel_episodes=1,
         )
         yield ds
         ds.cleanup()
@@ -472,13 +537,21 @@ class TestRoboNetDataset:
 
         ds = OXEFramePairDataset(
             dataset_name="robonet",
+            gcs_path=None,
             split="train[:10]",  # Just 10 episodes
             offset=10,
-            prefetch_buffer=0,
+            final_stream_prefetch_buffer=0,
+            episode_queue_shuffle_buffer=5,
+            intra_episode_sample_shuffle_buffer=0,
             image_size=64,
-            episode_shuffle_buffer=5,
-            pair_shuffle_buffer=5,
+            num_parallel_calls=1,
             return_metadata=True,
+            persistent_iterator=True,
+            samples_per_episode=0,
+            seed=123,
+            precomputed_size=1000,
+            episode_queue_prefetch_buffer=0,
+            num_parallel_episodes=1,
         )
         yield ds
         ds.cleanup()

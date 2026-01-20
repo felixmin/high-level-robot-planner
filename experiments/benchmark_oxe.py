@@ -54,13 +54,21 @@ def benchmark_tf_dataset(name: str, ds_config: dict, batch_size: int = 32):
     # Create the dataset adapter
     adapter = OXEFramePairDataset(
         dataset_name=ds_config["name"],
+        gcs_path=ds_config.get("gcs_path"),
         split=ds_config.get("train_split", "train[:90%]"),
-        offset=ds_config.get("offset", 1),
-        image_size=ds_config.get("image_size", 256),
-        shuffle_buffer=ds_config.get("shuffle_buffer", 100),
-        prefetch_buffer=ds_config.get("prefetch_buffer", 2),
-        return_metadata=True, # Usually we want metadata
-        # We don't need persistent iterator for benchmark, but we need the pipeline
+        offset=ds_config["offset"],
+        final_stream_prefetch_buffer=ds_config["final_stream_prefetch_buffer"],
+        episode_queue_shuffle_buffer=ds_config["episode_queue_shuffle_buffer"],
+        intra_episode_sample_shuffle_buffer=ds_config["intra_episode_sample_shuffle_buffer"],
+        image_size=ds_config["image_size"],
+        num_parallel_calls=ds_config["num_parallel_calls"],
+        return_metadata=True,  # Usually we want metadata
+        persistent_iterator=bool(ds_config.get("persistent_iterator", False)),
+        samples_per_episode=int(ds_config.get("samples_per_episode", 0)),
+        seed=ds_config.get("sampling_seed"),
+        precomputed_size=ds_config.get("size"),
+        episode_queue_prefetch_buffer=int(ds_config.get("episode_queue_prefetch_buffer", 0)),
+        num_parallel_episodes=int(ds_config.get("num_parallel_episodes", 1)),
     )
 
     # Get the underlying tf.data.Dataset
@@ -92,23 +100,46 @@ def benchmark_pytorch_throughput(config: dict, batch_size: int = 32):
         # Multi-dataset
         ds = MultiOXEFramePairDataset(
             datasets=config["datasets"],
-            image_size=config.get("image_size", 256),
-            shuffle_buffer=config.get("shuffle_buffer", 200),
-            prefetch_buffer=config.get("prefetch_buffer", 2),
-            return_metadata=config.get("return_metadata", True),
-            is_train=True
+            final_stream_prefetch_buffer=config["final_stream_prefetch_buffer"],
+            episode_queue_prefetch_buffer=int(config.get("episode_queue_prefetch_buffer", 0)),
+            episode_queue_shuffle_buffer=config["episode_queue_shuffle_buffer"],
+            intra_episode_sample_shuffle_buffer=config["intra_episode_sample_shuffle_buffer"],
+            global_stream_shuffle_buffer=config["global_stream_shuffle_buffer"],
+            image_size=config["image_size"],
+            return_metadata=bool(config.get("return_metadata", True)),
+            is_train=True,
+            persistent_iterator=bool(config.get("persistent_iterator", True)),
+            samples_per_episode=int(config.get("samples_per_episode", 0)),
+            seed=config.get("sampling_seed"),
+            num_parallel_episodes=int(config.get("num_parallel_episodes", 1)),
+            num_parallel_calls=int(config.get("num_parallel_calls", 1)),
+            mix_block_length=int(config.get("multi_dataset_mix_block_length", 1)),
+            parallelism_mode=str(config.get("multi_dataset_parallelism_mode", "divide")),
+            per_dataset_stream_prefetch_buffer=int(config.get("per_dataset_stream_prefetch_buffer", 0)),
+            mixing_strategy=str(config.get("multi_dataset_mixing_strategy", "sample")),
+            per_dataset_private_threadpool_size=int(
+                config.get("per_dataset_private_threadpool_size", 0)
+            ),
         )
     else:
         # Single dataset (legacy/single config)
         ds = OXEFramePairDataset(
             dataset_name=config.get("dataset_name", config.get("name")),
+            gcs_path=config.get("gcs_path"),
             split=config.get("train_split", "train"),
             offset=config.get("offset", 1),
+            final_stream_prefetch_buffer=config["final_stream_prefetch_buffer"],
+            episode_queue_shuffle_buffer=config["episode_queue_shuffle_buffer"],
+            intra_episode_sample_shuffle_buffer=config["intra_episode_sample_shuffle_buffer"],
             image_size=config.get("image_size", 256),
-            shuffle_buffer=config.get("shuffle_buffer", 100),
-            prefetch_buffer=config.get("prefetch_buffer", 2),
-            return_metadata=config.get("return_metadata", True),
-            precomputed_size=config.get("size")
+            num_parallel_calls=int(config.get("num_parallel_calls", 1)),
+            return_metadata=bool(config.get("return_metadata", True)),
+            persistent_iterator=bool(config.get("persistent_iterator", True)),
+            samples_per_episode=int(config.get("samples_per_episode", 0)),
+            seed=config.get("sampling_seed"),
+            precomputed_size=config.get("size"),
+            episode_queue_prefetch_buffer=int(config.get("episode_queue_prefetch_buffer", 0)),
+            num_parallel_episodes=int(config.get("num_parallel_episodes", 1)),
         )
 
     # Create DataLoader
@@ -167,13 +198,11 @@ def main():
     if not args.skip_tfds:
         if "datasets" in config:
             for i, ds_cfg in enumerate(config["datasets"]):
-                # Merge global settings if not present
-                if "offset" not in ds_cfg:
-                    ds_cfg["offset"] = config.get("offset", 1)
-                if "image_size" not in ds_cfg:
-                    ds_cfg["image_size"] = config.get("image_size", 256)
-                
-                benchmark_tf_dataset(ds_cfg.get("name", f"dataset_{i}"), ds_cfg, args.batch_size)
+                ds_cfg_merged = dict(config)
+                ds_cfg_merged.update(ds_cfg)
+                benchmark_tf_dataset(
+                    ds_cfg_merged.get("name", f"dataset_{i}"), ds_cfg_merged, args.batch_size
+                )
         else:
             # Single dataset config
             benchmark_tf_dataset(config.get("dataset_name", config.get("name", "unknown")), config, args.batch_size)

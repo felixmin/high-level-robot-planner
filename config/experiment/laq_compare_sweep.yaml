@@ -28,8 +28,10 @@ model:
 # Data settings
 data:
   batch_size: 32
-  shuffle_buffer: 500
-  prefetch_buffer: 4
+  episode_queue_shuffle_buffer: 500
+  intra_episode_sample_shuffle_buffer: 0
+  global_stream_shuffle_buffer: 500
+  final_stream_prefetch_buffer: 4
 
 # Training settings
 training:

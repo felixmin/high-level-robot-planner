@@ -12,13 +12,30 @@ defaults:
   - /training@training: laq_optimizer
   - /cluster@cluster: local_dev
 
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      #data.episode_queue_shuffle_buffer: 0
+      #data.intra_episode_sample_shuffle_buffer: 0
+      #data.global_stream_shuffle_buffer: 0
+      data.episode_queue_prefetch_buffer: 0
+      data.per_dataset_stream_prefetch_buffer: 0
+      data.final_stream_prefetch_buffer: 0
+      data.num_parallel_episodes: 1
+      data.num_parallel_calls: 0,1,2,4,8
+      data.per_dataset_private_threadpool_size: 64
+      data.multi_dataset_mix_block_length: 1
+
+
 
 experiment:
-  name: laq_oxe_local
+  name: laq_oxe_local_sweep_num_par_calls_${data.num_parallel_calls}
   description: "Minimal local OXE run (no shuffle/prefetch/autotune)"
 
 model:
   flow:
+    
     model: raft_large    # "raft_small" or "raft_large"
     loss_weight: 0.1     # Weight for flow loss in total loss
     decoder_depth: 8     # Transformer depth for flow decoder
@@ -68,6 +85,7 @@ data:
   sampling_seed: 42
 
 training:
+  max_steps: 500
   enable_progress_bar: true
   enable_model_summary: true
   scheduler:

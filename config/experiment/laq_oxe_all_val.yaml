@@ -23,8 +23,10 @@ model:
 # Data settings
 data:
   batch_size: 64
-  shuffle_buffer: 200
-  prefetch_buffer: 16
+  episode_queue_shuffle_buffer: 200
+  intra_episode_sample_shuffle_buffer: 0
+  global_stream_shuffle_buffer: 200
+  final_stream_prefetch_buffer: 16
   persistent_iterator: true
   num_workers: 0
 

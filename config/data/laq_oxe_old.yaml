@@ -8,32 +8,50 @@ datasets:
     val_split: "train[90%:]"
     offset: 10                   # 1 second at 10Hz
     weight: 0.35 # (442k episodes)
+    size: 11934000               # Precomputed: ~442k × 0.9 × 30 pairs
 
   - name: bridge
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     offset: 5                    # 1 second at 5Hz
     weight: 0.15 # (25k episodes)
+    size: 1031130                # Precomputed: ~25.5k × 0.9 × 45 pairs
 
   - name: rt1
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     offset: 3                    # 1 second at 3Hz
     weight: 0.25 # (87k episodes)
+    size: 2113650                # Precomputed: ~87k × 0.9 × 27 pairs
 
   - name: robonet
     train_split: "train[:90%]"
     val_split: "train[90%:]"
     offset: 10                   # 1 second at 10Hz
     weight: 0.25 # (83k episodes)
+    size: 1494000                # Precomputed: ~83k × 0.9 × 20 pairs
 
 # Shared settings
 offset: 5                        # Default offset (overridden per-dataset)
 image_size: 256
 batch_size: 32
 num_workers: 0                   # tf.data handles parallelism
-shuffle_buffer: 200              # Split across datasets
-prefetch_buffer: 16              # 0 for AUTOTUNE
+episode_queue_shuffle_buffer: 200           # Split across datasets
+intra_episode_sample_shuffle_buffer: 0      # Shuffle within an episode (only when sampling pairs)
+global_stream_shuffle_buffer: 200           # Final global blender
+final_stream_prefetch_buffer: 16 # 0 for AUTOTUNE
 persistent_iterator: true        # Keep iterator alive to avoid shuffle buffer refill
 samples_per_episode: 0           # LAPA-style: sample N pairs per episode (0 = all pairs)
 return_metadata: true            # Required for validation strategies
+sampling_seed: 42
+episode_queue_prefetch_buffer: 0
+num_parallel_episodes: 1
+num_parallel_calls: 1
+multi_dataset_mix_block_length: 1
+multi_dataset_parallelism_mode: divide
+per_dataset_stream_prefetch_buffer: 0
+multi_dataset_mixing_strategy: sample
+per_dataset_private_threadpool_size: 0
+val_episode_queue_shuffle_buffer: 0
+val_intra_episode_sample_shuffle_buffer: 0
+val_global_stream_shuffle_buffer: 0

@@ -56,7 +56,7 @@ def __iter__(self):
 
 *Approximate, depends on episode length
 
-With `shuffle_buffer=500`, TensorFlow holds 500 episodes in memory:
+With `episode_queue_shuffle_buffer=500`, TensorFlow holds 500 episodes in memory:
 - language_table: 500 × 20 MB = ~10 GB (fits)
 - Bridge: 500 × 28 MB = ~14 GB (doesn't fit with model + validation)
 
@@ -64,7 +64,7 @@ With `shuffle_buffer=500`, TensorFlow holds 500 episodes in memory:
 
 ```yaml
 # config/data/laq_oxe_bridge.yaml
-shuffle_buffer: 30  # Keep small - Bridge images are 480x640 before resize
+episode_queue_shuffle_buffer: 30  # Keep small - Bridge images are 480x640 before resize
 ```
 
 ## Current Memory Usage
@@ -77,12 +77,12 @@ With the fixes applied, here's the stable memory profile:
 
 ### Where RAM Actually Goes
 
-The shuffle buffer is NOT the main memory consumer. Here's the breakdown:
+The shuffle buffers are NOT the main memory consumer. Here's the breakdown:
 
-**Shuffle buffer (small):**
+**Global stream shuffle buffer (multi-dataset only):**
 - Each pair: `2 × 256 × 256 × 3` uint8 = 393 KB
-- `shuffle_buffer=30`: ~12 MB
-- `shuffle_buffer=500`: ~200 MB
+- `global_stream_shuffle_buffer=30`: ~12 MB
+- `global_stream_shuffle_buffer=500`: ~200 MB
 
 **Actual memory consumers:**
 1. **TensorFlow GCS streaming** (~5-10 GB) - Downloads and caches data from Google Cloud
@@ -91,9 +91,9 @@ The shuffle buffer is NOT the main memory consumer. Here's the breakdown:
 4. **TF-to-PyTorch copies** - During conversion, both copies exist briefly
 5. **Python/numpy overhead** - General allocations
 
-**Important clarification:** The generator already resizes images to 256×256 BEFORE yielding to the shuffle buffer. The buffer holds small resized pairs, not full 480×640 images.
+**Important clarification:** When enabled, the global stream shuffle buffer holds small resized pairs (256×256), not full 480×640 images.
 
-### Why shuffle_buffer=30 vs 500 matters
+### Why episode_queue_shuffle_buffer=30 vs 500 matters
 
 Even though the shuffle buffer itself is small, the OOM happened because:
 1. The memory leak (now fixed) accumulated TF graph objects
@@ -103,18 +103,18 @@ Even though the shuffle buffer itself is small, the OOM happened because:
 ## What About Validation Strategies?
 
 **Validation strategies are NOT the issue.** They work fine with:
-- `shuffle_buffer=30` (or similar small value)
+- `episode_queue_shuffle_buffer=30` (or similar small value)
 - The memory leak fix in place
 
 We tested incrementally:
 1. No validation strategies → Works
-2. Basic visualization only → OOM with shuffle_buffer=100
-3. Basic visualization + shuffle_buffer=20 → Works
-4. All strategies + shuffle_buffer=30 → Works
+2. Basic visualization only → OOM with episode_queue_shuffle_buffer=100
+3. Basic visualization + episode_queue_shuffle_buffer=20 → Works
+4. All strategies + episode_queue_shuffle_buffer=30 → Works
 
 The key insight: validation strategies add ~0.5-1 GB of memory for caches and model inference. This pushed Bridge over the edge when combined with large shuffle buffers.
 
-## Is shuffle_buffer=30 Too Small?
+## Is episode_queue_shuffle_buffer=30 Too Small?
 
 ### Short Answer: Probably yes, but it's a tradeoff.
 
@@ -126,21 +126,21 @@ The key insight: validation strategies add ~0.5-1 GB of memory for caches and mo
 
 ### Why You See Similar Images:
 
-With `shuffle_buffer=30`, the pipeline:
+With `episode_queue_shuffle_buffer=30`, the pipeline:
 1. Loads episodes sequentially from GCS
 2. Only shuffles among 30 episodes at a time
 3. Adjacent episodes are often from similar scenes/robots
 
 ### Recommendations:
 
-| Use Case | shuffle_buffer | Notes |
+| Use Case | episode_queue_shuffle_buffer | Notes |
 |----------|---------------|-------|
 | Debugging | 10-30 | Fast startup, low memory |
 | Current (stable) | 30 | Works reliably, some grouping |
 | Better mixing | 50-100 | Try if you have RAM headroom |
 | Optimal mixing | 200+ | May need more RAM or smaller batch_size |
 
-To increase shuffle_buffer, you can either:
+To increase episode_queue_shuffle_buffer, you can either:
 - Reduce `batch_size` (currently 32)
 - Reduce `max_cached_samples` in validation (currently 256)
 - Accept higher RAM usage if available
@@ -157,10 +157,10 @@ To increase shuffle_buffer, you can either:
 ### Config Changes (can adjust based on needs):
 
 1. **`config/data/laq_oxe_bridge.yaml`**
-   - `shuffle_buffer: 30` - Can increase if you have RAM headroom
+   - `episode_queue_shuffle_buffer: 30` - Can increase if you have RAM headroom
 
 2. **`config/experiment/laq_oxe_bridge.yaml`**
-   - `shuffle_buffer: 30` - Matches data config
+   - `episode_queue_shuffle_buffer: 30` - Matches data config
    - All validation strategies enabled (working fine now)
 
 ## External Suggestions Review
@@ -187,7 +187,7 @@ Some suggestions were received about memory optimization. Here's the analysis:
 |-------|-----------|-----|------------|
 | Memory leak | TF pipelines not released | `clear_session()` in `__iter__` | Yes, keep forever |
 | OOM during validation | TF graph accumulation + simultaneous pipelines | Memory cleanup + smaller buffer | Keep cleanup; buffer is tunable |
-| Similar images in batches | Small shuffle_buffer | Expected behavior | Can increase to 200+ safely now |
+| Similar images in batches | Small episode_queue_shuffle_buffer | Expected behavior | Can increase to 200+ safely now |
 
 ## Testing After Changes
 

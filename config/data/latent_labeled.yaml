@@ -1,17 +1,40 @@
-# Latent-labeled dataset configuration for Stage 2 (Foundation VLA)
-# Uses LAQ-encoded latent actions paired with language instructions
+# Latent-labeled dataset configuration for Stage 2 (Foundation VLA).
 #
-# TODO: Update when WebDataset pipeline is implemented
+# TODO: replace with a true latent-labeled WebDataset pipeline.
+# For now this uses the OXE streaming pipeline.
 
-# Placeholder using OXE format until WebDataset loaders are built
-dataset_name: bridge
-train_split: "train[:90%]"
-val_split: "train[90%:]"
+datasets:
+  - name: bridge
+    train_split: "train[:90%]"
+    val_split: "train[90%:]"
+    offset: 5
+    weight: 1.0
+    size: 1031130
+
 offset: 5
 image_size: 256
 batch_size: 16
 num_workers: 0
-shuffle_buffer: 200
-val_shuffle_buffer: 0
-prefetch_buffer: 4
+
+episode_queue_shuffle_buffer: 200
+intra_episode_sample_shuffle_buffer: 0
+global_stream_shuffle_buffer: 0
+val_episode_queue_shuffle_buffer: 0
+val_intra_episode_sample_shuffle_buffer: 0
+val_global_stream_shuffle_buffer: 0
+
+final_stream_prefetch_buffer: 4
+episode_queue_prefetch_buffer: 0
+per_dataset_stream_prefetch_buffer: 0
+
 return_metadata: true
+persistent_iterator: true
+samples_per_episode: 0
+sampling_seed: 42
+num_parallel_episodes: 1
+num_parallel_calls: 1
+
+multi_dataset_mix_block_length: 1
+multi_dataset_parallelism_mode: divide
+multi_dataset_mixing_strategy: sample
+per_dataset_private_threadpool_size: 0
