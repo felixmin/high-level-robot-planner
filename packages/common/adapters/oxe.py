@@ -871,6 +871,9 @@ class OXEFramePairDataset(IterableDataset):
             tf = _import_tensorflow_cpu_only()
             tf_ds = self._create_tf_pipeline()
 
+            if self.is_train:
+                tf_ds = tf_ds.repeat()
+
             if (
                 self.return_metadata
                 and (self.output_action_dim is not None or self.output_state_dim is not None)
