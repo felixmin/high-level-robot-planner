@@ -30,7 +30,10 @@ model:
 data:
   loader:
     batch_size: 32
-    num_workers: 0
+    num_workers: 0  # should be 0 for streamed dataset as otherwise
+                    # it adds IPC overhead and sync issues...
+                    # parallelism is handled by tfds directly
+                    # also dlpack apparently only works in the same process
 
   adapter:
     tf:
