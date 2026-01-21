@@ -61,7 +61,7 @@ python scripts/submit_job.py experiment=laq_oxe_debug cluster=lrz_h100
 ```bash
 python scripts/submit_job.py experiment=laq_full \
     training.epochs=50 \
-    data.batch_size=64
+    data.loader.batch_size=64
 ```
 
 ### Custom Resources
@@ -159,7 +159,7 @@ sweep:
 
     # Any config path works
     model.codebook_size: 8, 16, 32
-    data.batch_size: 32, 64
+    data.loader.batch_size: 32, 64
 ```
 
 **Note:** Uses `sweep.params` (not `hydra.sweeper.params`) because Hydra's internal config isn't accessible via `compose()`.

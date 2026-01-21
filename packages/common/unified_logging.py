@@ -239,6 +239,7 @@ def setup_wandb_with_unified_paths(
     name: str,
     tags: list,
     use_wandb: bool = True,
+    **kwargs,
 ):
     """
     Setup WandB logger with paths integrated into unified logging structure.
@@ -250,6 +251,7 @@ def setup_wandb_with_unified_paths(
         name: Run name
         tags: WandB tags
         use_wandb: Whether to enable WandB
+        **kwargs: Additional arguments passed to WandbLogger
 
     Returns:
         WandbLogger or None
@@ -269,6 +271,7 @@ def setup_wandb_with_unified_paths(
         name=name,
         save_dir=str(wandb_dir),
         tags=tags,
+        **kwargs,
     )
 
     logger.info(f"✓ WandB logger initialized (project={project})")

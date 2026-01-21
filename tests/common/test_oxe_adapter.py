@@ -110,21 +110,28 @@ class TestOXEFramePairDataset:
         # Use a small split for fast testing
         ds = OXEFramePairDataset(
             dataset_name="language_table",
-            gcs_path=None,
             split="train[:100]",  # Just 100 episodes
             offset=5,
             final_stream_prefetch_buffer=0,
             episode_queue_shuffle_buffer=10,
             intra_episode_sample_shuffle_buffer=0,
             image_size=64,  # Small for speed
-            num_parallel_calls=1,
             return_metadata=True,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
+            debug_use_synthetic_data=False,
+            debug_synthetic_num_samples=1000,
             precomputed_size=1000,
             episode_queue_prefetch_buffer=0,
-            num_parallel_episodes=1,
+            tfds_read_cycle_length=1,
+            tfds_read_block_length=1,
+            tfds_read_decode_parallelism=-1,
+            tfds_read_interleave_parallelism=-1,
+            pipeline_episode_concurrency=1,
+            pipeline_transform_parallelism=1,
+            pipeline_interleave_parallelism=1,
+            private_threadpool_size=0,
         )
         yield ds
         # Cleanup after test
@@ -137,21 +144,28 @@ class TestOXEFramePairDataset:
 
         ds = OXEFramePairDataset(
             dataset_name="language_table",
-            gcs_path=None,
             split="train[:100]",
             offset=5,
             final_stream_prefetch_buffer=0,
             episode_queue_shuffle_buffer=10,
             intra_episode_sample_shuffle_buffer=10,
             image_size=64,
-            num_parallel_calls=1,
             return_metadata=True,
             samples_per_episode=1,
             seed=123,
             persistent_iterator=True,
+            debug_use_synthetic_data=False,
+            debug_synthetic_num_samples=1000,
             precomputed_size=1000,
             episode_queue_prefetch_buffer=0,
-            num_parallel_episodes=1,
+            tfds_read_cycle_length=1,
+            tfds_read_block_length=1,
+            tfds_read_decode_parallelism=-1,
+            tfds_read_interleave_parallelism=-1,
+            pipeline_episode_concurrency=1,
+            pipeline_transform_parallelism=1,
+            pipeline_interleave_parallelism=1,
+            private_threadpool_size=0,
         )
         yield ds
         ds.cleanup()
@@ -253,16 +267,16 @@ class TestMultiOXEFramePairDataset:
                     "train_split": "train[:50]",
                     "val_split": "train[50:60]",
                     "weight": 0.5,
-                    "offset": 5,
-                    "size": 10000,  # Precomputed size (required)
+                    "pair_offset_steps": 5,
+                    "approx_num_pairs": 10000,
                 },
                 {
                     "name": "bridge",
                     "train_split": "train[:50]",
                     "val_split": "train[50:60]",
                     "weight": 0.5,
-                    "offset": 5,
-                    "size": 10000,  # Precomputed size (required)
+                    "pair_offset_steps": 5,
+                    "approx_num_pairs": 10000,
                 },
             ],
             final_stream_prefetch_buffer=0,
@@ -276,13 +290,20 @@ class TestMultiOXEFramePairDataset:
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
-            num_parallel_episodes=1,
-            num_parallel_calls=1,
+            debug_use_synthetic_data=False,
+            debug_synthetic_num_samples=1000,
+            pipeline_episode_concurrency_total=1,
+            pipeline_transform_parallelism=1,
+            pipeline_interleave_parallelism=1,
             mix_block_length=1,
             parallelism_mode="divide",
             per_dataset_stream_prefetch_buffer=0,
             mixing_strategy="sample",
             per_dataset_private_threadpool_size=0,
+            tfds_read_cycle_length=1,
+            tfds_read_block_length=1,
+            tfds_read_decode_parallelism=-1,
+            tfds_read_interleave_parallelism=-1,
         )
         yield ds
         ds.cleanup()
@@ -322,8 +343,8 @@ class TestMultiOXEFramePairDataset:
 
         ds = MultiOXEFramePairDataset(
             datasets=[
-                {"name": "language_table", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 0.5, "offset": 5, "size": 10000},
-                {"name": "bridge", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 0.5, "offset": 5, "size": 10000},
+                {"name": "language_table", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 0.5, "pair_offset_steps": 5, "approx_num_pairs": 10000},
+                {"name": "bridge", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 0.5, "pair_offset_steps": 5, "approx_num_pairs": 10000},
             ],
             final_stream_prefetch_buffer=0,
             episode_queue_prefetch_buffer=0,
@@ -336,13 +357,20 @@ class TestMultiOXEFramePairDataset:
             samples_per_episode=1,
             seed=123,
             persistent_iterator=True,
-            num_parallel_episodes=1,
-            num_parallel_calls=1,
+            debug_use_synthetic_data=False,
+            debug_synthetic_num_samples=1000,
+            pipeline_episode_concurrency_total=1,
+            pipeline_transform_parallelism=1,
+            pipeline_interleave_parallelism=1,
             mix_block_length=1,
             parallelism_mode="divide",
             per_dataset_stream_prefetch_buffer=0,
             mixing_strategy="sample",
             per_dataset_private_threadpool_size=0,
+            tfds_read_cycle_length=1,
+            tfds_read_block_length=1,
+            tfds_read_decode_parallelism=-1,
+            tfds_read_interleave_parallelism=-1,
         )
         ds._init_datasets()
         assert ds._datasets is not None
@@ -366,21 +394,28 @@ class TestMemoryStability:
 
         ds = OXEFramePairDataset(
             dataset_name="language_table",
-            gcs_path=None,
             split="train[:50]",
             offset=5,
             final_stream_prefetch_buffer=0,
             episode_queue_shuffle_buffer=10,
             intra_episode_sample_shuffle_buffer=0,
             image_size=64,
-            num_parallel_calls=1,
             return_metadata=False,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
+            debug_use_synthetic_data=False,
+            debug_synthetic_num_samples=1000,
             precomputed_size=1000,
             episode_queue_prefetch_buffer=0,
-            num_parallel_episodes=1,
+            tfds_read_cycle_length=1,
+            tfds_read_block_length=1,
+            tfds_read_decode_parallelism=-1,
+            tfds_read_interleave_parallelism=-1,
+            pipeline_episode_concurrency=1,
+            pipeline_transform_parallelism=1,
+            pipeline_interleave_parallelism=1,
+            private_threadpool_size=0,
         )
 
         # Simulate multiple epochs
@@ -416,7 +451,7 @@ class TestMemoryStability:
 
         ds = MultiOXEFramePairDataset(
             datasets=[
-                {"name": "language_table", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 1.0, "offset": 5, "size": 10000},
+                {"name": "language_table", "train_split": "train[:30]", "val_split": "train[30:40]", "weight": 1.0, "pair_offset_steps": 5, "approx_num_pairs": 10000},
             ],
             final_stream_prefetch_buffer=0,
             episode_queue_prefetch_buffer=0,
@@ -429,13 +464,20 @@ class TestMemoryStability:
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
-            num_parallel_episodes=1,
-            num_parallel_calls=1,
+            debug_use_synthetic_data=False,
+            debug_synthetic_num_samples=1000,
+            pipeline_episode_concurrency_total=1,
+            pipeline_transform_parallelism=1,
+            pipeline_interleave_parallelism=1,
             mix_block_length=1,
             parallelism_mode="divide",
             per_dataset_stream_prefetch_buffer=0,
             mixing_strategy="sample",
             per_dataset_private_threadpool_size=0,
+            tfds_read_cycle_length=1,
+            tfds_read_block_length=1,
+            tfds_read_decode_parallelism=-1,
+            tfds_read_interleave_parallelism=-1,
         )
 
         memory_samples = []
@@ -469,21 +511,28 @@ class TestRT1Dataset:
 
         ds = OXEFramePairDataset(
             dataset_name="rt1",
-            gcs_path=None,
             split="train[:10]",  # Just 10 episodes
             offset=3,  # ~1 sec at 3Hz
             final_stream_prefetch_buffer=0,
             episode_queue_shuffle_buffer=5,
             intra_episode_sample_shuffle_buffer=0,
             image_size=64,
-            num_parallel_calls=1,
             return_metadata=True,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
+            debug_use_synthetic_data=False,
+            debug_synthetic_num_samples=1000,
             precomputed_size=1000,
             episode_queue_prefetch_buffer=0,
-            num_parallel_episodes=1,
+            tfds_read_cycle_length=1,
+            tfds_read_block_length=1,
+            tfds_read_decode_parallelism=-1,
+            tfds_read_interleave_parallelism=-1,
+            pipeline_episode_concurrency=1,
+            pipeline_transform_parallelism=1,
+            pipeline_interleave_parallelism=1,
+            private_threadpool_size=0,
         )
         yield ds
         ds.cleanup()
@@ -537,21 +586,28 @@ class TestRoboNetDataset:
 
         ds = OXEFramePairDataset(
             dataset_name="robonet",
-            gcs_path=None,
             split="train[:10]",  # Just 10 episodes
             offset=10,
             final_stream_prefetch_buffer=0,
             episode_queue_shuffle_buffer=5,
             intra_episode_sample_shuffle_buffer=0,
             image_size=64,
-            num_parallel_calls=1,
             return_metadata=True,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
+            debug_use_synthetic_data=False,
+            debug_synthetic_num_samples=1000,
             precomputed_size=1000,
             episode_queue_prefetch_buffer=0,
-            num_parallel_episodes=1,
+            tfds_read_cycle_length=1,
+            tfds_read_block_length=1,
+            tfds_read_decode_parallelism=-1,
+            tfds_read_interleave_parallelism=-1,
+            pipeline_episode_concurrency=1,
+            pipeline_transform_parallelism=1,
+            pipeline_interleave_parallelism=1,
+            private_threadpool_size=0,
         )
         yield ds
         ds.cleanup()

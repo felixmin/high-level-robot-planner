@@ -6,7 +6,6 @@ Tests:
 - BridgeAdapter: Trajectory discovery and metadata extraction
 - Multi-source LAQDataModule: Combined dataset loading
 - Metadata-based train/val splits
-- Validation buckets for distribution shift analysis
 """
 
 import pytest
@@ -257,9 +256,20 @@ class TestMultiSourceDataModule:
             image_size=256,
             batch_size=4,
             num_workers=0,
-            max_pairs=10,
-            val_split=0.2,
-            split_mode="ratio",  # Trigger multi-source path
+            pin_memory=True,
+            prefetch_factor=None,
+            min_frames=2,
+            pair_offsets_frames=[30],
+            filters=None,
+            return_metadata=False,
+            split_mode="ratio",
+            split_seed=42,
+            val_ratio=0.2,
+            val_scene_filters=None,
+            val_counts_per_dataset=None,
+            subset_max_pairs=10,
+            subset_strategy="random",
+            subset_seed=42,
         )
 
         dm.setup()
@@ -294,8 +304,20 @@ class TestMetadataBasedSplit:
             image_size=256,
             batch_size=4,
             num_workers=0,
+            pin_memory=True,
+            prefetch_factor=None,
+            min_frames=2,
+            pair_offsets_frames=[30],
+            filters=None,
+            return_metadata=False,
             split_mode="metadata",
+            split_seed=42,
+            val_ratio=0.0,
             val_scene_filters={"video_id": holdout_video},
+            val_counts_per_dataset=None,
+            subset_max_pairs=None,
+            subset_strategy="random",
+            subset_seed=42,
         )
 
         dm.setup()
@@ -315,76 +337,6 @@ class TestMetadataBasedSplit:
         print(f"✓ Metadata split by video_id: holdout '{holdout_video}'")
         print(f"  - Train samples: {len(dm.train_dataset)}")
         print(f"  - Val samples: {len(dm.val_dataset)}")
-
-
-class TestValidationBuckets:
-    """Test validation buckets for distribution shift analysis."""
-
-    def test_val_buckets_creation(self, youtube_multi_path):
-        """Test creating validation buckets with different filters."""
-        adapter = YoutubeAdapter()
-        all_scenes = adapter.collect_scenes(youtube_multi_path)
-
-        if len(all_scenes) < 10:
-            pytest.skip("Need more scenes for bucket test")
-
-        video_ids = list({s.extras["video_id"] for s in all_scenes})
-        if len(video_ids) < 2:
-            pytest.skip("Need at least 2 videos for bucket test")
-
-        dm = LAQDataModule(
-            sources=[{"type": "youtube", "root": str(youtube_multi_path)}],
-            image_size=256,
-            batch_size=4,
-            num_workers=0,
-            split_mode="ratio",
-            val_split=0.3,  # Larger val set
-            val_buckets={
-                f"video_{video_ids[0]}": {"video_id": video_ids[0]},
-                f"video_{video_ids[1]}": {"video_id": video_ids[1]},
-            },
-        )
-
-        dm.setup()
-
-        # Check buckets were created
-        assert len(dm.val_bucket_datasets) == 2
-
-        print(f"✓ Created {len(dm.val_bucket_datasets)} validation buckets")
-        for name, dataset in dm.val_bucket_datasets.items():
-            print(f"  - {name}: {len(dataset)} samples")
-
-    def test_val_bucket_dataloader(self, youtube_multi_path):
-        """Test getting dataloader for a specific bucket."""
-        adapter = YoutubeAdapter()
-        all_scenes = adapter.collect_scenes(youtube_multi_path)
-
-        if len(all_scenes) < 10:
-            pytest.skip("Need more scenes for bucket test")
-
-        video_ids = list({s.extras["video_id"] for s in all_scenes})
-
-        dm = LAQDataModule(
-            sources=[{"type": "youtube", "root": str(youtube_multi_path)}],
-            image_size=256,
-            batch_size=4,
-            num_workers=0,
-            split_mode="ratio",
-            val_split=0.3,
-            val_buckets={
-                "first_video": {"video_id": video_ids[0]},
-            },
-        )
-
-        dm.setup()
-
-        if "first_video" in dm.val_bucket_datasets and len(dm.val_bucket_datasets["first_video"]) > 0:
-            loader = dm.val_bucket_dataloader("first_video")
-            batch = next(iter(loader))
-            assert batch.shape[1:] == (3, 2, 256, 256)
-            print(f"✓ Bucket dataloader works, batch shape: {batch.shape}")
-        else:
-            print("✓ Bucket dataloader test skipped (empty bucket)")
 
 
 class TestPerSourceFilters:
@@ -410,7 +362,20 @@ class TestPerSourceFilters:
             image_size=256,
             batch_size=4,
             num_workers=0,
+            pin_memory=True,
+            prefetch_factor=None,
+            min_frames=2,
+            pair_offsets_frames=[30],
+            filters=None,
+            return_metadata=False,
             split_mode="ratio",
+            split_seed=42,
+            val_ratio=0.2,
+            val_scene_filters=None,
+            val_counts_per_dataset=None,
+            subset_max_pairs=None,
+            subset_strategy="random",
+            subset_seed=42,
         )
 
         dm.setup()

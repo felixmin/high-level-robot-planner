@@ -177,12 +177,12 @@ class HFOXEFramePairDataset(IterableDataset):
     def __init__(
         self,
         dataset_name: str,
-        split: str = "train",
-        offset: int = 5,
-        image_size: int = 256,
-        shuffle_buffer: int = 100,
-        return_metadata: bool = True,
-        samples_per_episode: int = 0,  # 0 = all pairs
+        split: str,
+        offset: int,
+        image_size: int,
+        shuffle_buffer: int,
+        return_metadata: bool,
+        samples_per_episode: int,
     ):
         super().__init__()
         if dataset_name not in HF_DATASETS:
@@ -370,8 +370,8 @@ class HFMultiOXEFramePairDataset(IterableDataset):
         datasets: List of dataset configs, each with:
             - name: Dataset name (e.g., "bridge")
             - split: Split string (e.g., "train")
-            - offset: Frame offset
-            - weight: Sampling weight (optional, defaults to 1.0)
+            - offset: Frame offset (in steps)
+            - weight: Sampling weight (required)
         image_size: Target image size
         shuffle_buffer: Shuffle buffer per dataset
         return_metadata: Whether to return action/state metadata
@@ -381,10 +381,10 @@ class HFMultiOXEFramePairDataset(IterableDataset):
     def __init__(
         self,
         datasets: List[Dict[str, Any]],
-        image_size: int = 256,
-        shuffle_buffer: int = 100,
-        return_metadata: bool = True,
-        samples_per_episode: int = 0,
+        image_size: int,
+        shuffle_buffer: int,
+        return_metadata: bool,
+        samples_per_episode: int,
     ):
         super().__init__()
         self.dataset_configs = datasets
@@ -394,8 +394,10 @@ class HFMultiOXEFramePairDataset(IterableDataset):
         self.samples_per_episode = samples_per_episode
 
         # Compute normalized weights
-        total_weight = sum(d.get("weight", 1.0) for d in datasets)
-        self.weights = [d.get("weight", 1.0) / total_weight for d in datasets]
+        total_weight = sum(float(d["weight"]) for d in datasets)
+        if total_weight <= 0.0:
+            raise ValueError("Sum of dataset weights must be > 0")
+        self.weights = [float(d["weight"]) / total_weight for d in datasets]
 
     def __iter__(self) -> Iterator[Dict[str, Any]]:
         """Iterate by randomly sampling from datasets based on weights."""
@@ -406,8 +408,8 @@ class HFMultiOXEFramePairDataset(IterableDataset):
         for cfg in self.dataset_configs:
             ds = HFOXEFramePairDataset(
                 dataset_name=cfg["name"],
-                split=cfg.get("split", "train"),
-                offset=cfg.get("offset", 5),
+                split=cfg["split"],
+                offset=int(cfg["offset"]),
                 image_size=self.image_size,
                 shuffle_buffer=self.shuffle_buffer,
                 return_metadata=self.return_metadata,
@@ -442,109 +444,107 @@ try:
         """
         Lightning DataModule for HuggingFace OXE datasets.
 
-        Args:
-            datasets: List of dataset configs for training
-            val_datasets: List of dataset configs for validation (optional)
-            image_size: Target image size
-            batch_size: Batch size
-            num_workers: Number of dataloader workers
-            shuffle_buffer: Shuffle buffer size
-            return_metadata: Whether to return action/state metadata
-            samples_per_episode: Max pairs per episode
+        Config is passed explicitly as nested dicts (from Hydra):
+        - `datasets`: list of HF dataset entries (name, splits, offsets, weights)
+        - `preprocess`: shared settings (image_size, return_metadata)
+        - `loader`: DataLoader settings (batch_size, num_workers, pin_memory)
+        - `adapter`: HF adapter settings (shuffle buffers, samples_per_episode)
         """
 
         def __init__(
             self,
+            *,
             datasets: List[Dict[str, Any]],
-            val_datasets: Optional[List[Dict[str, Any]]] = None,
-            image_size: int = 256,
-            batch_size: int = 32,
-            num_workers: int = 4,
-            shuffle_buffer: int = 100,
-            return_metadata: bool = True,
-            samples_per_episode: int = 0,
-            **kwargs,  # Accept extra args for compatibility
+            preprocess: Dict[str, Any],
+            loader: Dict[str, Any],
+            adapter: Dict[str, Any],
         ):
             super().__init__()
             self.datasets = datasets
-            self.val_datasets = val_datasets or datasets
-            self.image_size = image_size
-            self.batch_size = batch_size
-            self.num_workers = num_workers
-            self.shuffle_buffer = shuffle_buffer
-            self.return_metadata = return_metadata
-            self.samples_per_episode = samples_per_episode
+            self.preprocess = preprocess
+            self.loader = loader
+            self.adapter = adapter
 
             self.train_dataset = None
             self.val_dataset = None
 
         def setup(self, stage: Optional[str] = None):
             """Create train and val datasets."""
-            if len(self.datasets) == 1:
-                # Single dataset
-                cfg = self.datasets[0]
+            image_size = int(self.preprocess["image_size"])
+            return_metadata = bool(self.preprocess["return_metadata"])
+
+            hf_cfg = self.adapter["hf"]
+            train_shuffle_buffer = int(hf_cfg["train_shuffle_buffer"])
+            val_shuffle_buffer = int(hf_cfg["val_shuffle_buffer"])
+            samples_per_episode = int(hf_cfg["samples_per_episode"])
+
+            def _to_hf_cfg(entry: Dict[str, Any], split_key: str) -> Dict[str, Any]:
+                return {
+                    "name": entry["name"],
+                    "split": entry[split_key],
+                    "offset": int(entry["pair_offset_steps"]),
+                    "weight": entry["weight"],
+                }
+
+            train_cfgs = [_to_hf_cfg(d, "train_split") for d in self.datasets]
+            val_cfgs = [_to_hf_cfg(d, "val_split") for d in self.datasets]
+
+            if len(train_cfgs) == 1:
+                cfg = train_cfgs[0]
                 self.train_dataset = HFOXEFramePairDataset(
                     dataset_name=cfg["name"],
-                    split=cfg.get("split", "train"),
-                    offset=cfg.get("offset", 5),
-                    image_size=self.image_size,
-                    shuffle_buffer=self.shuffle_buffer,
-                    return_metadata=self.return_metadata,
-                    samples_per_episode=self.samples_per_episode,
+                    split=cfg["split"],
+                    offset=int(cfg["offset"]),
+                    image_size=image_size,
+                    shuffle_buffer=train_shuffle_buffer,
+                    return_metadata=return_metadata,
+                    samples_per_episode=samples_per_episode,
                 )
             else:
-                # Multi-dataset
                 self.train_dataset = HFMultiOXEFramePairDataset(
-                    datasets=self.datasets,
-                    image_size=self.image_size,
-                    shuffle_buffer=self.shuffle_buffer,
-                    return_metadata=self.return_metadata,
-                    samples_per_episode=self.samples_per_episode,
+                    datasets=train_cfgs,
+                    image_size=image_size,
+                    shuffle_buffer=train_shuffle_buffer,
+                    return_metadata=return_metadata,
+                    samples_per_episode=samples_per_episode,
                 )
 
-            # Validation (no shuffle, smaller buffer)
-            if len(self.val_datasets) == 1:
-                cfg = self.val_datasets[0]
+            if len(val_cfgs) == 1:
+                cfg = val_cfgs[0]
                 self.val_dataset = HFOXEFramePairDataset(
                     dataset_name=cfg["name"],
-                    split=cfg.get("val_split", cfg.get("split", "train")),
-                    offset=cfg.get("offset", 5),
-                    image_size=self.image_size,
-                    shuffle_buffer=0,  # No shuffle for val
-                    return_metadata=self.return_metadata,
-                    samples_per_episode=self.samples_per_episode,
+                    split=cfg["split"],
+                    offset=int(cfg["offset"]),
+                    image_size=image_size,
+                    shuffle_buffer=val_shuffle_buffer,
+                    return_metadata=return_metadata,
+                    samples_per_episode=samples_per_episode,
                 )
             else:
-                # Use train configs but with val_split
-                val_configs = []
-                for cfg in self.val_datasets:
-                    val_cfg = cfg.copy()
-                    val_cfg["split"] = cfg.get("val_split", cfg.get("split", "train"))
-                    val_configs.append(val_cfg)
                 self.val_dataset = HFMultiOXEFramePairDataset(
-                    datasets=val_configs,
-                    image_size=self.image_size,
-                    shuffle_buffer=0,
-                    return_metadata=self.return_metadata,
-                    samples_per_episode=self.samples_per_episode,
+                    datasets=val_cfgs,
+                    image_size=image_size,
+                    shuffle_buffer=val_shuffle_buffer,
+                    return_metadata=return_metadata,
+                    samples_per_episode=samples_per_episode,
                 )
 
         def train_dataloader(self):
             return DataLoader(
                 self.train_dataset,
-                batch_size=self.batch_size,
-                num_workers=self.num_workers,
+                batch_size=int(self.loader["batch_size"]),
+                num_workers=int(self.loader["num_workers"]),
                 collate_fn=hf_collate_fn,
-                pin_memory=True,
+                pin_memory=bool(self.loader["pin_memory"]),
             )
 
         def val_dataloader(self):
             return DataLoader(
                 self.val_dataset,
-                batch_size=self.batch_size,
-                num_workers=max(1, self.num_workers // 2),
+                batch_size=int(self.loader["batch_size"]),
+                num_workers=int(self.loader["num_workers"]),
                 collate_fn=hf_collate_fn,
-                pin_memory=True,
+                pin_memory=bool(self.loader["pin_memory"]),
             )
 
 except ImportError:
@@ -569,6 +569,7 @@ if __name__ == "__main__":
         offset=5,
         image_size=256,
         shuffle_buffer=10,
+        return_metadata=True,
         samples_per_episode=3,
     )
 
@@ -592,13 +593,18 @@ if __name__ == "__main__":
 
         dm = HFOXEDataModule(
             datasets=[
-                {"name": "bridge", "split": "train", "offset": 5, "weight": 1.0},
+                {
+                    "name": "bridge",
+                    "train_split": "train",
+                    "val_split": "train",
+                    "pair_offset_steps": 5,
+                    "weight": 1.0,
+                    "approx_num_pairs": None,
+                },
             ],
-            image_size=256,
-            batch_size=4,
-            num_workers=0,
-            shuffle_buffer=10,
-            samples_per_episode=3,
+            preprocess={"image_size": 256, "return_metadata": True},
+            loader={"batch_size": 4, "num_workers": 0, "pin_memory": True},
+            adapter={"hf": {"train_shuffle_buffer": 10, "val_shuffle_buffer": 0, "samples_per_episode": 3}},
         )
         dm.setup()
 

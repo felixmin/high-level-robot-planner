@@ -61,14 +61,20 @@ def benchmark_tf_dataset(name: str, ds_config: dict, batch_size: int = 32):
         episode_queue_shuffle_buffer=ds_config["episode_queue_shuffle_buffer"],
         intra_episode_sample_shuffle_buffer=ds_config["intra_episode_sample_shuffle_buffer"],
         image_size=ds_config["image_size"],
-        num_parallel_calls=ds_config["num_parallel_calls"],
         return_metadata=True,  # Usually we want metadata
         persistent_iterator=bool(ds_config.get("persistent_iterator", False)),
         samples_per_episode=int(ds_config.get("samples_per_episode", 0)),
         seed=ds_config.get("sampling_seed"),
         precomputed_size=ds_config.get("size"),
         episode_queue_prefetch_buffer=int(ds_config.get("episode_queue_prefetch_buffer", 0)),
-        num_parallel_episodes=int(ds_config.get("num_parallel_episodes", 1)),
+        private_threadpool_size=int(ds_config.get("per_dataset_private_threadpool_size", 0)),
+        tfds_read_cycle_length=int(ds_config.get("tfds_read_cycle_length", 1)),
+        tfds_read_block_length=int(ds_config.get("tfds_read_block_length", 1)),
+        tfds_read_decode_parallelism=int(ds_config.get("tfds_read_decode_parallelism", -1)),
+        tfds_read_interleave_parallelism=int(ds_config.get("tfds_read_interleave_parallelism", -1)),
+        pipeline_episode_concurrency=int(ds_config.get("pipeline_episode_concurrency", 1)),
+        pipeline_transform_parallelism=int(ds_config.get("pipeline_transform_parallelism", 1)),
+        pipeline_interleave_parallelism=int(ds_config.get("pipeline_interleave_parallelism", 1)),
     )
 
     # Get the underlying tf.data.Dataset
@@ -111,8 +117,9 @@ def benchmark_pytorch_throughput(config: dict, batch_size: int = 32):
             persistent_iterator=bool(config.get("persistent_iterator", True)),
             samples_per_episode=int(config.get("samples_per_episode", 0)),
             seed=config.get("sampling_seed"),
-            num_parallel_episodes=int(config.get("num_parallel_episodes", 1)),
-            num_parallel_calls=int(config.get("num_parallel_calls", 1)),
+            pipeline_episode_concurrency_total=int(config.get("pipeline_episode_concurrency", 1)),
+            pipeline_transform_parallelism=int(config.get("pipeline_transform_parallelism", 1)),
+            pipeline_interleave_parallelism=int(config.get("pipeline_interleave_parallelism", 1)),
             mix_block_length=int(config.get("multi_dataset_mix_block_length", 1)),
             parallelism_mode=str(config.get("multi_dataset_parallelism_mode", "divide")),
             per_dataset_stream_prefetch_buffer=int(config.get("per_dataset_stream_prefetch_buffer", 0)),
@@ -120,6 +127,10 @@ def benchmark_pytorch_throughput(config: dict, batch_size: int = 32):
             per_dataset_private_threadpool_size=int(
                 config.get("per_dataset_private_threadpool_size", 0)
             ),
+            tfds_read_cycle_length=int(config.get("tfds_read_cycle_length", 1)),
+            tfds_read_block_length=int(config.get("tfds_read_block_length", 1)),
+            tfds_read_decode_parallelism=int(config.get("tfds_read_decode_parallelism", -1)),
+            tfds_read_interleave_parallelism=int(config.get("tfds_read_interleave_parallelism", -1)),
         )
     else:
         # Single dataset (legacy/single config)
@@ -132,14 +143,20 @@ def benchmark_pytorch_throughput(config: dict, batch_size: int = 32):
             episode_queue_shuffle_buffer=config["episode_queue_shuffle_buffer"],
             intra_episode_sample_shuffle_buffer=config["intra_episode_sample_shuffle_buffer"],
             image_size=config.get("image_size", 256),
-            num_parallel_calls=int(config.get("num_parallel_calls", 1)),
             return_metadata=bool(config.get("return_metadata", True)),
             persistent_iterator=bool(config.get("persistent_iterator", True)),
             samples_per_episode=int(config.get("samples_per_episode", 0)),
             seed=config.get("sampling_seed"),
             precomputed_size=config.get("size"),
             episode_queue_prefetch_buffer=int(config.get("episode_queue_prefetch_buffer", 0)),
-            num_parallel_episodes=int(config.get("num_parallel_episodes", 1)),
+            private_threadpool_size=int(config.get("per_dataset_private_threadpool_size", 0)),
+            tfds_read_cycle_length=int(config.get("tfds_read_cycle_length", 1)),
+            tfds_read_block_length=int(config.get("tfds_read_block_length", 1)),
+            tfds_read_decode_parallelism=int(config.get("tfds_read_decode_parallelism", -1)),
+            tfds_read_interleave_parallelism=int(config.get("tfds_read_interleave_parallelism", -1)),
+            pipeline_episode_concurrency=int(config.get("pipeline_episode_concurrency", 1)),
+            pipeline_transform_parallelism=int(config.get("pipeline_transform_parallelism", 1)),
+            pipeline_interleave_parallelism=int(config.get("pipeline_interleave_parallelism", 1)),
         )
 
     # Create DataLoader

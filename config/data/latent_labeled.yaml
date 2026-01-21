@@ -1,40 +1,21 @@
-# Latent-labeled dataset configuration for Stage 2 (Foundation VLA).
-#
-# TODO: replace with a true latent-labeled WebDataset pipeline.
-# For now this uses the OXE streaming pipeline.
+# @package data
 
-datasets:
-  - name: bridge
-    train_split: "train[:90%]"
-    val_split: "train[90%:]"
-    offset: 5
-    weight: 1.0
-    size: 1031130
+# Stage 2 (foundation) currently reuses the OXE stream as a placeholder for latent-labeled data.
 
-offset: 5
-image_size: 256
-batch_size: 16
-num_workers: 0
+defaults:
+  - dataset: oxe_latent_labeled_bridge
+  - adapter: oxe_tf_default
+  - loader: oxe_streaming
+  - preprocess: pair_256
+  - _self_
 
-episode_queue_shuffle_buffer: 200
-intra_episode_sample_shuffle_buffer: 0
-global_stream_shuffle_buffer: 0
-val_episode_queue_shuffle_buffer: 0
-val_intra_episode_sample_shuffle_buffer: 0
-val_global_stream_shuffle_buffer: 0
+backend: oxe_tf
 
-final_stream_prefetch_buffer: 4
-episode_queue_prefetch_buffer: 0
-per_dataset_stream_prefetch_buffer: 0
+loader:
+  batch_size: 16
 
-return_metadata: true
-persistent_iterator: true
-samples_per_episode: 0
-sampling_seed: 42
-num_parallel_episodes: 1
-num_parallel_calls: 1
-
-multi_dataset_mix_block_length: 1
-multi_dataset_parallelism_mode: divide
-multi_dataset_mixing_strategy: sample
-per_dataset_private_threadpool_size: 0
+adapter:
+  tf:
+    train:
+      episode_queue_shuffle_buffer: 200
+      global_stream_shuffle_buffer: 0

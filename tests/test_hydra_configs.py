@@ -33,9 +33,9 @@ class TestExperimentConfigs:
             assert cfg.model.patch_size == 32
 
             # Validate data config
-            assert cfg.data.backend == "huggingface"
-            assert hasattr(cfg.data, "datasets")
-            assert len(cfg.data.datasets) >= 1
+            assert cfg.data.backend == "oxe_hf"
+            assert hasattr(cfg.data, "dataset")
+            assert len(cfg.data.dataset.hf_oxe.datasets) >= 1
 
             # Validate training config
             assert cfg.training.epochs == 100
@@ -62,10 +62,10 @@ class TestExperimentConfigs:
             assert cfg.model.codebook_size == 8
 
             # Validate data (OXE-style)
-            assert hasattr(cfg.data, "datasets")
-            assert len(cfg.data.datasets) == 4
-            assert hasattr(cfg.data, "episode_queue_shuffle_buffer")
-            assert hasattr(cfg.data, "global_stream_shuffle_buffer")
+            assert cfg.data.backend == "oxe_tf"
+            assert len(cfg.data.dataset.oxe.datasets) == 4
+            assert hasattr(cfg.data.adapter.tf.train, "episode_queue_shuffle_buffer")
+            assert hasattr(cfg.data.adapter.tf.train, "global_stream_shuffle_buffer")
 
             # Validate cluster config (H100 single node)
             assert cfg.cluster.name == "local_dev"
@@ -86,9 +86,9 @@ class TestExperimentConfigs:
             assert cfg.model.llm.model_name == "meta-llama/Llama-2-7b-hf"
 
             # Validate latent-labeled data
-            assert hasattr(cfg.data, "datasets")
-            assert cfg.data.datasets[0].name == "bridge"
-            assert cfg.data.return_metadata is True
+            assert cfg.data.backend == "oxe_tf"
+            assert cfg.data.dataset.oxe.datasets[0].name == "bridge"
+            assert bool(cfg.data.preprocess.return_metadata) is True
 
             # Validate FSDP training
             assert hasattr(cfg.training, "fsdp")
@@ -112,7 +112,7 @@ class TestExperimentConfigs:
             assert cfg.model.vla.model_name == "nvidia/Cosmos-Reason2-2B"
             assert cfg.model.action_tokens.codebook_size == 4096
             assert cfg.model.action_tokens.code_seq_len == 1
-            assert cfg.data.val_episode_queue_shuffle_buffer == 200
+            assert cfg.data.adapter.tf.val.episode_queue_shuffle_buffer == 200
             assert cfg.training.validation.check_interval == 100
             assert cfg.training.validation.limit_batches == 4
             assert bool(cfg.training.validation.visualization.enabled) is True
@@ -131,9 +131,9 @@ class TestExperimentConfigs:
             assert cfg.model.vla.model_name == "nvidia/Cosmos-Reason2-2B"
             assert cfg.model.action_tokens.codebook_size == 8
             assert cfg.model.action_tokens.code_seq_len == 4
-            assert hasattr(cfg.data, "datasets")
-            assert len(cfg.data.datasets) == 4
-            assert cfg.data.batch_size == 64
+            assert cfg.data.backend == "oxe_tf"
+            assert len(cfg.data.dataset.oxe.datasets) == 4
+            assert cfg.data.loader.batch_size == 64
             assert cfg.training.validation.check_interval == 1000
             assert cfg.training.checkpoint.every_n_train_steps == 1000
             assert bool(cfg.training.dataset_usage_logger.enabled) is True
@@ -150,14 +150,14 @@ class TestConfigComposition:
                 config_name="config",
                 overrides=[
                     "experiment=laq_hf_local",
-                    "data.batch_size=16",
+                    "data.loader.batch_size=16",
                     "training.optimizer.lr=5e-5",
                     "seed=123",
                 ],
             )
 
             # Verify overrides
-            assert cfg.data.batch_size == 16
+            assert cfg.data.loader.batch_size == 16
             assert cfg.training.optimizer.lr == 5e-5
             assert cfg.seed == 123
 

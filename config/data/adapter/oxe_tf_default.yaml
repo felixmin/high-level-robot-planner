@@ -1,0 +1,56 @@
+# @package data.adapter
+
+# TensorFlow/TFDS OXE streaming adapter (tf.data).
+# These parameters are ONLY used by the TF backend (not by training/model code).
+
+tf:
+  # Debug/testing helpers (no network/TFDS required when enabled).
+  debug:
+    use_synthetic_data: false
+    synthetic_num_samples: 10000
+
+  # Keep tf.data iterator alive across epochs to avoid re-filling shuffle buffers.
+  iterator:
+    persistent: true
+
+  # Episode -> pair sampling behaviour.
+  sampling:
+    samples_per_episode: 0   # 0 = yield all pairs in each episode
+    seed: 42
+
+  # Shuffle behaviour (train vs val).
+  train:
+    episode_queue_shuffle_buffer: 500
+    intra_episode_sample_shuffle_buffer: 0
+    global_stream_shuffle_buffer: 1000
+
+  val:
+    episode_queue_shuffle_buffer: 0
+    intra_episode_sample_shuffle_buffer: 0
+    global_stream_shuffle_buffer: 0
+
+  # Prefetch behaviour (memory/throughput trade-off).
+  prefetch:
+    final_stream_buffer: 4           # after mixing (per-batch)
+    per_dataset_stream_buffer: 0     # per-dataset (multiplies memory)
+    episode_queue_buffer: 0          # episodes (keep small; episodes can be large)
+
+  # TFDS read (I/O) parallelism.
+  tfds_read:
+    cycle_length: 1
+    block_length: 1
+    decode_parallelism: -1           # -1 = tf.data.AUTOTUNE
+    interleave_parallelism: -1       # -1 = tf.data.AUTOTUNE
+
+  # tf.data pipeline parallelism.
+  pipeline:
+    episode_concurrency: 1
+    transform_parallelism: 1
+    interleave_parallelism: 1
+
+  # Multi-dataset mixing behaviour.
+  mixing:
+    mix_block_length: 1              # 1 = per-sample mixing
+    parallelism_mode: divide         # divide|sqrt|full
+    strategy: sample                 # sample|choose|python
+    per_dataset_private_threadpool_size: 0

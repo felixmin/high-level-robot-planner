@@ -1,35 +1,12 @@
-# OXE Language Table dataset configuration (unified format)
-# 2D tabletop manipulation from Open X-Embodiment
+# @package data
 
-datasets:
-  - name: language_table
-    train_split: "train[:90%]"   # ~400,000 episodes
-    val_split: "train[90%:]"     # ~40,000 episodes
-    offset: 10                   # 1 second at 10Hz
-    weight: 1.0
-    size: 11934000               # Precomputed: ~442k × 0.9 × 30 pairs
+# TF OXE preset: language_table only.
 
-# Shared settings
-# language_table is at 10Hz, offset=10 means 1 second between frames
-image_size: 256
-batch_size: 32
-num_workers: 0                   # tf.data handles parallelism
-episode_queue_shuffle_buffer: 500           # Shuffle buffer for episode queue
-intra_episode_sample_shuffle_buffer: 0      # Shuffle within an episode (only when sampling pairs)
-global_stream_shuffle_buffer: 1000          # Final global blender
-final_stream_prefetch_buffer: 4
-return_metadata: true            # Required for action/state scatter validation
-persistent_iterator: true
-samples_per_episode: 0
-sampling_seed: 42
-episode_queue_prefetch_buffer: 0
-num_parallel_episodes: 1
-num_parallel_calls: 1
-multi_dataset_mix_block_length: 1
-multi_dataset_parallelism_mode: divide
-per_dataset_stream_prefetch_buffer: 0
-multi_dataset_mixing_strategy: sample
-per_dataset_private_threadpool_size: 0
-val_episode_queue_shuffle_buffer: 0
-val_intra_episode_sample_shuffle_buffer: 0
-val_global_stream_shuffle_buffer: 0
+defaults:
+  - dataset: oxe_language_table_only
+  - adapter: oxe_tf_default
+  - loader: oxe_streaming
+  - preprocess: pair_256
+  - _self_
+
+backend: oxe_tf

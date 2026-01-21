@@ -77,68 +77,58 @@ def load_config(config_name: str) -> Dict[str, Any]:
 
 def is_oxe_config(config: Dict[str, Any]) -> bool:
     """Check if config is for OXE streaming dataset."""
-    return "dataset_name" in config or "datasets" in config
+    return config.get("backend") in ("oxe_tf", "oxe_hf")
 
 
 def create_datamodule(config: Dict[str, Any], batch_size: int, include_bridge: bool = False):
     """Create appropriate datamodule based on config."""
-    from common.data import LAQDataModule, OXEDataModule
+    from common.data_factory import create_datamodule as create_from_cfg
 
-    # Override batch size
     config = config.copy()
-    config["batch_size"] = batch_size
-
-    # Remove non-datamodule keys
-    config.pop("name", None)
-    config.pop("task", None)
-
-    # Ensure return_metadata is True for visualization
-    config["return_metadata"] = True
-
-    # Disable multiprocessing workers - they crash in Streamlit
-    config["num_workers"] = 0
+    config["loader"]["batch_size"] = batch_size
+    config["loader"]["num_workers"] = 0  # multiprocessing workers crash in Streamlit
+    config["preprocess"]["return_metadata"] = True
 
     if is_oxe_config(config):
-        # Use small shuffle buffer for fast loading in viewer
-        config["episode_queue_shuffle_buffer"] = min(
-            int(config.get("episode_queue_shuffle_buffer", 50)), 50
-        )
-        config["intra_episode_sample_shuffle_buffer"] = int(
-            config.get("intra_episode_sample_shuffle_buffer", 0)
-        )
-        config["global_stream_shuffle_buffer"] = min(
-            int(config.get("global_stream_shuffle_buffer", 50)), 50
-        )
-        config["val_episode_queue_shuffle_buffer"] = 0  # No shuffling for val
-        config["val_intra_episode_sample_shuffle_buffer"] = 0
-        config["val_global_stream_shuffle_buffer"] = 0
-        config["final_stream_prefetch_buffer"] = 2
-        config["per_dataset_stream_prefetch_buffer"] = int(
-            config.get("per_dataset_stream_prefetch_buffer", 0)
-        )
-        config["episode_queue_prefetch_buffer"] = int(
-            config.get("episode_queue_prefetch_buffer", 0)
-        )
-        logger.info(
-            "Creating OXEDataModule "
-            f"(episode_queue_shuffle_buffer={config['episode_queue_shuffle_buffer']}, "
-            f"global_stream_shuffle_buffer={config['global_stream_shuffle_buffer']})"
-        )
-        datamodule = OXEDataModule(**config)
+        # For viewer: keep shuffles/prefetch small for fast iteration.
+        if config["backend"] == "oxe_tf":
+            tf_cfg = config["adapter"]["tf"]
+            tf_cfg["train"]["episode_queue_shuffle_buffer"] = min(
+                int(tf_cfg["train"]["episode_queue_shuffle_buffer"]), 50
+            )
+            tf_cfg["train"]["global_stream_shuffle_buffer"] = min(
+                int(tf_cfg["train"]["global_stream_shuffle_buffer"]), 50
+            )
+            tf_cfg["val"]["episode_queue_shuffle_buffer"] = 0
+            tf_cfg["val"]["global_stream_shuffle_buffer"] = 0
+            tf_cfg["prefetch"]["final_stream_buffer"] = 2
+        elif config["backend"] == "oxe_hf":
+            hf_cfg = config["adapter"]["hf"]
+            hf_cfg["train_shuffle_buffer"] = min(int(hf_cfg["train_shuffle_buffer"]), 50)
+            hf_cfg["val_shuffle_buffer"] = 0
+        else:
+            raise ValueError(f"Unknown backend: {config['backend']}")
+
+        logger.info(f"Creating OXE DataModule (backend={config['backend']})")
+        datamodule = create_from_cfg(config)
     else:
-        # Limit pairs for faster loading
-        config["max_pairs"] = min(config.get("max_pairs") or 500, 500)  # Small limit for viewer
-        config["prefetch_factor"] = None  # Not needed with num_workers=0
-        # Skip Bridge by default - scanning 50k folders is too slow for viewer
-        if "sources" in config and not include_bridge:
-            original_count = len(config["sources"])
-            config["sources"] = [s for s in config["sources"] if s.get("type") != "bridge"]
-            if len(config["sources"]) < original_count:
+        # Limit pairs for faster loading (local-files backend only).
+        config["subset"]["max_pairs"] = min(config["subset"]["max_pairs"] or 500, 500)
+
+        # Skip Bridge by default - scanning 50k+ folders is too slow for viewer.
+        if not include_bridge:
+            sources = config["dataset"]["local_files"]["sources"]
+            original_count = len(sources)
+            config["dataset"]["local_files"]["sources"] = [
+                s for s in sources if s.get("type") != "bridge"
+            ]
+            if len(config["dataset"]["local_files"]["sources"]) < original_count:
                 logger.info("Skipping Bridge dataset (50k+ trajectories too slow for viewer)")
-            if not config["sources"]:
+            if not config["dataset"]["local_files"]["sources"]:
                 logger.warning("No sources left after removing Bridge!")
-        logger.info(f"Creating LAQDataModule (max_pairs={config['max_pairs']})")
-        datamodule = LAQDataModule(**config)
+
+        logger.info(f"Creating LAQ DataModule (max_pairs={config['subset']['max_pairs']})")
+        datamodule = create_from_cfg(config)
 
     logger.info("Calling datamodule.setup()...")
     datamodule.setup()

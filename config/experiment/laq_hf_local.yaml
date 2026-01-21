@@ -5,6 +5,7 @@
 
 defaults:
   - /model@model: laq
+  - /data@data: laq_hf_bridge
   - /training@training: laq_optimizer
   - /cluster@cluster: local_dev
 
@@ -19,23 +20,12 @@ model:
     decoder_depth: 8
     warmup_steps: 10000
 
-# HuggingFace data config (inline, not using defaults)
 data:
-  backend: huggingface  # Key flag to use HFOXEDataModule
-
-  datasets:
-    - name: bridge
-      split: "train"
-      val_split: "train"
-      offset: 5
-      weight: 1.0
-
-  image_size: 256
-  batch_size: 32
-  num_workers: 0  # Must be 0 due to WebDataset sharding issues
-  shuffle_buffer: 100
-  return_metadata: false
-  samples_per_episode: 0
+  preprocess:
+    return_metadata: false
+  loader:
+    batch_size: 32
+    num_workers: 0  # HF streaming: keep 0 (WebDataset sharding issues)
 
 training:
   enable_progress_bar: true
@@ -54,6 +44,7 @@ training:
     max_cached_samples: 0
     num_fixed_samples: 0
     num_random_samples: 0
+    buckets: null
 
 logging:
   level: INFO

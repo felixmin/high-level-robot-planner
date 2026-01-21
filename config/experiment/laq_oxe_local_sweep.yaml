@@ -16,73 +16,68 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      #data.episode_queue_shuffle_buffer: 0
-      #data.intra_episode_sample_shuffle_buffer: 0
-      #data.global_stream_shuffle_buffer: 0
-      data.episode_queue_prefetch_buffer: 0
-      data.per_dataset_stream_prefetch_buffer: 0
-      data.final_stream_prefetch_buffer: 0
-      data.num_parallel_episodes: 1
-      data.num_parallel_calls: 0,1,2,4,8
-      data.per_dataset_private_threadpool_size: 64
-      data.multi_dataset_mix_block_length: 1
+      data.adapter.tf.prefetch.episode_queue_buffer: 0
+      data.adapter.tf.prefetch.per_dataset_stream_buffer: 0
+      data.adapter.tf.prefetch.final_stream_buffer: 0
+      data.adapter.tf.tfds_read.cycle_length: 1
+      data.adapter.tf.pipeline.episode_concurrency: 1
+      data.adapter.tf.pipeline.transform_parallelism: 0,1,2,4,8
+      data.adapter.tf.pipeline.interleave_parallelism: 0
+      data.adapter.tf.mixing.per_dataset_private_threadpool_size: 64
+      data.adapter.tf.mixing.mix_block_length: 1
 
 
 
 experiment:
-  name: laq_oxe_local_sweep_num_par_calls_${data.num_parallel_calls}
+  name: laq_oxe_local_sweep_transform_par_${data.adapter.tf.pipeline.transform_parallelism}
   description: "Minimal local OXE run (no shuffle/prefetch/autotune)"
 
 model:
   flow:
-    
+    enabled: false
     model: raft_large    # "raft_small" or "raft_large"
     loss_weight: 0.1     # Weight for flow loss in total loss
     decoder_depth: 8     # Transformer depth for flow decoder
     warmup_steps: 10000
 
 data:
-  batch_size: 32
-  num_workers: 0
+  loader:
+    batch_size: 32
+    num_workers: 0
 
-  # tf.data settings (tune in experiments)
-  episode_queue_shuffle_buffer: 0
-  intra_episode_sample_shuffle_buffer: 0
-  global_stream_shuffle_buffer: 0
-  val_episode_queue_shuffle_buffer: 0
-  val_intra_episode_sample_shuffle_buffer: 0
-  val_global_stream_shuffle_buffer: 0
-  episode_queue_prefetch_buffer: 0
-  final_stream_prefetch_buffer: 0
-  num_parallel_episodes: 1
-  num_parallel_calls: 1
-  # Multi-dataset only: sample blocks per-dataset in tf.data to reduce
-  # `sample_from_datasets()` coordination overhead (1 = per-sample mixing).
-  multi_dataset_mix_block_length: 1
-  # Multi-dataset only: how to allocate `num_parallel_*` across datasets.
-  # - divide: treat `num_parallel_*` as total budget and split across datasets (default)
-  # - sqrt: split by sqrt(n_datasets) (middle ground)
-  # - full: pass full `num_parallel_*` to each dataset (can oversubscribe)
-  multi_dataset_parallelism_mode: divide
-  # Multi-dataset only: optional small per-dataset prefetch to reduce
-  # `sample_from_datasets()` switching stalls (0 disables).
-  per_dataset_stream_prefetch_buffer: 0
-  # Multi-dataset only: mixing implementation.
-  # - sample: tf.data `sample_from_datasets()` (default)
-  # - choose: `choose_from_datasets()` with a shuffled selector (approx weighted)
-  multi_dataset_mixing_strategy: sample
-  # Multi-dataset only: private thread pool size for each dataset pipeline.
-  # 0 = use shared global threadpool (recommended for batch_size>=256)
-  # >0 = each pipeline gets its own threadpool (helps for batch_size<=128)
-  # - batch_size=128: private_threadpool=64 gives +20% throughput
-  # - batch_size=256: shared threadpool (0) is faster
-  per_dataset_private_threadpool_size: 64
+  preprocess:
+    return_metadata: true
 
-  # Reduce output/overhead
-  return_metadata: true
-  persistent_iterator: true
-  samples_per_episode: 0
-  sampling_seed: 42
+  adapter:
+    tf:
+      train:
+        episode_queue_shuffle_buffer: 0
+        intra_episode_sample_shuffle_buffer: 0
+        global_stream_shuffle_buffer: 0
+      val:
+        episode_queue_shuffle_buffer: 0
+        intra_episode_sample_shuffle_buffer: 0
+        global_stream_shuffle_buffer: 0
+      tfds_read:
+        cycle_length: 1
+      pipeline:
+        episode_concurrency: 1
+        transform_parallelism: 0
+        interleave_parallelism: 0
+      prefetch:
+        episode_queue_buffer: 0
+        final_stream_buffer: 0
+        per_dataset_stream_buffer: 0
+      mixing:
+        mix_block_length: 1
+        parallelism_mode: divide
+        strategy: sample
+        per_dataset_private_threadpool_size: 64
+      iterator:
+        persistent: true
+      sampling:
+        samples_per_episode: 0
+        seed: 42
 
 training:
   max_steps: 500

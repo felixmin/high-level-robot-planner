@@ -76,8 +76,16 @@ val_intra_episode_sample_shuffle_buffer: 0
 val_global_stream_shuffle_buffer: 0
 final_stream_prefetch_buffer: 4
 episode_queue_prefetch_buffer: 0
-num_parallel_episodes: 1
-num_parallel_calls: 1
+
+# Parallelism
+tfds_read_cycle_length: 1
+tfds_read_block_length: 1
+tfds_read_decode_parallelism: -1
+tfds_read_interleave_parallelism: -1
+pipeline_episode_concurrency: 1
+pipeline_transform_parallelism: 1
+pipeline_interleave_parallelism: 1
+
 return_metadata: true  # Required for validation strategies
 persistent_iterator: true
 ```
@@ -148,21 +156,26 @@ print(info)
 # Load samples
 ds = OXEFramePairDataset(
     dataset_name="bridge",
-    gcs_path=None,
     split="train[:10]",
     offset=5,
-	    final_stream_prefetch_buffer=0,
+    final_stream_prefetch_buffer=0,
     episode_queue_shuffle_buffer=0,
     intra_episode_sample_shuffle_buffer=0,
     image_size=256,
-    num_parallel_calls=1,
     return_metadata=True,
     persistent_iterator=False,
     samples_per_episode=0,
     seed=None,
     precomputed_size=None,
-	    episode_queue_prefetch_buffer=0,
-    num_parallel_episodes=1,
+    episode_queue_prefetch_buffer=0,
+    tfds_read_cycle_length=1,
+    tfds_read_block_length=1,
+    tfds_read_decode_parallelism=-1,
+    tfds_read_interleave_parallelism=-1,
+    pipeline_episode_concurrency=1,
+    pipeline_transform_parallelism=1,
+    pipeline_interleave_parallelism=1,
+    private_threadpool_size=0,
 )
 
 for sample in ds:

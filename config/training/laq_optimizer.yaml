@@ -56,23 +56,20 @@ validation:
   # Maximum frame pairs to cache in RAM (prevents OOM on large val sets)
   max_cached_samples: 1024
 
-  # --- Validation Buckets (for per-bucket visualization and analysis) ---
-  # Define custom data subsets for separate visualization
-  # Each bucket is a named filter - samples matching all conditions are grouped
-  # If not specified, auto-bucketing by dataset_type is used
+  # --- Buckets (for per-bucket visualization and analysis) ---
+  # NOTE: Buckets belong to validation (not data). They drive:
+  # - sample routing into per-bucket caches
+  # - per-bucket visualization grids (via filters)
   # Supports operators: ["!=", value], [">", value], ["not_null", true]
-  val_buckets:
+  buckets:
     youtube:
-      dataset_type: "youtube"
+      filters:
+        dataset_name: "youtube"
+      max_samples: 256
     bridge:
-      dataset_type: "bridge"
-    # Example: filter by environment
-    # bridge_toykitchen1:
-    #   dataset_type: "bridge"
-    #   environment: "toykitchen1"
-    # Example: filter for samples with language annotations
-    # with_language:
-    #   language: ["not_null", true]
+      filters:
+        dataset_name: "bridge"
+      max_samples: 256
 
   # --- Validation Strategies ---
   strategies:

@@ -69,8 +69,8 @@ conda activate hlrp
 python scripts/4_train_foundation.py \
   experiment=vla_cosmos2_tokens_debug \
   model.laq.checkpoint=/abs/path/to/laq.ckpt \
-  data.batch_size=2 \
-  data.num_workers=0
+  data.loader.batch_size=2 \
+  data.loader.num_workers=0
 ```
 
 What to look for:
@@ -105,4 +105,3 @@ These tests protect the tricky parts:
    - Confirm OpenX streaming works, Cosmos weights download/caching works, and a few steps complete.
 3) **Scale-up**
    - Add PEFT/LoRA knobs (if desired), tune batch size/accumulation, and then move to H100 via your preferred submission workflow (`submit_job.py`).
-

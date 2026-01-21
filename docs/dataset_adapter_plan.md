@@ -118,11 +118,15 @@ val_scene_filters:
 
 ### Validation Buckets
 ```yaml
-val_buckets:
-  youtube_only:
-    dataset_type: "youtube"
-  unseen_robot:
-    robot: "minsky"
+training:
+  validation:
+    buckets:
+      youtube_only:
+        filters:
+          dataset_name: "youtube"
+      unseen_robot:
+        filters:
+          robot: "minsky"
 ```
 
 ## Metadata Fields

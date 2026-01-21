@@ -12,7 +12,7 @@ python scripts/2_train_laq.py experiment=laq_debug
 python scripts/2_train_laq.py experiment=laq_normal
 
 # With custom parameters
-python scripts/2_train_laq.py experiment=laq_normal data.batch_size=64 training.epochs=100
+python scripts/2_train_laq.py experiment=laq_normal data.loader.batch_size=64 training.epochs=100
 ```
 
 ---
@@ -80,22 +80,22 @@ val_scene_filters:
 Create named subsets of validation data for separate evaluation:
 
 ```yaml
-val_buckets:
-  youtube_only:
-    dataset_type: "youtube"
-  bridge_only:
-    dataset_type: "bridge"
-  unseen_environment:
-    environment: "folding_table"
+training:
+  validation:
+    buckets:
+      youtube_only:
+        filters:
+          dataset_name: "youtube"
+      bridge_only:
+        filters:
+          dataset_name: "bridge"
+      unseen_environment:
+        filters:
+          environment: "folding_table"
 ```
 
-Access bucket dataloaders in your training code:
-```python
-# In your training script
-for bucket_name in dm.val_bucket_datasets:
-    bucket_loader = dm.val_bucket_dataloader(bucket_name)
-    # Evaluate on this bucket
-```
+Buckets are routed and cached by `ValidationStrategyCallback` (no bucket dataloaders
+on the DataModule).
 
 ---
 
@@ -163,7 +163,7 @@ python scripts/2_train_laq.py experiment=laq_normal
 
 ### Multi-scale training (3 frame gaps)
 ```bash
-python scripts/2_train_laq.py experiment=laq_normal data.offsets=[15,30,60]
+python scripts/2_train_laq.py experiment=laq_normal data.dataset.local_files.pair_offsets_frames=[15,30,60]
 ```
 
 ### Higher learning rate
@@ -173,7 +173,7 @@ python scripts/2_train_laq.py experiment=laq_normal training.optimizer.lr=5e-4
 
 ### Different batch size
 ```bash
-python scripts/2_train_laq.py experiment=laq_normal data.batch_size=64
+python scripts/2_train_laq.py experiment=laq_normal data.loader.batch_size=64
 ```
 
 ### More epochs
@@ -202,7 +202,7 @@ Before running normal training:
 - [ ] Verify batch size fits in GPU memory:
   - RTX 5090: batch_size=32-64 with bf16 precision
   - RTX A100: batch_size=128+ with bf16 precision
-- [ ] Set `num_workers` to your CPU core count (not more)
+- [ ] Set `data.loader.num_workers` to your CPU core count (not more)
 - [ ] Test with `experiment=laq_debug` first to verify setup
 - [ ] Run full training with `experiment=laq_normal`
 
@@ -211,18 +211,19 @@ Before running normal training:
 ## Troubleshooting
 
 ### "Out of memory" error
-1. Reduce batch size: `data.batch_size=16`
+1. Reduce batch size: `data.loader.batch_size=16`
 2. Enable gradient checkpointing (if supported)
-3. Reduce `num_workers`
+3. Reduce `data.loader.num_workers`
 
 ### "Training is slow"
-1. Check CPU bottleneck: Increase `num_workers` to match CPU cores
+1. Check CPU bottleneck: Increase `data.loader.num_workers` to match CPU cores
 2. Profile with: `training.profiler.enabled=true`
 3. Check if GPU is underutilized: Maybe batch_size is too small
 
 ### "Results differ between runs"
 1. Set fixed seed: `seed=42`
-2. Use same `sampling_seed`: `data.sampling_seed=42`
+2. Local-files split: `data.split.seed=42` (and optionally `data.subset.seed=42`)
+3. OXE streaming (TF): `data.adapter.tf.sampling.seed=42`
 
 ### "Want to resume from checkpoint"
 ```bash

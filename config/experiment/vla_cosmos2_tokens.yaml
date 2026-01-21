@@ -18,9 +18,9 @@ submit:
   script: 4_train_foundation
 
 data:
-  batch_size: 64
+  loader:
+    batch_size: 64
 
 logging:
   tags: ["production", "foundation", "cosmos2", "tokens"]
   log_model: true
-

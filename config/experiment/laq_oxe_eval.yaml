@@ -21,13 +21,18 @@ model:
 
 # Data settings
 data:
-  batch_size: 32
-  episode_queue_shuffle_buffer: 2000
-  intra_episode_sample_shuffle_buffer: 0
-  global_stream_shuffle_buffer: 2000
-  per_dataset_stream_prefetch_buffer: 0
-  episode_queue_prefetch_buffer: 0
-  final_stream_prefetch_buffer: 4
+  loader:
+    batch_size: 32
+  adapter:
+    tf:
+      train:
+        episode_queue_shuffle_buffer: 2000
+        intra_episode_sample_shuffle_buffer: 0
+        global_stream_shuffle_buffer: 2000
+      prefetch:
+        per_dataset_stream_buffer: 0
+        episode_queue_buffer: 0
+        final_stream_buffer: 4
 
 # Training settings
 training:
@@ -38,6 +43,7 @@ training:
   validation:
     check_interval: 100  # Validate every X steps
     limit_batches: 100    # Limit val batches (streaming dataset)
+    buckets: null
     # Disable bucket-based validation (single dataset)
     strategies:
       basic:

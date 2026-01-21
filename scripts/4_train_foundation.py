@@ -14,8 +14,10 @@ import sys
 from pathlib import Path
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import lightning.pytorch as pl
 import torch
+import wandb
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from omegaconf import DictConfig, OmegaConf
 
@@ -23,7 +25,7 @@ workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
 from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
-from common.data import OXEDataModule
+from common.data_factory import create_datamodule
 from common.logging import set_seed
 from common.unified_logging import resolve_runs_dir, setup_unified_logging, setup_wandb_with_unified_paths
 from foundation.action_tokens import ActionTokenConfig
@@ -45,6 +47,10 @@ from foundation.vla_module import VLATokenLightningModule, VLAOptimizerConfig
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig):
+    # Force new W&B run per Hydra job (fix for sweeps)
+    if wandb.run:
+        wandb.finish()
+
     # Setup unified logging
     runs_dir = resolve_runs_dir(
         logging_root_dir=cfg.logging.get("root_dir"),
@@ -70,23 +76,33 @@ def main(cfg: DictConfig):
 
     # Setup WandB logger (use unified logging paths). If disabled, avoid Lightning's default logger
     # to prevent creating extra `lightning_logs/` directories.
+    # Calculate unique run name for sweeps
+    run_name = cfg.experiment.name
+    try:
+        hydra_cfg = HydraConfig.get()
+        if hydra_cfg.mode == "MULTIRUN":
+            run_name = f"{run_name}_{hydra_cfg.job.num}"
+    except (ValueError, Exception):
+        pass
+
     wandb_logger = setup_wandb_with_unified_paths(
         logger=logger,
         output_dir=output_dir,
         project=cfg.logging.get("project", "hlrp"),
-        name=cfg.experiment.name,
+        name=run_name,
+        group=cfg.experiment.name,
         tags=cfg.logging.get("tags", []),
         use_wandb=bool(cfg.logging.get("use_wandb", True)),
+        settings=wandb.Settings(start_method="thread", reinit=True),
     )
 
-    # Data: OXE streaming frame pairs + language
-    if not hasattr(cfg.data, "dataset_name") and not hasattr(cfg.data, "datasets"):
+    # Data: frame pairs + language (OXE backends only).
+    if cfg.data.backend not in ("oxe_tf", "oxe_hf"):
         raise ValueError(
-            "Stage 2 currently expects OXE-style data config (dataset_name or datasets)."
+            f"Stage 2 expects an OXE backend (oxe_tf/oxe_hf), got {cfg.data.backend!r}"
         )
 
-    data_config = {k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
-    datamodule = OXEDataModule(**data_config)
+    datamodule = create_datamodule(cfg.data)
     datamodule.setup()
 
     # LAQ: frozen label generator
@@ -359,6 +375,9 @@ def main(cfg: DictConfig):
     if ckpt_path:
         logger.info(f"Resuming from checkpoint: {ckpt_path}")
     trainer.fit(module, datamodule=datamodule, ckpt_path=ckpt_path)
+
+    if wandb.run:
+        wandb.finish()
 
 
 if __name__ == "__main__":

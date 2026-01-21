@@ -103,7 +103,7 @@ def check_hydra_config():
             cfg = compose(config_name="config", overrides=["experiment=laq_debug"])
             console.print("[green]✓ Hydra configuration is valid[/green]")
             console.print(f"  Experiment: {cfg.experiment.name}")
-            console.print(f"  Data batch size: {cfg.data.batch_size}")
+            console.print(f"  Data batch size: {cfg.data.loader.batch_size}")
             console.print(f"  Training epochs: {cfg.training.epochs}")
             return True
     except Exception as e:
@@ -176,4 +176,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -20,14 +20,15 @@ workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 import torch
+import wandb
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
 
 
-from common.data import LAQDataModule, OXEDataModule
-from common.adapters.huggingface_oxe import HFOXEDataModule
+from common.data_factory import create_datamodule
 from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
 from foundation.callbacks import ThroughputLoggingCallback, ThroughputLoggingConfig
 from common.logging import set_seed, count_parameters
@@ -52,6 +53,10 @@ def main(cfg: DictConfig):
     4. Setup Lightning trainer with callbacks
     5. Train the model
     """
+    # Force new W&B run per Hydra job (fix for sweeps)
+    if wandb.run:
+        wandb.finish()
+
     # Setup unified logging
     runs_dir = resolve_runs_dir(
         logging_root_dir=cfg.logging.get("root_dir"),
@@ -74,56 +79,46 @@ def main(cfg: DictConfig):
     logger.info(OmegaConf.to_yaml(cfg))
     logger.info("=" * 80)
 
-    # Set random seed for reproducibility
-    if hasattr(cfg, "seed"):
-        set_seed(cfg.seed)
-        logger.info(f"✓ Random seed set to {cfg.seed}")
-    else:
-        set_seed(42)
-        logger.info(f"✓ Random seed set to 42 (default)")
+    # Set random seed for reproducibility (required in base config)
+    set_seed(int(cfg.seed))
+    logger.info(f"✓ Random seed set to {cfg.seed}")
 
     # Initialize data module
     logger.info("\n" + "=" * 80)
     logger.info("Initializing Data Module")
     logger.info("=" * 80)
 
-    # Detect data module type based on config
-    data_config = {k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
+    datamodule = create_datamodule(cfg.data)
+    datamodule.setup()
 
-    if cfg.data.get("backend") == "huggingface":
-        # HuggingFace-based OXE dataset (no TensorFlow required)
-        logger.info("✓ Using HuggingFace backend (jxu124/OpenX-Embodiment)")
-        datamodule = HFOXEDataModule(**data_config)
-        datamodule.setup()
-        logger.info(f"  - Batch size: {cfg.data.batch_size}")
-        logger.info(f"  - Datasets: {[d['name'] for d in cfg.data.datasets]}")
-    elif "dataset_name" in cfg.data or "datasets" in cfg.data:
-        # OXE streaming dataset (single or multi-dataset) - TensorFlow backend
-        datamodule = OXEDataModule(**data_config)
-        datamodule.setup()
-        logger.info(f"  - Batch size: {cfg.data.batch_size}")
-        logger.info(f"  - Estimated train pairs: ~{len(datamodule.train_dataset):,}")
-    else:
-        # Multi-source file-based dataset (YouTube, Bridge, etc.)
-        datamodule = LAQDataModule(**data_config)
-        datamodule.setup()
+    logger.info(f"✓ Data backend: {cfg.data.backend}")
+    logger.info(f"  - Batch size: {cfg.data.loader.batch_size}")
+    logger.info(f"  - Image size: {cfg.data.preprocess.image_size}")
 
-        source_info = [f"{s['type']}: {s['root']}" for s in cfg.data.sources]
-        logger.info(f"✓ DataModule initialized (multi-source)")
+    if cfg.data.backend == "local_files":
+        source_info = [
+            f"{s.type}: {s.root}" for s in cfg.data.dataset.local_files.sources
+        ]
         for s in source_info:
             logger.info(f"  - Source: {s}")
-        logger.info(f"  - Image size: {cfg.data.image_size}")
-        logger.info(f"  - Batch size: {cfg.data.batch_size}")
         logger.info(f"  - Total scenes available: {datamodule.total_available}")
         logger.info(f"  - Train frame pairs: {len(datamodule.train_dataset)}")
         logger.info(f"  - Val frame pairs: {len(datamodule.val_dataset)}")
 
-        # Print per-dataset frame pair breakdown
         pairs_per_dataset = datamodule.get_pairs_per_dataset()
         if pairs_per_dataset["train"]:
             logger.info(f"  - Train pairs by dataset: {pairs_per_dataset['train']}")
         if pairs_per_dataset["val"]:
             logger.info(f"  - Val pairs by dataset: {pairs_per_dataset['val']}")
+    elif cfg.data.backend == "oxe_tf":
+        dataset_names = [d.name for d in cfg.data.dataset.oxe.datasets]
+        logger.info(f"  - Datasets: {dataset_names}")
+        logger.info(f"  - Estimated train pairs: ~{len(datamodule.train_dataset):,}")
+    elif cfg.data.backend == "oxe_hf":
+        dataset_names = [d.name for d in cfg.data.dataset.hf_oxe.datasets]
+        logger.info(f"  - Datasets: {dataset_names}")
+    else:
+        raise ValueError(f"Unknown data.backend: {cfg.data.backend}")
 
     # Initialize LAQ task
     logger.info("\n" + "=" * 80)
@@ -216,12 +211,15 @@ def main(cfg: DictConfig):
     if strategies_config:
         strategies_config = OmegaConf.to_container(strategies_config, resolve=True)
 
-    # Get bucket configs (new "buckets" key, with "val_buckets" as fallback)
-    bucket_configs = val_config.get("buckets", val_config.get("val_buckets", None))
-    if bucket_configs:
+    bucket_configs = val_config.get("buckets")
+    if bucket_configs is not None:
         bucket_configs = OmegaConf.to_container(bucket_configs, resolve=True)
 
-    strategies = create_validation_strategies(strategies_config, val_buckets=bucket_configs)
+    bucket_filters = None
+    if bucket_configs is not None:
+        bucket_filters = {name: cfg["filters"] for name, cfg in bucket_configs.items()}
+
+    strategies = create_validation_strategies(strategies_config, bucket_filters=bucket_filters)
 
     val_strategy_callback = ValidationStrategyCallback(
         strategies=strategies,
@@ -255,13 +253,24 @@ def main(cfg: DictConfig):
     logger.info("=" * 80)
 
     if hasattr(cfg, "logging") and cfg.logging.get("use_wandb", True):
+        # Calculate unique run name for sweeps
+        run_name = cfg.experiment.name
+        try:
+            hydra_cfg = HydraConfig.get()
+            if hydra_cfg.mode == "MULTIRUN":
+                run_name = f"{run_name}_{hydra_cfg.job.num}"
+        except (ValueError, Exception):
+            pass
+
         wandb_logger = setup_wandb_with_unified_paths(
             logger=logger,
             output_dir=output_dir,
             project=cfg.logging.get("project", "hlrp"),
-            name=cfg.experiment.name,
+            name=run_name,
+            group=cfg.experiment.name,
             tags=cfg.logging.get("tags", []),
             use_wandb=True,
+            settings=wandb.Settings(start_method="thread", reinit=True),
         )
     else:
         wandb_logger = None
@@ -368,6 +377,9 @@ def main(cfg: DictConfig):
     if checkpoint_callback.best_model_path:
         logger.info(f"✓ Best checkpoint: {checkpoint_callback.best_model_path}")
         logger.info(f"  - Best val/loss: {checkpoint_callback.best_model_score:.4f}")
+
+    if wandb.run:
+        wandb.finish()
 
 
 if __name__ == "__main__":

@@ -9,8 +9,8 @@ Example:
   conda run -n hlrp python scripts/bench_oxe_dataloader.py \\
     experiment=laq_oxe_local \\
     benchmark.steps=300 benchmark.warmup_steps=20 \\
-    data.batch_size=128 \\
-    'data.datasets=[{name:language_table,train_split:"train[:10000]",val_split:"train[10000:10020]",offset:10,size:1000000}]'
+    data.loader.batch_size=128 \\
+    'data.dataset.oxe.datasets=[{name:language_table,train_split:\"train[:10000]\",val_split:\"train[10000:10020]\",pair_offset_steps:10,weight:1.0,approx_num_pairs:1000000}]'
 """
 
 import sys
@@ -25,7 +25,7 @@ import lightning.pytorch as pl
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
 
-from common.data import OXEDataModule
+from common.data_factory import create_datamodule
 from common.unified_logging import resolve_runs_dir, setup_unified_logging
 
 
@@ -57,14 +57,18 @@ def main(cfg: DictConfig) -> None:
     tf_profile = bool(bench_cfg.get("tf_profile", False))
     torch_profile = bool(bench_cfg.get("torch_profile", False))
 
-    data_config = {k: v for k, v in cfg.data.items() if k not in ["name", "task"]}
-    datamodule = OXEDataModule(**data_config)
+    if cfg.data.backend != "oxe_tf":
+        raise ValueError(
+            f"bench_oxe_dataloader expects data.backend='oxe_tf', got {cfg.data.backend!r}"
+        )
+
+    datamodule = create_datamodule(cfg.data)
     datamodule.setup()
 
-    dataset_names = [d.get("name") for d in cfg.data.get("datasets", [])]
+    dataset_names = [d.name for d in cfg.data.dataset.oxe.datasets]
     logger.info("OXE dataloader benchmark")
     logger.info(f"  - datasets: {dataset_names} (n={len(dataset_names)})")
-    logger.info(f"  - batch_size: {cfg.data.batch_size}")
+    logger.info(f"  - batch_size: {cfg.data.loader.batch_size}")
     logger.info(f"  - warmup_steps: {warmup_steps}")
     logger.info(f"  - measured_steps: {steps}")
     logger.info(f"  - compute_sleep_s: {compute_sleep_s}")
@@ -150,7 +154,7 @@ def main(cfg: DictConfig) -> None:
     p50_s = _percentile(batch_times_s, 50.0)
     p90_s = _percentile(batch_times_s, 90.0)
 
-    bs = int(cfg.data.batch_size)
+    bs = int(cfg.data.loader.batch_size)
     samples_per_sec = (float(bs) * float(measured)) / float(sum(batch_times_s)) if batch_times_s else float("nan")
     batches_per_sec = float(measured) / float(sum(batch_times_s)) if batch_times_s else float("nan")
 

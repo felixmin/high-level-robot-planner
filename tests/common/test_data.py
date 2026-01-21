@@ -38,17 +38,52 @@ def sources():
     return [{"type": "youtube", "root": REAL_DATASET_PATH}]
 
 
+def make_laq_datamodule(
+    *,
+    sources,
+    batch_size: int,
+    num_workers: int,
+    subset_max_pairs,
+    return_metadata: bool = False,
+    filters=None,
+    split_mode: str = "ratio",
+    val_ratio: float = 0.1,
+    val_scene_filters=None,
+    subset_strategy: str = "random",
+    subset_seed: int = 42,
+):
+    return LAQDataModule(
+        sources=sources,
+        image_size=256,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=True,
+        prefetch_factor=None,
+        min_frames=2,
+        pair_offsets_frames=[30],
+        filters=filters,
+        return_metadata=return_metadata,
+        split_mode=split_mode,
+        split_seed=42,
+        val_ratio=val_ratio,
+        val_scene_filters=val_scene_filters,
+        val_counts_per_dataset=None,
+        subset_max_pairs=subset_max_pairs,
+        subset_strategy=subset_strategy,
+        subset_seed=subset_seed,
+    )
+
+
 class TestLAQDataModule:
     """Test LAQDataModule Lightning wrapper."""
 
     def test_datamodule_initialization(self, sources):
         """Test DataModule initializes correctly."""
-        dm = LAQDataModule(
+        dm = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=4,
             num_workers=0,
-            max_pairs=None,
+            subset_max_pairs=None,
         )
 
         dm.setup()
@@ -62,12 +97,11 @@ class TestLAQDataModule:
 
     def test_datamodule_subset_10_samples(self, sources):
         """Test DataModule with 10 samples."""
-        dm = LAQDataModule(
+        dm = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=4,
             num_workers=0,
-            max_pairs=10,
+            subset_max_pairs=10,
         )
 
         dm.setup()
@@ -85,12 +119,11 @@ class TestLAQDataModule:
 
     def test_datamodule_train_val_dataloaders(self, sources):
         """Test train and val dataloaders."""
-        dm = LAQDataModule(
+        dm = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=4,
             num_workers=0,
-            max_pairs=20,
+            subset_max_pairs=20,
         )
 
         dm.setup()
@@ -119,12 +152,11 @@ class TestLAQDataModule:
         except PermissionError:
             pytest.skip("Multiprocessing semaphores are not permitted in this environment")
 
-        dm = LAQDataModule(
+        dm = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=4,
             num_workers=2,
-            max_pairs=20,
+            subset_max_pairs=20,
         )
 
         dm.setup()
@@ -163,13 +195,12 @@ class TestDataIntegrationWithModel:
             code_seq_len=4,
         ).to(device)
 
-        dm = LAQDataModule(
+        dm = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=2,
             num_workers=0,
-            max_pairs=5,
-            val_split=0.0,
+            subset_max_pairs=5,
+            val_ratio=0.0,
         )
         dm.setup()
 
@@ -415,10 +446,11 @@ class TestLAQDataModuleWithMetadata:
 
     def test_datamodule_with_filters(self, sources):
         """Test DataModule with scene filters."""
-        dm = LAQDataModule(
+        dm = make_laq_datamodule(
             sources=sources,
             batch_size=4,
             num_workers=0,
+            subset_max_pairs=None,
             filters={"stabilized_label": ("!=", "static")},
         )
 
@@ -428,13 +460,13 @@ class TestLAQDataModuleWithMetadata:
 
     def test_datamodule_with_metadata_returns_dict(self, sources):
         """Test DataModule returns metadata dicts with standardized keys."""
-        dm = LAQDataModule(
+        dm = make_laq_datamodule(
             sources=sources,
             batch_size=2,
             num_workers=0,
+            subset_max_pairs=5,
             return_metadata=True,
-            max_pairs=5,
-            val_split=0.0,
+            val_ratio=0.0,
         )
 
         dm.setup()
@@ -460,14 +492,12 @@ class TestLAQDataModulePairLevel:
 
     def test_pair_level_mode(self, sources):
         """Test LAQDataModule works correctly."""
-        datamodule = LAQDataModule(
+        datamodule = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=2,
             num_workers=0,
-            offsets=[30],
-            max_pairs=10,
-            val_split=0.2,
+            subset_max_pairs=10,
+            val_ratio=0.2,
         )
 
         datamodule.setup()
@@ -483,14 +513,12 @@ class TestLAQDataModulePairLevel:
 
     def test_single_pair_overfitting(self, sources):
         """Test LAQDataModule configured for single-pair overfitting."""
-        datamodule = LAQDataModule(
+        datamodule = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=1,
             num_workers=0,
-            offsets=[30],
-            max_pairs=1,
-            val_split=0.0,
+            subset_max_pairs=1,
+            val_ratio=0.0,
         )
 
         datamodule.setup()
@@ -516,27 +544,25 @@ class TestSamplingStrategies:
 
     def test_random_sampling_is_reproducible(self, sources):
         """Test that same seed produces same random subset indices."""
-        dm1 = LAQDataModule(
+        dm1 = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=4,
             num_workers=0,
-            max_pairs=10,
-            val_split=0.0,
-            sampling_strategy="random",
-            sampling_seed=42,
+            subset_max_pairs=10,
+            val_ratio=0.0,
+            subset_strategy="random",
+            subset_seed=42,
         )
         dm1.setup()
 
-        dm2 = LAQDataModule(
+        dm2 = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=4,
             num_workers=0,
-            max_pairs=10,
-            val_split=0.0,
-            sampling_strategy="random",
-            sampling_seed=42,
+            subset_max_pairs=10,
+            val_ratio=0.0,
+            subset_strategy="random",
+            subset_seed=42,
         )
         dm2.setup()
 
@@ -550,27 +576,25 @@ class TestSamplingStrategies:
 
     def test_different_seeds_produce_different_samples(self, sources):
         """Test that different seeds produce different random indices."""
-        dm1 = LAQDataModule(
+        dm1 = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=4,
             num_workers=0,
-            max_pairs=10,
-            val_split=0.0,
-            sampling_strategy="random",
-            sampling_seed=42,
+            subset_max_pairs=10,
+            val_ratio=0.0,
+            subset_strategy="random",
+            subset_seed=42,
         )
         dm1.setup()
 
-        dm2 = LAQDataModule(
+        dm2 = make_laq_datamodule(
             sources=sources,
-            image_size=256,
             batch_size=4,
             num_workers=0,
-            max_pairs=10,
-            val_split=0.0,
-            sampling_strategy="random",
-            sampling_seed=123,
+            subset_max_pairs=10,
+            val_ratio=0.0,
+            subset_strategy="random",
+            subset_seed=123,
         )
         dm2.setup()
 

@@ -127,7 +127,7 @@ python scripts/2_train_laq.py experiment=laq_debug \
     training.profiler.enabled=true \
     training.profiler.type=pytorch \
     training.epochs=1 \
-    data.batch_size=4  # Reduce to test
+    data.loader.batch_size=4  # Reduce to test
 ```
 
 **Look for in trace:**
@@ -147,11 +147,11 @@ python scripts/2_train_laq.py experiment=laq_debug \
 # Enable SimpleProfiler and vary workers
 python scripts/2_train_laq.py experiment=laq_debug \
     training.profiler.enabled=true \
-    data.num_workers=0  # CPU-bound
+    data.loader.num_workers=0  # CPU-bound
 
 python scripts/2_train_laq.py experiment=laq_debug \
     training.profiler.enabled=true \
-    data.num_workers=4  # Should be faster
+    data.loader.num_workers=4  # Should be faster
 ```
 
 ---

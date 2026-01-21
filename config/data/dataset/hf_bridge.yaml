@@ -1,0 +1,13 @@
+# @package data.dataset
+
+# HuggingFace streaming OXE dataset list (splits are HF split strings).
+
+hf_oxe:
+  datasets:
+    - name: bridge
+      train_split: "train"
+      val_split: "train"
+      pair_offset_steps: 5
+      weight: 1.0
+      approx_num_pairs: null
+

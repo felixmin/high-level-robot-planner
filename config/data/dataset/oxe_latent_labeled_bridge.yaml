@@ -1,0 +1,13 @@
+# @package data.dataset
+
+# Stage 2 currently reuses the OXE stream as a placeholder for latent-labeled data.
+
+oxe:
+  datasets:
+    - name: bridge
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 1.0
+      approx_num_pairs: 1031130
+

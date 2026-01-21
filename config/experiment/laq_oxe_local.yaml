@@ -19,53 +19,53 @@ experiment:
 
 model:
   flow:
+    enabled: true
     model: raft_large    # "raft_small" or "raft_large"
     loss_weight: 0.1     # Weight for flow loss in total loss
     decoder_depth: 8     # Transformer depth for flow decoder
     warmup_steps: 10000
 
 data:
-  batch_size: 32
-  num_workers: 0
+  loader:
+    batch_size: 32
+    num_workers: 0
 
-  # tf.data settings (tune in experiments)
-  episode_queue_shuffle_buffer: 0
-  intra_episode_sample_shuffle_buffer: 0
-  global_stream_shuffle_buffer: 0
-  val_episode_queue_shuffle_buffer: 0
-  val_intra_episode_sample_shuffle_buffer: 0
-  val_global_stream_shuffle_buffer: 0
-  episode_queue_prefetch_buffer: 0
-  final_stream_prefetch_buffer: 0
-  num_parallel_episodes: 1
-  num_parallel_calls: 1
-  # Multi-dataset only: sample blocks per-dataset in tf.data to reduce
-  # `sample_from_datasets()` coordination overhead (1 = per-sample mixing).
-  multi_dataset_mix_block_length: 1
-  # Multi-dataset only: how to allocate `num_parallel_*` across datasets.
-  # - divide: treat `num_parallel_*` as total budget and split across datasets (default)
-  # - sqrt: split by sqrt(n_datasets) (middle ground)
-  # - full: pass full `num_parallel_*` to each dataset (can oversubscribe)
-  multi_dataset_parallelism_mode: divide
-  # Multi-dataset only: optional small per-dataset prefetch to reduce
-  # `sample_from_datasets()` switching stalls (0 disables).
-  per_dataset_stream_prefetch_buffer: 0
-  # Multi-dataset only: mixing implementation.
-  # - sample: tf.data `sample_from_datasets()` (default)
-  # - choose: `choose_from_datasets()` with a shuffled selector (approx weighted)
-  multi_dataset_mixing_strategy: sample
-  # Multi-dataset only: private thread pool size for each dataset pipeline.
-  # 0 = use shared global threadpool (recommended for batch_size>=256)
-  # >0 = each pipeline gets its own threadpool (helps for batch_size<=128)
-  # - batch_size=128: private_threadpool=64 gives +20% throughput
-  # - batch_size=256: shared threadpool (0) is faster
-  per_dataset_private_threadpool_size: 64
+  adapter:
+    tf:
+      train:
+        episode_queue_shuffle_buffer: 0
+        intra_episode_sample_shuffle_buffer: 0
+        global_stream_shuffle_buffer: 0
+      val:
+        episode_queue_shuffle_buffer: 0
+        intra_episode_sample_shuffle_buffer: 0
+        global_stream_shuffle_buffer: 0
+      tfds_read:
+        cycle_length: 1
+        decode_parallelism: 1
+        interleave_parallelism: 1
+      pipeline:
+        episode_concurrency: 1
+        transform_parallelism: 1
+        interleave_parallelism: 1
+      mixing:
+        mix_block_length: 1
+        parallelism_mode: divide
+        strategy: sample
+        per_dataset_private_threadpool_size: 64
+      prefetch:
+        episode_queue_buffer: 0
+        per_dataset_stream_buffer: 0
+        final_stream_buffer: 0
 
-  # Reduce output/overhead
-  return_metadata: true
-  persistent_iterator: true
-  samples_per_episode: 0
-  sampling_seed: 42
+      iterator:
+        persistent: true
+      sampling:
+        samples_per_episode: 0
+        seed: 42
+
+  preprocess:
+    return_metadata: true
 
 training:
   enable_progress_bar: true
@@ -121,6 +121,7 @@ training:
         enabled: false
       all_sequences_histogram:
         enabled: false
+    buckets: null
 
 logging:
   level: INFO

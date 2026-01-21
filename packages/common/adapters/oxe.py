@@ -255,55 +255,70 @@ class OXEFramePairDataset(IterableDataset):
         episode_queue_shuffle_buffer: Shuffle buffer for incoming episodes (0 to disable)
         intra_episode_sample_shuffle_buffer: Shuffle buffer for per-episode samples (0 to disable)
         final_stream_prefetch_buffer: tf.data prefetch buffer size (after pair stream is formed)
-        num_parallel_calls: Parallelism for tf.data operations (default: AUTOTUNE)
+        pipeline_transform_parallelism: Parallelism for map operations (default: AUTOTUNE)
         return_metadata: If True, return dict with metadata
     """
 
     def __init__(
         self,
         dataset_name: str,
-        gcs_path: Optional[str],
         split: str,
         offset: int,
         final_stream_prefetch_buffer: int,
         episode_queue_shuffle_buffer: int,
         intra_episode_sample_shuffle_buffer: int,
         image_size: int,
-        num_parallel_calls: int,  # -1 = AUTOTUNE
         return_metadata: bool,
         persistent_iterator: bool,  # Keep iterator alive to avoid shuffle buffer refill
         samples_per_episode: int,
         seed: Optional[int],
+        debug_use_synthetic_data: bool,
+        debug_synthetic_num_samples: int,
         precomputed_size: Optional[int],  # Avoid TF init in __len__
         episode_queue_prefetch_buffer: int,  # Phase 3: overlap episode fetch/decode
-        num_parallel_episodes: int,  # Phase 4: parallel episode processing via interleave
-        private_threadpool_size: int = 0,  # 0 = use shared global threadpool
+        tfds_read_cycle_length: int,
+        tfds_read_block_length: int,
+        tfds_read_decode_parallelism: int,
+        tfds_read_interleave_parallelism: int,
+        pipeline_episode_concurrency: int,  # Phase 4: parallel episode processing via interleave
+        pipeline_transform_parallelism: int,
+        pipeline_interleave_parallelism: int,
+        private_threadpool_size: int,  # 0 = use shared global threadpool
     ):
         super().__init__()
 
         if dataset_name not in OXE_DATASETS:
             raise ValueError(
                 f"Unknown dataset: {dataset_name}. "
-                f"Available: {list(OXE_DATASETS.keys())} or provide gcs_path"
+                f"Available: {list(OXE_DATASETS.keys())}"
             )
 
         self.config = OXE_DATASETS.get(dataset_name)
-        self._gcs_path_override = gcs_path
 
         self.split = split
         self.offset = offset
         self.image_size = image_size
         self.final_stream_prefetch_buffer = final_stream_prefetch_buffer
-        self.num_parallel_calls = num_parallel_calls
+        
+        self.tfds_read_cycle_length = tfds_read_cycle_length
+        self.tfds_read_block_length = tfds_read_block_length
+        self.tfds_read_decode_parallelism = tfds_read_decode_parallelism
+        self.tfds_read_interleave_parallelism = tfds_read_interleave_parallelism
+        
+        self.pipeline_episode_concurrency = pipeline_episode_concurrency
+        self.pipeline_transform_parallelism = pipeline_transform_parallelism
+        self.pipeline_interleave_parallelism = pipeline_interleave_parallelism
+        
         self.return_metadata = return_metadata
         self.persistent_iterator = persistent_iterator
         self.samples_per_episode = samples_per_episode
         self.seed = seed
         self._rng = random.Random(seed)
         self._tf_seed: Optional[int] = None
+        self.debug_use_synthetic_data = bool(debug_use_synthetic_data)
+        self.debug_synthetic_num_samples = int(debug_synthetic_num_samples)
         self._precomputed_size = precomputed_size
         self.episode_queue_prefetch_buffer = episode_queue_prefetch_buffer
-        self.num_parallel_episodes = num_parallel_episodes
         self.private_threadpool_size = private_threadpool_size
 
         self.episode_queue_shuffle_buffer = int(episode_queue_shuffle_buffer)
@@ -353,6 +368,8 @@ class OXEFramePairDataset(IterableDataset):
 
     def _init_tfds(self):
         """Initialize TFDS builder and dataset (lazy)."""
+        if self.debug_use_synthetic_data:
+            return
         if self._builder is not None:
             return
 
@@ -363,7 +380,7 @@ class OXEFramePairDataset(IterableDataset):
         # Disable GPU for tf.data (we only use CPU for data loading)
         tf.config.set_visible_devices([], "GPU")
 
-        gcs_path = self._gcs_path_override or self.config.gcs_path
+        gcs_path = self.config.gcs_path
         self._builder = tfds.builder_from_directory(gcs_path)
         self._num_episodes = self._builder.info.splits[
             self.split.split("[")[0]
@@ -396,26 +413,81 @@ class OXEFramePairDataset(IterableDataset):
 
         self._init_rng_for_worker()
 
+        if self.debug_use_synthetic_data:
+            dataset_name = tf.constant(self.config.name, dtype=tf.string)
+            offset = tf.constant(int(self.offset), dtype=tf.int32)
+            action_dim = int(self.config.action_dim)
+            state_dim = int(self.config.state_dim)
+            h = int(self.image_size)
+            w = int(self.image_size)
+
+            robot_val = tf.constant(
+                "widowx" if self.config.name == "robonet" else "", dtype=tf.string
+            )
+
+            def _make(idx: tf.Tensor):
+                pair = tf.zeros((2, h, w, 3), dtype=tf.uint8)
+                if not self.return_metadata:
+                    return pair
+
+                episode_id = tf.strings.join(
+                    [dataset_name, tf.constant(":"), tf.strings.as_string(idx)]
+                )
+                meta = {
+                    "dataset_name": dataset_name,
+                    "episode_id": episode_id,
+                    "frame_idx": tf.cast(idx, tf.int32),
+                    "offset": offset,
+                    "language": tf.constant("dummy instruction", dtype=tf.string),
+                    "action": tf.zeros((action_dim,), dtype=tf.float32),
+                    "initial_state": tf.zeros((state_dim,), dtype=tf.float32),
+                    "robot": robot_val,
+                }
+                return pair, meta
+
+            return tf.data.Dataset.range(int(self.debug_synthetic_num_samples)).map(
+                _make, num_parallel_calls=tf.data.AUTOTUNE
+            )
+
         self._init_tfds()
 
         import tensorflow_datasets as tfds
 
-        num_parallel_episodes = int(self.num_parallel_episodes)
-        num_parallel_calls = int(self.num_parallel_calls)
-        if num_parallel_calls == -1:
-            num_parallel_calls_tf = tf.data.AUTOTUNE
-        elif num_parallel_calls <= 0:
-            raise ValueError(
-                "OXEFramePairDataset.num_parallel_calls must be -1 (AUTOTUNE) or a positive integer."
-            )
-        else:
-            num_parallel_calls_tf = num_parallel_calls
+        tfds_read_cycle_length = int(self.tfds_read_cycle_length)
+        tfds_read_block_length = int(self.tfds_read_block_length)
+        
+        tfds_read_decode_parallelism = int(self.tfds_read_decode_parallelism)
+        if tfds_read_decode_parallelism == -1:
+            tfds_read_decode_parallelism = tf.data.AUTOTUNE
+            
+        tfds_read_interleave_parallelism = int(self.tfds_read_interleave_parallelism)
+        if tfds_read_interleave_parallelism == -1:
+            tfds_read_interleave_parallelism = tf.data.AUTOTUNE
+
+        pipeline_transform_parallelism = int(self.pipeline_transform_parallelism)
+        if pipeline_transform_parallelism == -1:
+            pipeline_transform_parallelism = tf.data.AUTOTUNE
+
+        pipeline_interleave_parallelism = int(self.pipeline_interleave_parallelism)
+        if pipeline_interleave_parallelism == -1:
+            pipeline_interleave_parallelism = tf.data.AUTOTUNE
+            
+        pipeline_episode_concurrency = int(self.pipeline_episode_concurrency)
 
         read_config = tfds.ReadConfig(
-            try_autocache=False,
-            interleave_cycle_length=max(1, num_parallel_episodes),
-            num_parallel_calls_for_interleave_files=num_parallel_calls_tf,
-            num_parallel_calls_for_decode=num_parallel_calls_tf,
+            try_autocache=False,                                    # our dataset is too big for that
+            add_tfds_id=True,                                       # adds a unique id to each episode like tfrecord...
+            shuffle_seed=self.seed,
+            interleave_cycle_length=tfds_read_cycle_length,
+            interleave_block_length=tfds_read_block_length,
+            # input_context=
+            # experimental_interleave_sort_fn=                      # this can be used to overwrite shuffle_files=True
+            skip_prefetch=True, # done at the end of our pipeline
+            num_parallel_calls_for_decode=tfds_read_decode_parallelism,
+            num_parallel_calls_for_interleave_files=tfds_read_interleave_parallelism,
+            # enable_ordering_guard=                                # True by default, throws exception if ordered ds is shuffled
+            assert_cardinality=False,   # this ensures that the read length matches the metadata
+                                        # len but if some files may be missing turn this to False
         )
         ds = self._builder.as_dataset(split=self.split, read_config=read_config)
 
@@ -448,7 +520,6 @@ class OXEFramePairDataset(IterableDataset):
         instruction_in_step = bool(self.config.instruction_in_step)
         robot_key = self.config.robot_key
         samples_per_episode = int(self.samples_per_episode) if self.samples_per_episode else 0
-        num_parallel_calls = num_parallel_calls_tf
 
         offset_tf = tf.constant(offset, dtype=tf.int32)
         dataset_name_tf = tf.constant(dataset_name, dtype=tf.string)
@@ -522,7 +593,7 @@ class OXEFramePairDataset(IterableDataset):
             if not return_metadata:
                 frames_ds = steps_ds.map(
                     lambda s: s["observation"][image_key],
-                    num_parallel_calls=num_parallel_calls,
+                    num_parallel_calls=pipeline_transform_parallelism,
                 )
 
                 # Fast path: if we only take a single sample per episode and do not
@@ -547,7 +618,7 @@ class OXEFramePairDataset(IterableDataset):
                     return frames_prefix.map(_make_one_pair, num_parallel_calls=1)
 
                 frames_ds = frames_ds.batch(8).map(
-                    _resize_frames_batch, num_parallel_calls=num_parallel_calls
+                    _resize_frames_batch, num_parallel_calls=pipeline_transform_parallelism
                 ).unbatch()
 
                 dummy_pair = tf.zeros([2, image_size, image_size, 3], dtype=tf.uint8)
@@ -628,13 +699,13 @@ class OXEFramePairDataset(IterableDataset):
                 language = _extract_language(step)
                 return frame, action, state, language
 
-            features_ds = steps_ds.map(_step_to_features, num_parallel_calls=num_parallel_calls)
+            features_ds = steps_ds.map(_step_to_features, num_parallel_calls=pipeline_transform_parallelism)
 
             def _resize_features_batch(frames, actions, states, languages):
                 return _resize_frames_batch(frames), actions, states, languages
 
             features_ds = features_ds.batch(8).map(
-                _resize_features_batch, num_parallel_calls=num_parallel_calls
+                _resize_features_batch, num_parallel_calls=pipeline_transform_parallelism
             ).unbatch()
 
             dummy_pair = tf.zeros([2, image_size, image_size, 3], dtype=tf.uint8)
@@ -726,7 +797,7 @@ class OXEFramePairDataset(IterableDataset):
                 }
                 return pair, meta
 
-            out_ds = scanned_ds.map(_to_pair_and_meta, num_parallel_calls=num_parallel_calls)
+            out_ds = scanned_ds.map(_to_pair_and_meta, num_parallel_calls=pipeline_transform_parallelism)
             if samples_per_episode > 0:
                 if per_episode_sample_shuffle > 0:
                     out_ds = out_ds.shuffle(per_episode_sample_shuffle, seed=self._tf_seed)
@@ -735,9 +806,9 @@ class OXEFramePairDataset(IterableDataset):
 
         tf_ds = ds.interleave(
             process_episode_to_pairs,
-            cycle_length=max(1, num_parallel_episodes),
+            cycle_length=max(1, pipeline_episode_concurrency),
             block_length=1,
-            num_parallel_calls=num_parallel_calls,
+            num_parallel_calls=pipeline_interleave_parallelism,
             deterministic=False,
         )
 
@@ -904,9 +975,9 @@ class MultiOXEFramePairDataset(IterableDataset):
             - name: Dataset name (e.g., "bridge", "language_table")
             - train_split: TFDS split string for training
             - val_split: TFDS split string for validation
-            - weight: Sampling weight (default proportionate)
-            - offset: Frame offset for pairs
-            - size: Precomputed dataset size
+            - pair_offset_steps: Frame offset (in steps) for pairs
+            - approx_num_pairs: Estimated pair count (used for weighting + __len__)
+            - weight: Optional sampling weight (numeric or "proportionate")
         image_size: Target image size (shared)
         final_stream_prefetch_buffer: tf.data prefetch buffer size (after mixing)
         episode_queue_shuffle_buffer: Shuffle buffer for incoming episodes (0 to disable)
@@ -931,13 +1002,20 @@ class MultiOXEFramePairDataset(IterableDataset):
         persistent_iterator: bool,  # Keep iterators alive to avoid shuffle buffer refill
         samples_per_episode: int,
         seed: Optional[int],
-        num_parallel_episodes: int,
-        num_parallel_calls: int,
+        debug_use_synthetic_data: bool,
+        debug_synthetic_num_samples: int,
+        pipeline_episode_concurrency_total: int,
+        pipeline_transform_parallelism: int,
+        pipeline_interleave_parallelism: int,
         mix_block_length: int,
         parallelism_mode: str,
         per_dataset_stream_prefetch_buffer: int,
         mixing_strategy: str,
         per_dataset_private_threadpool_size: int,  # 0 = use shared global threadpool
+        tfds_read_cycle_length: int,
+        tfds_read_block_length: int,
+        tfds_read_decode_parallelism: int,
+        tfds_read_interleave_parallelism: int,
     ):
         super().__init__()
 
@@ -952,8 +1030,13 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.persistent_iterator = persistent_iterator
         self.samples_per_episode = samples_per_episode
         self.seed = seed
-        self.num_parallel_episodes = num_parallel_episodes
-        self.num_parallel_calls = num_parallel_calls
+        self.debug_use_synthetic_data = bool(debug_use_synthetic_data)
+        self.debug_synthetic_num_samples = int(debug_synthetic_num_samples)
+        
+        self.pipeline_episode_concurrency_total = pipeline_episode_concurrency_total
+        self.pipeline_transform_parallelism = pipeline_transform_parallelism
+        self.pipeline_interleave_parallelism = pipeline_interleave_parallelism
+        
         self.episode_queue_prefetch_buffer = episode_queue_prefetch_buffer
         self.episode_queue_shuffle_buffer = int(episode_queue_shuffle_buffer)
         self.intra_episode_sample_shuffle_buffer = int(intra_episode_sample_shuffle_buffer)
@@ -970,6 +1053,11 @@ class MultiOXEFramePairDataset(IterableDataset):
         if self.mixing_strategy not in {"sample", "choose", "python"}:
             raise ValueError("mixing_strategy must be one of: 'sample', 'choose', 'python'")
         self.per_dataset_private_threadpool_size = int(per_dataset_private_threadpool_size)
+        
+        self.tfds_read_cycle_length = tfds_read_cycle_length
+        self.tfds_read_block_length = tfds_read_block_length
+        self.tfds_read_decode_parallelism = tfds_read_decode_parallelism
+        self.tfds_read_interleave_parallelism = tfds_read_interleave_parallelism
 
         # Will be populated lazily
         self._datasets = None
@@ -985,7 +1073,7 @@ class MultiOXEFramePairDataset(IterableDataset):
         # Compute weights first (from config-provided sizes) so we can drop datasets
         # with zero weight early. This makes weight=0 act as a true disable switch
         # and avoids unnecessary TFDS pipelines.
-        sizes = [int(cfg["size"]) for cfg in self.dataset_configs]
+        sizes = [int(cfg["approx_num_pairs"]) for cfg in self.dataset_configs]
         weights_all = self._compute_weights(self.dataset_configs, sizes)
 
         kept: list[tuple[dict, float]] = []
@@ -1028,15 +1116,18 @@ class MultiOXEFramePairDataset(IterableDataset):
         else:
             divisor = float(n_datasets)
 
-        num_parallel_episodes_per_ds = max(
-            1, int(float(self.num_parallel_episodes) / divisor)
+        tfds_read_cycle_length = max(
+            1, int(float(self.tfds_read_cycle_length) / divisor)
         )
-        if int(self.num_parallel_calls) == -1:
-            num_parallel_calls_per_ds = -1
-        else:
-            num_parallel_calls_per_ds = max(
-                1, int(float(self.num_parallel_calls) / divisor)
-            )
+        pipeline_episode_concurrency = max(
+            1, int(float(self.pipeline_episode_concurrency_total) / divisor)
+        )
+        pipeline_transform_parallelism = max(
+            1, int(float(self.pipeline_transform_parallelism) / divisor)
+        )
+        pipeline_interleave_parallelism = max(
+            1, int(float(self.pipeline_interleave_parallelism) / divisor)
+        )
 
         # Prefetch at the mixed pipeline level (one place). Avoid per-dataset
         # prefetch buffers which multiply memory usage. For multi-dataset mixing,
@@ -1049,26 +1140,32 @@ class MultiOXEFramePairDataset(IterableDataset):
             # Get split based on train/val mode
             split = cfg["train_split"] if self.is_train else cfg["val_split"]
 
-            precomputed_size = int(cfg["size"])
+            precomputed_size = int(cfg["approx_num_pairs"])
 
             ds = OXEFramePairDataset(
                 image_size=self.image_size,
                 dataset_name=cfg["name"],
-                gcs_path=cfg.get("gcs_path"),
                 split=split,
-                offset=cfg["offset"],
+                offset=int(cfg["pair_offset_steps"]),
                 final_stream_prefetch_buffer=prefetch_buffer_per_ds,
                 return_metadata=self.return_metadata,
                 persistent_iterator=self.persistent_iterator,
                 samples_per_episode=self.samples_per_episode,
-                num_parallel_episodes=num_parallel_episodes_per_ds,
-                num_parallel_calls=num_parallel_calls_per_ds,
+                seed=self._get_dataset_seed(cfg),
+                debug_use_synthetic_data=self.debug_use_synthetic_data,
+                debug_synthetic_num_samples=self.debug_synthetic_num_samples,
                 precomputed_size=precomputed_size,
                 episode_queue_prefetch_buffer=episode_prefetch_buffer,
                 episode_queue_shuffle_buffer=episode_buffer_per_ds,
                 intra_episode_sample_shuffle_buffer=self.intra_episode_sample_shuffle_buffer,
-                seed=self._get_dataset_seed(cfg),
                 private_threadpool_size=self.per_dataset_private_threadpool_size,
+                tfds_read_cycle_length=tfds_read_cycle_length,
+                tfds_read_block_length=self.tfds_read_block_length,
+                tfds_read_decode_parallelism=self.tfds_read_decode_parallelism,
+                tfds_read_interleave_parallelism=self.tfds_read_interleave_parallelism,
+                pipeline_episode_concurrency=pipeline_episode_concurrency,
+                pipeline_transform_parallelism=pipeline_transform_parallelism,
+                pipeline_interleave_parallelism=pipeline_interleave_parallelism,
             )
             self._datasets.append(ds)
 

@@ -1,69 +1,13 @@
-# Multi-Dataset LAQ Training Configuration
-# Loads data from multiple sources with per-source filtering
+# @package data
 
-# Multi-source configuration - combines multiple datasets
-sources:
-  - type: youtube
-    root: /mnt/data/datasets/pipeline_output
-    # Optional per-source filters
-    # filters:
-    #   contains_hand_sam3: true
+# Local file-based multi-source preset (YouTube + Bridge).
 
-  - type: bridge
-    root: /mnt/data/datasets/bridgev2/raw
-    # filters:
-    #   environment: toykitchen1  # Only toykitchen1
+defaults:
+  - dataset: local_files_multi
+  - loader: local_files
+  - preprocess: pair_256
+  - split: local_ratio
+  - subset: full
+  - _self_
 
-# Batch size for training
-batch_size: 32
-num_workers: 4
-prefetch_factor: 2
-pin_memory: true
-
-# Frame pair settings
-image_size: 256
-offsets: [30]  # Frame offset(s) for pair generation
-min_frames: 2
-
-# Metadata options
-return_metadata: true  # Required for per-bucket validation visualization
-
-# Global filters applied after per-source filters
-# filters:
-#   dataset_type: ["youtube", "bridge"]  # If you want to limit dataset types
-
-# --- Train/Val Split Settings ---
-# Option 1: Ratio-based split (val distribution matches train distribution)
-split_mode: ratio
-val_split: 0.1
-
-# Option 2: Metadata-based split (hold out specific data)
-# split_mode: metadata
-# val_scene_filters:
-#   video_id: "JNBtHDVoNQc_stabilized"  # Hold out one video
-#   # OR
-#   dataset_type: "bridge"  # Hold out entire dataset type
-#   # OR
-#   environment: "toykitchen7"  # Leave-one-environment-out
-
-# Option 3: Fixed frame pair count per dataset (balanced validation, but changes distribution)
-# split_mode: fixed_count
-# val_counts_per_dataset:
-#   youtube: 1000  # Target ~1000 frame pairs from YouTube
-#   bridge: 1000   # Target ~1000 frame pairs from Bridge
-
-# --- Validation Buckets (for distribution shift analysis) ---
-# Named subsets of validation data for separate evaluation
-# Must match validation.val_buckets in training config for bucket dataloaders to work
-val_buckets:
-  youtube:
-    dataset_type: "youtube"
-  bridge:
-    dataset_type: "bridge"
-  # Example: specific environment
-  # toykitchen_envs:
-  #   environment: ["toykitchen1", "toykitchen2", "toykitchen3"]
-
-# Sampling settings
-sampling_strategy: random
-sampling_seed: 42
+backend: local_files

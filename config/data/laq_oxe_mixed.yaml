@@ -1,54 +1,19 @@
-# OXE Mixed Weighting Example
-# Demonstrates mixed absolute mode: combine explicit weights with proportionate weighting
-#
-# Weight specification options:
-# - Omitted or "proportionate": Share remaining weight by dataset size
-# - Numeric (0.0-1.0): Exact sampling ratio (e.g., 0.3 = 30% of samples)
-#
-# Example below: bridge gets exactly 40%, remaining 60% split by size between others
+# @package data
 
-datasets:
-  - name: bridge
-    train_split: "train[:90%]"
-    val_split: "train[90%:]"
-    offset: 5                    # 1 second at 5Hz
-    weight: 0.4                  # Explicit: exactly 40% of samples
-    size: 1031130                # Precomputed: ~25.5k × 0.9 × 45 pairs (avoids TF init)
+# TF OXE preset demonstrating mixed explicit/proportionate weighting.
 
-  - name: language_table
-    train_split: "train[:90%]"
-    val_split: "train[90%:]"
-    offset: 10                   # 1 second at 10Hz
-    # weight omitted = proportionate (share of remaining 60%)
-    size: 11934000               # Precomputed: ~442k × 0.9 × 30 pairs
+defaults:
+  - dataset: oxe_mixed_example
+  - adapter: oxe_tf_default
+  - loader: oxe_streaming
+  - preprocess: pair_256
+  - _self_
 
-  - name: rt1
-    train_split: "train[:90%]"
-    val_split: "train[90%:]"
-    offset: 3                    # 1 second at 3Hz
-    weight: proportionate        # Explicit proportionate (same as omitting)
-    size: 2113650                # Precomputed: ~87k × 0.9 × 27 pairs
+backend: oxe_tf
 
-# Shared settings
-image_size: 256
-batch_size: 32
-num_workers: 0                   # tf.data handles parallelism
-episode_queue_shuffle_buffer: 500           # Shuffle buffer for episode queue
-intra_episode_sample_shuffle_buffer: 0      # Shuffle within an episode (only when sampling pairs)
-global_stream_shuffle_buffer: 1000          # Final global blender
-final_stream_prefetch_buffer: 16 # Increased for better I/O overlap
-persistent_iterator: true        # Keep iterator alive to avoid shuffle buffer refill
-samples_per_episode: 1           # LAPA-style: sample N pairs per episode (0 = all pairs)
-return_metadata: true            # Required for validation strategies
-sampling_seed: 42
-episode_queue_prefetch_buffer: 0
-num_parallel_episodes: 1
-num_parallel_calls: 1
-multi_dataset_mix_block_length: 1
-multi_dataset_parallelism_mode: divide
-per_dataset_stream_prefetch_buffer: 0
-multi_dataset_mixing_strategy: sample
-per_dataset_private_threadpool_size: 0
-val_episode_queue_shuffle_buffer: 0
-val_intra_episode_sample_shuffle_buffer: 0
-val_global_stream_shuffle_buffer: 0
+adapter:
+  tf:
+    prefetch:
+      final_stream_buffer: 16
+    sampling:
+      samples_per_episode: 1

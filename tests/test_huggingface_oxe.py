@@ -26,6 +26,7 @@ class TestHFOXEFramePairDataset:
             offset=5,
             image_size=256,
             shuffle_buffer=10,
+            return_metadata=True,
             samples_per_episode=2,  # Limit for faster tests
         )
 
@@ -75,6 +76,7 @@ class TestHFCollate:
             offset=5,
             image_size=256,
             shuffle_buffer=10,
+            return_metadata=True,
             samples_per_episode=2,
         )
 
@@ -97,13 +99,18 @@ class TestHFOXEDataModule:
 
         dm = HFOXEDataModule(
             datasets=[
-                {"name": "bridge", "split": "train", "offset": 5, "weight": 1.0}
+                {
+                    "name": "bridge",
+                    "train_split": "train",
+                    "val_split": "train",
+                    "pair_offset_steps": 5,
+                    "weight": 1.0,
+                    "approx_num_pairs": None,
+                }
             ],
-            image_size=256,
-            batch_size=4,
-            num_workers=0,
-            shuffle_buffer=10,
-            samples_per_episode=2,
+            preprocess={"image_size": 256, "return_metadata": True},
+            loader={"batch_size": 4, "num_workers": 0, "pin_memory": True},
+            adapter={"hf": {"train_shuffle_buffer": 10, "val_shuffle_buffer": 0, "samples_per_episode": 2}},
         )
         dm.setup()
 
@@ -116,13 +123,18 @@ class TestHFOXEDataModule:
 
         dm = HFOXEDataModule(
             datasets=[
-                {"name": "bridge", "split": "train", "offset": 5, "weight": 1.0}
+                {
+                    "name": "bridge",
+                    "train_split": "train",
+                    "val_split": "train",
+                    "pair_offset_steps": 5,
+                    "weight": 1.0,
+                    "approx_num_pairs": None,
+                }
             ],
-            image_size=256,
-            batch_size=4,
-            num_workers=0,
-            shuffle_buffer=10,
-            samples_per_episode=2,
+            preprocess={"image_size": 256, "return_metadata": True},
+            loader={"batch_size": 4, "num_workers": 0, "pin_memory": True},
+            adapter={"hf": {"train_shuffle_buffer": 10, "val_shuffle_buffer": 0, "samples_per_episode": 2}},
         )
         dm.setup()
 
@@ -154,6 +166,7 @@ class TestDatasetConfigs:
             offset=5,
             image_size=256,
             shuffle_buffer=10,
+            return_metadata=True,
             samples_per_episode=1,
         )
 

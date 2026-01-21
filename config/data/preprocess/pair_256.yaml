@@ -1,0 +1,10 @@
+# @package data.preprocess
+
+# Shared preprocessing for frame-pair models (LAQ / VLA token training).
+# NOTE: Model must be configured to expect the same `image_size`.
+
+image_size: 256
+
+# If true, dataloaders return standardized metadata keys used by validation strategies.
+return_metadata: true
+

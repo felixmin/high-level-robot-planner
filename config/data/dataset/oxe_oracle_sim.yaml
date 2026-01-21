@@ -1,0 +1,11 @@
+# @package data.dataset
+
+oxe:
+  datasets:
+    - name: language_table_blocktorelative_oracle_sim
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 10
+      weight: 1.0
+      approx_num_pairs: 4860000
+

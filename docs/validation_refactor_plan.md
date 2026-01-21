@@ -23,16 +23,18 @@ Example with `val_counts_per_dataset: {'youtube': 1000, 'bridge': 1000}`:
 Mixed Val Loader → limit_val_batches → Cache (stratified but still imbalanced)
 ```
 
-**Solution:** Use per-bucket dataloaders for visualization:
+**Solution:** Use validation buckets for routing/caching:
 ```yaml
 # Config
-val_buckets:
-  youtube: {dataset_type: "youtube"}
-  bridge: {dataset_type: "bridge"}
+training:
+  validation:
+    buckets:
+      youtube: {filters: {dataset_name: "youtube"}}
+      bridge: {filters: {dataset_name: "bridge"}}
 ```
 ```
 Main Val Loader → loss computation (full or limited)
-Bucket Loaders → targeted visualization (guaranteed samples from each bucket)
+Bucket Caches → targeted visualization (guaranteed samples from each bucket)
 ```
 
 ### 3. LatentTransferStrategy API Mismatch (CRITICAL)

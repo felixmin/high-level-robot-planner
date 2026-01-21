@@ -10,7 +10,10 @@ defaults:
 
 data:
   # Shuffle validation episodes a bit so debug visualizations aren't dominated by a single episode.
-  val_episode_queue_shuffle_buffer: 200
+  adapter:
+    tf:
+      val:
+        episode_queue_shuffle_buffer: 200
 
 experiment:
   name: vla_cosmos2_tokens_debug

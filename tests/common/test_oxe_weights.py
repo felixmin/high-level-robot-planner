@@ -322,8 +322,8 @@ class TestWeightingIntegration:
         # Create and initialize (size, train_split, val_split required)
         ds = MultiOXEFramePairDataset(
             datasets=[
-                {"name": "language_table", "train_split": "train[:90%]", "val_split": "train[90%:]", "offset": 5, "size": 1000},
-                {"name": "bridge", "train_split": "train[:90%]", "val_split": "train[90%:]", "offset": 5, "weight": 0.4, "size": 1000},
+                {"name": "language_table", "train_split": "train[:90%]", "val_split": "train[90%:]", "pair_offset_steps": 5, "approx_num_pairs": 1000},
+                {"name": "bridge", "train_split": "train[:90%]", "val_split": "train[90%:]", "pair_offset_steps": 5, "weight": 0.4, "approx_num_pairs": 1000},
             ],
             final_stream_prefetch_buffer=0,
             episode_queue_prefetch_buffer=0,
@@ -336,13 +336,20 @@ class TestWeightingIntegration:
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
-            num_parallel_episodes=1,
-            num_parallel_calls=1,
+            debug_use_synthetic_data=False,
+            debug_synthetic_num_samples=1000,
+            pipeline_episode_concurrency_total=1,
+            pipeline_transform_parallelism=1,
+            pipeline_interleave_parallelism=1,
             mix_block_length=1,
             parallelism_mode="divide",
             per_dataset_stream_prefetch_buffer=0,
             mixing_strategy="sample",
             per_dataset_private_threadpool_size=0,
+            tfds_read_cycle_length=1,
+            tfds_read_block_length=1,
+            tfds_read_decode_parallelism=-1,
+            tfds_read_interleave_parallelism=-1,
         )
         ds._init_datasets()
 

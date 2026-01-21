@@ -1,20 +1,12 @@
-# HuggingFace-based Bridge dataset configuration
-# Uses jxu124/OpenX-Embodiment on HuggingFace Hub (no TensorFlow required)
+# @package data
 
-# Mark this as HuggingFace backend
-backend: huggingface
+# HuggingFace OXE preset (no TensorFlow required).
 
-datasets:
-  - name: bridge
-    split: "train"                  # HuggingFace split string
-    val_split: "train"              # Same split, different shuffle
-    offset: 5                       # Frame offset for pairs
-    weight: 1.0
+defaults:
+  - dataset: hf_bridge
+  - adapter: oxe_hf_default
+  - loader: oxe_streaming
+  - preprocess: pair_256
+  - _self_
 
-# Shared settings
-image_size: 256
-batch_size: 32
-num_workers: 4                      # PyTorch DataLoader workers
-shuffle_buffer: 100                 # Episode shuffle buffer
-return_metadata: true               # Return action/state for validation
-samples_per_episode: 0              # 0 = all pairs from episode
+backend: oxe_hf

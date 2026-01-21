@@ -19,20 +19,11 @@ class BasicVisualizationStrategy(ValidationStrategy):
     Shows:
     - Fixed samples: diverse samples across datasets, same every validation
     - Random samples: different samples each time (diversity check)
-    - Per-bucket samples: separate grids for each bucket (configurable filters)
+    - Per-bucket samples: separate grids for each configured bucket (via filters)
     - Training samples: reconstructions from training data
 
-    Buckets can be configured via val_buckets parameter:
-    ```yaml
-    val_buckets:
-      youtube:
-        dataset_type: "youtube"
-      bridge_toykitchen:
-        dataset_type: "bridge"
-        environment: "toykitchen1"
-      with_language:
-        language: ["not_null", true]
-    ```
+    Bucket filters are configured in `training.validation.buckets` and are passed
+    to this strategy via `bucket_filters` (bucket_name -> filter dict).
     """
 
     def __init__(
@@ -46,7 +37,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
         visualize_val: bool = True,
         visualize_per_bucket: bool = True,
         samples_per_bucket: int = 4,
-        val_buckets: Optional[Dict[str, Dict[str, Any]]] = None,
+        bucket_filters: Optional[Dict[str, Dict[str, Any]]] = None,
         every_n_validations: int = 1,  # Default: always run
         **kwargs,
     ):
@@ -63,8 +54,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
         self.visualize_val = visualize_val
         self.visualize_per_bucket = visualize_per_bucket
         self.samples_per_bucket = samples_per_bucket
-        # Default buckets: one per dataset_type if not specified
-        self.val_buckets = val_buckets
+        self.bucket_filters = bucket_filters
 
     def needs_caching(self) -> bool:
         return True  # Need frames for visualization
@@ -213,10 +203,10 @@ class BasicVisualizationStrategy(ValidationStrategy):
         datamodule = getattr(trainer, "datamodule", None)
         use_dataloaders = datamodule is not None
 
-        # Use configured buckets or fall back to dataset_type-based buckets
-        if self.val_buckets:
-            # Use config-defined buckets
-            for bucket_name, filters in self.val_buckets.items():
+        if not self.bucket_filters:
+            return
+
+        for bucket_name, filters in self.bucket_filters.items():
                 bucket_frames = None
                 
                 # Try to get data from side dataloader first (Targeted Evaluation)
@@ -239,7 +229,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
                                 bucket_frames = batch
                             # Move to device/cpu as needed (viz expects CPU usually)
                             bucket_frames = bucket_frames[:self.samples_per_bucket].detach().cpu()
-                    except (ValueError, StopIteration):
+                    except (ValueError, StopIteration, NotImplementedError):
                         # Dataloader might not exist for this bucket or be empty
                         pass
 
@@ -263,32 +253,6 @@ class BasicVisualizationStrategy(ValidationStrategy):
                             key=f"{prefix}/reconstructions_{bucket_name}",
                             images=[bucket_grid],
                             caption=[f"Step {trainer.global_step} ({bucket_name})"],
-                        )
-        else:
-            # Fall back to auto-bucketing by dataset_type (Legacy/Default)
-            dataset_types = set()
-            for meta in all_metadata:
-                dname = meta.get("dataset_name")
-                if not dname:
-                    dname = meta.get("dataset_type")
-                if dname:
-                    dataset_types.add(dname)
-
-            for dname in dataset_types:
-                bucket_frames, _ = cache.get_frames_by_filter(
-                    {"dataset_name": dname}, frames=all_frames, metadata=all_metadata
-                )
-                if bucket_frames is not None and len(bucket_frames) > 0:
-                    n_samples = min(self.samples_per_bucket, len(bucket_frames))
-                    indices = torch.randperm(len(bucket_frames))[:n_samples]
-                    samples = bucket_frames[indices]
-
-                    bucket_grid = self._create_recon_grid(samples, pl_module)
-                    if bucket_grid is not None:
-                        wandb_logger.log_image(
-                            key=f"{prefix}/reconstructions_{dname}",
-                            images=[bucket_grid],
-                            caption=[f"Step {trainer.global_step} ({dname})"],
                         )
 
     def _sample_from_train_dataloader(

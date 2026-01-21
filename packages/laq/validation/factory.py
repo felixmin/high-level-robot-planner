@@ -43,14 +43,14 @@ STRATEGY_REGISTRY: Dict[str, Type[ValidationStrategy]] = {
 
 def create_validation_strategies(
     config: Dict[str, Any],
-    val_buckets: Optional[Dict[str, Dict[str, Any]]] = None,
+    bucket_filters: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[ValidationStrategy]:
     """
     Create validation strategies from config.
 
     Args:
         config: validation.strategies config dict
-        val_buckets: Optional dict of bucket definitions for visualization
+        bucket_filters: Optional dict of bucket_name -> filter dict (for visualization grouping)
 
     Returns:
         List of ValidationStrategy instances
@@ -64,7 +64,7 @@ def create_validation_strategies(
         if not instance_config.get("enabled", True):
             continue
 
-        # Get strategy type (defaults to instance_name for backwards compat)
+        # Strategy type defaults to the instance name (common when instance_name == type).
         strategy_type = instance_config.get("type", instance_name)
 
         if strategy_type not in STRATEGY_REGISTRY:
@@ -77,9 +77,9 @@ def create_validation_strategies(
         kwargs = {k: v for k, v in instance_config.items() if k != "type"}
         kwargs["name"] = instance_name  # Use instance name, not type
 
-        # Pass val_buckets to basic visualization
-        if strategy_type in ("basic", "basic_visualization") and val_buckets:
-            kwargs["val_buckets"] = val_buckets
+        # Pass bucket filters to basic visualization grouping.
+        if strategy_type in ("basic", "basic_visualization") and bucket_filters:
+            kwargs["bucket_filters"] = bucket_filters
 
         try:
             strategies.append(strategy_class(**kwargs))

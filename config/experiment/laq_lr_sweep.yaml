@@ -26,12 +26,18 @@ model:
 
 # Data - use smaller subset for sweep
 data:
-  batch_size: 32
-  episode_queue_shuffle_buffer: 1000
-  intra_episode_sample_shuffle_buffer: 0
-  global_stream_shuffle_buffer: 1000
-  final_stream_prefetch_buffer: 4
-  return_metadata: true
+  loader:
+    batch_size: 32
+  preprocess:
+    return_metadata: true
+  adapter:
+    tf:
+      train:
+        episode_queue_shuffle_buffer: 1000
+        intra_episode_sample_shuffle_buffer: 0
+        global_stream_shuffle_buffer: 1000
+      prefetch:
+        final_stream_buffer: 4
 
 # Training
 training:

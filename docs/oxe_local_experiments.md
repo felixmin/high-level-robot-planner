@@ -8,16 +8,16 @@
 - Goal: maximize throughput within ~64 GB RAM while iterating on GPU utilization and tf.data shuffle/prefetch knobs.
 
 ## Key knobs
-- `data.batch_size`: larger batches push more work to GPU but increase per-batch load time.
-- `data.episode_queue_shuffle_buffer` / `data.global_stream_shuffle_buffer`: fill time increases with buffer size (large buffers delay startup), but once filled the pipeline mixes samples better and keeps the dataloader busy. We explored values from 0 up to 5 000.
-- `data.final_stream_prefetch_buffer`: controls tf.data prefetch; 32/64 gave consistent gains, -1 enables AUTOTUNE.
-- `data.num_parallel_episodes` & `data.num_parallel_calls`: higher values add TF-side concurrency; we now split them per dataset to avoid oversubscription.
-- `data.multi_dataset_parallelism_mode`: how to allocate `num_parallel_*` across datasets (`divide`/`sqrt`/`full`).
-- `data.multi_dataset_mix_block_length`: sample blocks per dataset before switching (reduces tf.data mixing overhead at the cost of coarser mixing).
-- `data.per_dataset_stream_prefetch_buffer`: optional small per-dataset prefetch to reduce mixing stalls (in addition to global `data.final_stream_prefetch_buffer`).
-- `data.multi_dataset_mixing_strategy`: use `sample_from_datasets()` vs `choose_from_datasets()` (selector-based).
-- `data.num_workers`: stayed at 0 (tf.data already parallelized). Future work can enable Torch workers once iterable length issues are resolved.
-- `training.max_steps` / `data.samples_per_episode`: longer runs (600 steps) fill shuffle buffers and expose steady-state behaviors; short runs (≤300) focus on short iteration time.
+- `data.loader.batch_size`: larger batches push more work to GPU but increase per-batch load time.
+- `data.adapter.tf.train.episode_queue_shuffle_buffer` / `data.adapter.tf.train.global_stream_shuffle_buffer`: fill time increases with buffer size (large buffers delay startup), but once filled the pipeline mixes samples better and keeps the dataloader busy. We explored values from 0 up to 5 000.
+- `data.adapter.tf.prefetch.final_stream_buffer`: controls tf.data prefetch; 32/64 gave consistent gains, -1 enables AUTOTUNE.
+- `data.adapter.tf.tfds_read.cycle_length` & `data.adapter.tf.pipeline.transform_parallelism`: higher values add TF-side concurrency; we now split them per dataset to avoid oversubscription.
+- `data.adapter.tf.mixing.parallelism_mode`: how to allocate `num_parallel_*` across datasets (`divide`/`sqrt`/`full`).
+- `data.adapter.tf.mixing.mix_block_length`: sample blocks per dataset before switching (reduces tf.data mixing overhead at the cost of coarser mixing).
+- `data.adapter.tf.prefetch.per_dataset_stream_buffer`: optional small per-dataset prefetch to reduce mixing stalls (in addition to global `data.adapter.tf.prefetch.final_stream_buffer`).
+- `data.adapter.tf.mixing.strategy`: use `sample_from_datasets()` vs `choose_from_datasets()` (selector-based).
+- `data.loader.num_workers`: stayed at 0 (tf.data already parallelized). Future work can enable Torch workers once iterable length issues are resolved.
+- `training.max_steps` / `data.adapter.tf.sampling.samples_per_episode`: longer runs (600 steps) fill shuffle buffers and expose steady-state behaviors; short runs (≤300) focus on short iteration time.
 - `training.enable_progress_bar`: disable for profiling; Lightning’s tqdm callback can be a large per-step overhead in logs.
 
 ## Experiment results
@@ -56,8 +56,8 @@ After the data loader refactoring (commits `1d8701e` and `e1169c3`), we noticed 
 
 In `MultiOXEFramePairDataset._init_datasets()` (oxe.py lines 947-959):
 ```python
-num_parallel_episodes_per_ds = max(1, int(self.num_parallel_episodes) // n_datasets)
-num_parallel_calls_per_ds = max(1, int(self.num_parallel_calls) // n_datasets)
+tfds_read_cycle_length_per_ds = max(1, int(self.tfds_read_cycle_length) // n_datasets)
+pipeline_transform_parallelism_per_ds = max(1, int(self.pipeline_transform_parallelism) // n_datasets)
 ```
 
 With 4 datasets and `num_parallel_*=32`, each dataset only gets 8 parallelism, reducing overall throughput.
@@ -69,7 +69,7 @@ With 4 datasets and `num_parallel_*=32`, each dataset only gets 8 parallelism, r
 | baseline_postrefac | `batch_size=24`, `prefetch=64`, `num_parallel_*=32` | 3.1 | 74.4 | 82.5% | Baseline with minimal buffers |
 | batch128 | `batch_size=128` | 1.16 | 148.5 | 74.1% | **2x samples/s** - bigger batches help |
 | high_parallel | `batch_size=128`, `num_parallel_*=128/64`, `prefetch=128`, `episode_prefetch=8` | 1.0 | 128 | - | **Slower** - likely thread contention |
-| autotune | `batch_size=256`, `num_parallel_calls=-1`, `prefetch=-1` (AUTOTUNE) | 0.55 | 140.8 | 76% | AUTOTUNE overhead + larger batch doesn't help |
+| autotune | `batch_size=256`, `pipeline_transform_parallelism=-1`, `prefetch=-1` (AUTOTUNE) | 0.55 | 140.8 | 76% | AUTOTUNE overhead + larger batch doesn't help |
 | workers2 (aborted) | `batch_size=128`, `num_workers=2`, `num_parallel_*=16` | - | - | - | **OOM** - each worker creates separate TF pipeline (~6GB each) |
 
 ### Key Findings
@@ -169,8 +169,8 @@ Training runs include optimizer/backward time (and previously, tqdm logging over
 Example:
 ```
 conda run -n hlrp python scripts/bench_oxe_dataloader.py experiment=laq_oxe_local \
-  benchmark.steps=300 benchmark.warmup_steps=20 benchmark.compute_sleep_s=0.1 data.batch_size=128 \
-  'data.datasets=[{name:language_table,train_split:"train[:10000]",val_split:"train[10000:10020]",offset:10,size:1000000}]'
+  benchmark.steps=300 benchmark.warmup_steps=20 benchmark.compute_sleep_s=0.1 data.loader.batch_size=128 \
+  'data.dataset.oxe.datasets=[{name:language_table,train_split:"train[:10000]",val_split:"train[10000:10020]",pair_offset_steps:10,weight:1.0,approx_num_pairs:1000000}]'
 ```
 
 Optional profiling outputs:
@@ -211,11 +211,11 @@ Sanity check run:
 
 To reduce per-element `sample_from_datasets()` overhead, we now optionally sample **blocks** from the same dataset and then unbatch:
 - Code: `MultiOXEFramePairDataset(..., mix_block_length=N)` (default `1`)
-- Config: `data.multi_dataset_mix_block_length=N` (wired in `OXEDataModule`)
+- Config: `data.adapter.tf.mixing.mix_block_length=N` (wired in `OXEDataModule`)
 
 Additional mitigation knob:
-- `data.per_dataset_stream_prefetch_buffer`: enable a small per-dataset prefetch to reduce “dataset switch” stalls.
-- `data.multi_dataset_mixing_strategy=choose`: try `choose_from_datasets()` (selector-based) as an alternative to `sample_from_datasets()` (benchmarked below; worse so far).
+- `data.adapter.tf.prefetch.per_dataset_stream_buffer`: enable a small per-dataset prefetch to reduce “dataset switch” stalls.
+- `data.adapter.tf.mixing.strategy=choose`: try `choose_from_datasets()` (selector-based) as an alternative to `sample_from_datasets()` (benchmarked below; worse so far).
 
 Result: block-wise mixing (`multi_dataset_mix_block_length=8`) did **not** help in our quick test (slightly worse).
 

@@ -41,13 +41,19 @@ model:
 
 # Data settings
 data:
-  batch_size: 64
-  episode_queue_shuffle_buffer: 200
-  intra_episode_sample_shuffle_buffer: 0
-  global_stream_shuffle_buffer: 200
-  final_stream_prefetch_buffer: 16
-  persistent_iterator: true
-  num_workers: 0
+  loader:
+    batch_size: 64
+    num_workers: 0
+  adapter:
+    tf:
+      train:
+        episode_queue_shuffle_buffer: 200
+        intra_episode_sample_shuffle_buffer: 0
+        global_stream_shuffle_buffer: 200
+      prefetch:
+        final_stream_buffer: 16
+      iterator:
+        persistent: true
 
 # Training settings
 training:

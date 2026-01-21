@@ -402,15 +402,15 @@ class MultiSourcePairDataset(Dataset):
         self,
         scenes: List[SceneMetadata],
         sources: List[Dict[str, Any]],
-        image_size: int = 256,
-        offsets: Optional[List[int]] = None,
-        return_metadata: bool = False,
+        image_size: int,
+        offsets: List[int],
+        return_metadata: bool,
     ):
         super().__init__()
         self.scenes = scenes
         self.sources = sources
         self.image_size = image_size
-        self.offsets = offsets or [30]
+        self.offsets = offsets
         self.return_metadata = return_metadata
 
         # Build source root lookup
@@ -543,43 +543,44 @@ class LAQDataModule(pl.LightningDataModule):
     def __init__(
         self,
         sources: List[Dict[str, Any]],
-        image_size: int = 256,
-        batch_size: int = 16,
-        num_workers: int = 4,
-        pin_memory: bool = True,
-        prefetch_factor: int = 2,
-        max_pairs: Optional[int] = None,
-        val_split: float = 0.1,
-        filters: Optional[Dict[str, Any]] = None,
-        return_metadata: bool = False,
-        min_frames: int = 2,
-        offsets: Optional[List[int]] = None,
-        sampling_strategy: str = "random",
-        sampling_seed: int = 42,
-        split_mode: str = "ratio",
-        val_scene_filters: Optional[Dict[str, Any]] = None,
-        val_buckets: Optional[Dict[str, Dict[str, Any]]] = None,
-        val_counts_per_dataset: Optional[Dict[str, int]] = None,
+        image_size: int,
+        batch_size: int,
+        num_workers: int,
+        pin_memory: bool,
+        prefetch_factor: Optional[int],
+        min_frames: int,
+        pair_offsets_frames: List[int],
+        filters: Optional[Dict[str, Any]],
+        return_metadata: bool,
+        split_mode: str,
+        split_seed: int,
+        val_ratio: float,
+        val_scene_filters: Optional[Dict[str, Any]],
+        val_counts_per_dataset: Optional[Dict[str, int]],
+        subset_max_pairs: Optional[int],
+        subset_strategy: str,
+        subset_seed: int,
     ):
         """
         Args:
             sources: List of dataset sources, each with type, root, and optional filters
-            image_size: Size to resize images to
-            batch_size: Batch size for dataloaders
-            num_workers: Number of dataloader workers
+            image_size: Resize/crop target size (pixels)
+            batch_size: Batch size for DataLoaders
+            num_workers: PyTorch DataLoader workers
             pin_memory: Pin memory for faster GPU transfer
-            prefetch_factor: Prefetch factor for dataloaders
-            max_pairs: Maximum frame pairs (for subset testing/debugging)
-            val_split: Fraction of data for validation (used when split_mode="ratio")
-            filters: Global filter conditions applied after per-source filters
-            return_metadata: If True, return dict with metadata
-            min_frames: Minimum frames required per scene
-            offsets: List of frame offsets for pair generation (default [30])
-            sampling_strategy: 'random' for diverse samples, 'sequential' for neighboring
-            sampling_seed: Random seed for reproducible random sampling
-            split_mode: "ratio" for percentage-based, "metadata" for filter-based split
-            val_scene_filters: Filters to select validation scenes (when split_mode="metadata")
-            val_buckets: Dict of named validation buckets, each with filters for analysis
+            prefetch_factor: Prefetch factor (only used when num_workers > 0)
+            min_frames: Minimum frames per scene to be kept
+            pair_offsets_frames: Frame offsets used to create (t, t+offset) pairs
+            filters: Global scene filters applied after per-source filters
+            return_metadata: If True, return standardized metadata keys (for validation/analysis)
+            split_mode: "ratio" | "metadata" | "fixed_count"
+            split_seed: Seed used for deterministic shuffling/splitting
+            val_ratio: Validation fraction when split_mode="ratio"
+            val_scene_filters: Scene filters to select validation scenes (split_mode="metadata")
+            val_counts_per_dataset: Target PAIR counts per dataset (split_mode="fixed_count")
+            subset_max_pairs: Optional max number of train pairs (debugging)
+            subset_strategy: "random" | "sequential" selection for subset_max_pairs
+            subset_seed: Seed for subset selection (subset_strategy="random")
         """
         super().__init__()
 
@@ -592,23 +593,22 @@ class LAQDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.pin_memory = pin_memory
         self.prefetch_factor = prefetch_factor
-        self.max_pairs = max_pairs
-        self.val_split = val_split
+        self.min_frames = min_frames
+        self.pair_offsets_frames = pair_offsets_frames
         self.filters = filters
         self.return_metadata = return_metadata
-        self.min_frames = min_frames
-        self.offsets = offsets or [30]
-        self.sampling_strategy = sampling_strategy
-        self.sampling_seed = sampling_seed
+
         self.split_mode = split_mode
+        self.split_seed = split_seed
+        self.val_ratio = val_ratio
         self.val_scene_filters = val_scene_filters
-        self.val_buckets = val_buckets
         self.val_counts_per_dataset = val_counts_per_dataset
+        self.subset_max_pairs = subset_max_pairs
+        self.subset_strategy = subset_strategy
+        self.subset_seed = subset_seed
 
         self.train_dataset = None
         self.val_dataset = None
-        self.val_bucket_datasets: Dict[str, Dataset] = {}
-        self.train_bucket_datasets: Dict[str, Dataset] = {}
         self.scenes: List[SceneMetadata] = []
 
     def _get_adapter(self, source_type: str):
@@ -673,8 +673,7 @@ class LAQDataModule(pl.LightningDataModule):
         if not self.val_counts_per_dataset:
             raise ValueError("val_counts_per_dataset required when split_mode='fixed_count'")
 
-        # Get max offset for frame pair calculation
-        max_offset = max(self.offsets) if self.offsets else 30
+        max_offset = max(self.pair_offsets_frames)
 
         def pairs_per_scene(scene: SceneMetadata) -> int:
             """Calculate number of frame pairs from a scene."""
@@ -703,7 +702,7 @@ class LAQDataModule(pl.LightningDataModule):
 
             # Shuffle deterministically
             shuffled = dtype_scenes.copy()
-            random.Random(42).shuffle(shuffled)
+            random.Random(self.split_seed).shuffle(shuffled)
 
             # Accumulate scenes until we reach target frame pair count
             val_subset = []
@@ -729,8 +728,8 @@ class LAQDataModule(pl.LightningDataModule):
                   f"{len(val_subset)} val scenes ({val_pair_count} pairs, target: {target_pairs})")
 
         # Shuffle final lists
-        random.Random(42).shuffle(train_scenes)
-        random.Random(42).shuffle(val_scenes)
+        random.Random(self.split_seed).shuffle(train_scenes)
+        random.Random(self.split_seed).shuffle(val_scenes)
 
         total_train_pairs = sum(pairs_per_scene(s) for s in train_scenes)
         total_val_pairs = sum(pairs_per_scene(s) for s in val_scenes)
@@ -785,17 +784,17 @@ class LAQDataModule(pl.LightningDataModule):
         for dtype, dtype_scenes in by_dataset.items():
             # Shuffle within each dataset type for randomness
             shuffled = dtype_scenes.copy()
-            random.Random(42).shuffle(shuffled)  # Deterministic shuffle
-            
-            val_size = int(len(shuffled) * self.val_split)
+            random.Random(self.split_seed).shuffle(shuffled)
+
+            val_size = int(len(shuffled) * self.val_ratio)
             val_size = max(1, val_size)  # At least 1 val sample per dataset
             
             train_scenes.extend(shuffled[:-val_size] if val_size > 0 else shuffled)
             val_scenes.extend(shuffled[-val_size:] if val_size > 0 else [])
         
         # Shuffle final lists to interleave dataset types
-        random.Random(42).shuffle(train_scenes)
-        random.Random(42).shuffle(val_scenes)
+        random.Random(self.split_seed).shuffle(train_scenes)
+        random.Random(self.split_seed).shuffle(val_scenes)
         
         # Log distribution
         train_by_type = {}
@@ -814,32 +813,13 @@ class LAQDataModule(pl.LightningDataModule):
         return train_scenes, val_scenes
 
     def _build_validation_buckets(self, scenes: List[SceneMetadata]) -> Dict[str, List[SceneMetadata]]:
-        """Build validation buckets for distribution shift analysis."""
-        if not self.val_buckets:
-            return {}
+        """
+        Deprecated: bucket datasets are no longer built in the DataModule.
 
-        buckets = {}
-        for bucket_name, bucket_filters in self.val_buckets.items():
-            bucket_filter = SceneFilter(bucket_filters)
-            bucket_scenes = bucket_filter.filter_scenes(scenes)
-            buckets[bucket_name] = bucket_scenes
-            logger.info(f"  - Val bucket '{bucket_name}': {len(bucket_scenes)} scenes")
-
-        return buckets
-
-    def _build_training_buckets(self, scenes: List[SceneMetadata]) -> Dict[str, List[SceneMetadata]]:
-        """Build training buckets for visualization/analysis."""
-        if not self.val_buckets:
-            return {}
-
-        buckets = {}
-        for bucket_name, bucket_filters in self.val_buckets.items():
-            bucket_filter = SceneFilter(bucket_filters)
-            bucket_scenes = bucket_filter.filter_scenes(scenes)
-            buckets[bucket_name] = bucket_scenes
-            logger.info(f"  - Train bucket '{bucket_name}': {len(bucket_scenes)} scenes")
-
-        return buckets
+        Buckets live in `training.validation.buckets` and are applied by the
+        `ValidationStrategyCallback` (routing samples into per-bucket caches).
+        """
+        return {}
 
     def setup(self, stage: Optional[str] = None):
         """Setup train/val datasets."""
@@ -854,69 +834,41 @@ class LAQDataModule(pl.LightningDataModule):
         else:  # ratio
             train_scenes, val_scenes = self._split_scenes_by_ratio(all_scenes)
 
-        # Build validation buckets for distribution shift analysis
-        val_bucket_scenes = {}
-        train_bucket_scenes = {}
-        if self.val_buckets:
-            logger.info("Building buckets:")
-            val_bucket_scenes = self._build_validation_buckets(val_scenes)
-            train_bucket_scenes = self._build_training_buckets(train_scenes)
-
         # Create datasets from scene lists
         full_train = MultiSourcePairDataset(
             scenes=train_scenes,
             sources=self.sources,
             image_size=self.image_size,
-            offsets=self.offsets,
+            offsets=self.pair_offsets_frames,
             return_metadata=self.return_metadata,
         )
         full_val = MultiSourcePairDataset(
             scenes=val_scenes,
             sources=self.sources,
             image_size=self.image_size,
-            offsets=self.offsets,
+            offsets=self.pair_offsets_frames,
             return_metadata=self.return_metadata,
         )
 
-        # Create bucket datasets
-        for bucket_name, bucket_scenes in val_bucket_scenes.items():
-            base_dataset = MultiSourcePairDataset(
-                scenes=bucket_scenes,
-                sources=self.sources,
-                image_size=self.image_size,
-                offsets=self.offsets,
-                return_metadata=self.return_metadata,
-            )
-            # Shuffle val bucket once during init for diverse visualization samples
-            if len(base_dataset) > 0:
-                shuffled_indices = torch.randperm(len(base_dataset)).tolist()
-                self.val_bucket_datasets[bucket_name] = Subset(base_dataset, shuffled_indices)
-            else:
-                self.val_bucket_datasets[bucket_name] = base_dataset
-
-        for bucket_name, bucket_scenes in train_bucket_scenes.items():
-            self.train_bucket_datasets[bucket_name] = MultiSourcePairDataset(
-                scenes=bucket_scenes,
-                sources=self.sources,
-                image_size=self.image_size,
-                offsets=self.offsets,
-                return_metadata=self.return_metadata,
-            )
-
         self.total_available = len(all_scenes)
 
-        # Apply max_pairs subset (for debugging/testing)
-        if self.max_pairs is not None:
-            num_train = min(self.max_pairs, len(full_train))
-            num_val = min(max(1, int(num_train * self.val_split)), len(full_val))
+        # Optional subset (debugging/testing).
+        if self.subset_max_pairs is not None:
+            num_train = min(self.subset_max_pairs, len(full_train))
+            num_val = min(max(1, int(num_train * self.val_ratio)), len(full_val))
 
-            if self.sampling_strategy == "random":
-                rng = random.Random(self.sampling_seed)
+            if self.subset_strategy == "random":
+                rng = random.Random(self.subset_seed)
                 train_indices = rng.sample(range(len(full_train)), num_train)
                 val_indices = rng.sample(range(len(full_val)), num_val) if len(full_val) > 0 else []
-            else:
+            elif self.subset_strategy == "sequential":
                 train_indices = list(range(num_train))
                 val_indices = list(range(num_val))
+            else:
+                raise ValueError(
+                    f"Unknown subset_strategy: {self.subset_strategy} "
+                    "(expected: 'random' or 'sequential')"
+                )
 
             self.train_dataset = Subset(full_train, train_indices)
             self.val_dataset = Subset(full_val, val_indices) if val_indices else full_val
@@ -953,35 +905,15 @@ class LAQDataModule(pl.LightningDataModule):
         )
 
     def train_bucket_dataloader(self, bucket_name: str):
-        """Create dataloader for a specific training bucket."""
-        if bucket_name not in self.train_bucket_datasets:
-            raise ValueError(f"Unknown training bucket: {bucket_name}")
-
-        collate_fn = metadata_collate_fn if self.return_metadata else None
-        return DataLoader(
-            self.train_bucket_datasets[bucket_name],
-            batch_size=self.batch_size,
-            shuffle=True,  # Shuffle training buckets
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
-            collate_fn=collate_fn,
+        raise NotImplementedError(
+            "Bucket-specific DataLoaders were removed. "
+            "Use ValidationStrategyCallback bucket routing instead."
         )
 
     def val_bucket_dataloader(self, bucket_name: str):
-        """Create dataloader for a specific validation bucket."""
-        if bucket_name not in self.val_bucket_datasets:
-            raise ValueError(f"Unknown validation bucket: {bucket_name}")
-
-        collate_fn = metadata_collate_fn if self.return_metadata else None
-        return DataLoader(
-            self.val_bucket_datasets[bucket_name],
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
-            collate_fn=collate_fn,
+        raise NotImplementedError(
+            "Bucket-specific DataLoaders were removed. "
+            "Use ValidationStrategyCallback bucket routing instead."
         )
 
     def get_pairs_per_dataset(self) -> Dict[str, Dict[str, int]]:
@@ -1026,104 +958,38 @@ class OXEDataModule(pl.LightningDataModule):
     without caching to local disk. Designed for large-scale OXE datasets
     like language_table (442k episodes, multi-TB).
 
-    Supports both single-dataset and multi-dataset configurations:
-
-    Single dataset (legacy format):
-    ```yaml
-    dataset_name: bridge
-    train_split: "train[:90%]"
-    val_split: "train[90%:]"
-    offset: 5
-    ```
-
-    Multi-dataset (new format):
-    ```yaml
-    datasets:
-      - name: language_table
-        train_split: "train[:90%]"
-        val_split: "train[90%:]"
-        weight: 0.6
-      - name: bridge
-        train_split: "train[:90%]"
-        val_split: "train[90%:]"
-        weight: 0.4
-    offset: 5  # Shared default
-    ```
+    This DataModule is configured via the Hydra `cfg.data` schema and is
+    intentionally strict. All adapter/dataset/loader parameters must be
+    specified in config (no hidden defaults or legacy key support).
     """
 
     def __init__(
         self,
-        offset: int,
-        final_stream_prefetch_buffer: int,
-        datasets: Optional[list],
-        samples_per_episode: int,
-        sampling_seed: Optional[int],
-        image_size: int,
-        batch_size: int,
-        num_workers: int,  # IterableDataset + tf.data handles parallelism
-        episode_queue_shuffle_buffer: int,
-        intra_episode_sample_shuffle_buffer: int,
-        global_stream_shuffle_buffer: int,
-        val_episode_queue_shuffle_buffer: int,
-        val_intra_episode_sample_shuffle_buffer: int,
-        val_global_stream_shuffle_buffer: int,
-        return_metadata: bool,
-        persistent_iterator: bool,
-        num_parallel_episodes: int,
-        num_parallel_calls: int,
-        episode_queue_prefetch_buffer: int,
-        multi_dataset_mix_block_length: int,
-        multi_dataset_parallelism_mode: str,
-        per_dataset_stream_prefetch_buffer: int,
-        multi_dataset_mixing_strategy: str,
-        per_dataset_private_threadpool_size: int,
+        *,
+        datasets: List[Dict[str, Any]],
+        preprocess: Dict[str, Any],
+        loader: Dict[str, Any],
+        adapter: Dict[str, Any],
     ):
         """
         Args:
-            datasets: List of dataset configs (new format), each with:
-                - name: Dataset name (e.g., "bridge", "language_table")
-                - train_split: TFDS split for training (REQUIRED)
-                - val_split: TFDS split for validation (REQUIRED)
-                - offset: Frame offset for pairs (REQUIRED)
-                - size: Precomputed dataset size (REQUIRED)
-                - weight: Sampling weight (default proportionate)
-            offset: Default frame offset for pairs (in steps)
-            image_size: Target image size (will resize)
-            batch_size: Batch size for dataloaders
-            num_workers: DataLoader workers (0 recommended for IterableDataset)
-            episode_queue_shuffle_buffer: Shuffle buffer for episode queue
-            intra_episode_sample_shuffle_buffer: Shuffle buffer for per-episode samples
-            global_stream_shuffle_buffer: Shuffle buffer for global sample stream
-            final_stream_prefetch_buffer: tf.data prefetch buffer size (after sample stream is formed)
-            return_metadata: If True, return dict with metadata
-            num_parallel_episodes: Number of episodes to process in parallel
+            datasets: List of dataset entries. Each entry must include:
+                - name
+                - train_split
+                - val_split
+                - pair_offset_steps
+                - weight
+                - approx_num_pairs
+            preprocess: Shared settings (image_size, return_metadata)
+            loader: DataLoader settings (batch_size, num_workers, pin_memory)
+            adapter: TF adapter settings (shuffle/prefetch/read/pipeline/mixing)
         """
         super().__init__()
 
-        self.dataset_configs = list(datasets)
-        self.offset = offset
-        self.samples_per_episode = samples_per_episode
-        self.sampling_seed = sampling_seed
-        self.image_size = image_size
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.episode_queue_shuffle_buffer = episode_queue_shuffle_buffer
-        self.intra_episode_sample_shuffle_buffer = intra_episode_sample_shuffle_buffer
-        self.global_stream_shuffle_buffer = global_stream_shuffle_buffer
-        self.val_episode_queue_shuffle_buffer = val_episode_queue_shuffle_buffer
-        self.val_intra_episode_sample_shuffle_buffer = val_intra_episode_sample_shuffle_buffer
-        self.val_global_stream_shuffle_buffer = val_global_stream_shuffle_buffer
-        self.final_stream_prefetch_buffer = final_stream_prefetch_buffer
-        self.return_metadata = return_metadata
-        self.persistent_iterator = persistent_iterator
-        self.num_parallel_episodes = num_parallel_episodes
-        self.num_parallel_calls = num_parallel_calls
-        self.episode_queue_prefetch_buffer = episode_queue_prefetch_buffer
-        self.multi_dataset_mix_block_length = int(multi_dataset_mix_block_length)
-        self.multi_dataset_parallelism_mode = str(multi_dataset_parallelism_mode)
-        self.per_dataset_stream_prefetch_buffer = int(per_dataset_stream_prefetch_buffer)
-        self.multi_dataset_mixing_strategy = str(multi_dataset_mixing_strategy)
-        self.per_dataset_private_threadpool_size = int(per_dataset_private_threadpool_size)
+        self.datasets = datasets
+        self.preprocess = preprocess
+        self.loader = loader
+        self.adapter = adapter
 
         # Will be set in setup()
         self.train_dataset = None
@@ -1133,120 +999,165 @@ class OXEDataModule(pl.LightningDataModule):
         """Create train and val datasets."""
         from common.adapters.oxe import OXEFramePairDataset, MultiOXEFramePairDataset
 
-        if len(self.dataset_configs) == 1:
-            # Single dataset - use simple implementation
-            cfg = self.dataset_configs[0]
+        image_size = int(self.preprocess["image_size"])
+        return_metadata = bool(self.preprocess["return_metadata"])
 
+        tf_cfg = self.adapter["tf"]
+        tf_train = tf_cfg["train"]
+        tf_val = tf_cfg["val"]
+        tf_prefetch = tf_cfg["prefetch"]
+        tf_read = tf_cfg["tfds_read"]
+        tf_pipe = tf_cfg["pipeline"]
+        tf_mix = tf_cfg["mixing"]
+        tf_sampling = tf_cfg["sampling"]
+        tf_iter = tf_cfg["iterator"]
+        tf_debug = tf_cfg["debug"]
+
+        final_stream_prefetch_buffer = int(tf_prefetch["final_stream_buffer"])
+        per_dataset_stream_prefetch_buffer = int(tf_prefetch["per_dataset_stream_buffer"])
+        episode_queue_prefetch_buffer = int(tf_prefetch["episode_queue_buffer"])
+
+        samples_per_episode = int(tf_sampling["samples_per_episode"])
+        seed = tf_sampling["seed"]
+        persistent_iterator = bool(tf_iter["persistent"])
+        debug_use_synthetic_data = bool(tf_debug["use_synthetic_data"])
+        debug_synthetic_num_samples = int(tf_debug["synthetic_num_samples"])
+
+        tfds_read_cycle_length = int(tf_read["cycle_length"])
+        tfds_read_block_length = int(tf_read["block_length"])
+        tfds_read_decode_parallelism = int(tf_read["decode_parallelism"])
+        tfds_read_interleave_parallelism = int(tf_read["interleave_parallelism"])
+
+        pipeline_episode_concurrency = int(tf_pipe["episode_concurrency"])
+        pipeline_transform_parallelism = int(tf_pipe["transform_parallelism"])
+        pipeline_interleave_parallelism = int(tf_pipe["interleave_parallelism"])
+
+        mix_block_length = int(tf_mix["mix_block_length"])
+        parallelism_mode = str(tf_mix["parallelism_mode"])
+        mixing_strategy = str(tf_mix["strategy"])
+        per_dataset_private_threadpool_size = int(tf_mix["per_dataset_private_threadpool_size"])
+
+        if len(self.datasets) == 1:
+            cfg = self.datasets[0]
             self.train_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
-                gcs_path=cfg.get("gcs_path"),
                 split=cfg["train_split"],
-                offset=cfg["offset"],
-                image_size=self.image_size,
-                episode_queue_shuffle_buffer=self.episode_queue_shuffle_buffer,
-                intra_episode_sample_shuffle_buffer=self.intra_episode_sample_shuffle_buffer,
-                final_stream_prefetch_buffer=self.final_stream_prefetch_buffer,
-                return_metadata=self.return_metadata,
-                persistent_iterator=self.persistent_iterator,
-                samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
-                seed=cfg.get("seed", self.sampling_seed),
-                precomputed_size=cfg["size"],
-                num_parallel_episodes=self.num_parallel_episodes,
-                num_parallel_calls=self.num_parallel_calls,
-                episode_queue_prefetch_buffer=self.episode_queue_prefetch_buffer,
-                private_threadpool_size=self.per_dataset_private_threadpool_size,
+                offset=int(cfg["pair_offset_steps"]),
+                final_stream_prefetch_buffer=final_stream_prefetch_buffer,
+                episode_queue_shuffle_buffer=int(tf_train["episode_queue_shuffle_buffer"]),
+                intra_episode_sample_shuffle_buffer=int(tf_train["intra_episode_sample_shuffle_buffer"]),
+                image_size=image_size,
+                return_metadata=return_metadata,
+                persistent_iterator=persistent_iterator,
+                samples_per_episode=samples_per_episode,
+                seed=seed,
+                debug_use_synthetic_data=debug_use_synthetic_data,
+                debug_synthetic_num_samples=debug_synthetic_num_samples,
+                precomputed_size=cfg["approx_num_pairs"],
+                episode_queue_prefetch_buffer=episode_queue_prefetch_buffer,
+                private_threadpool_size=per_dataset_private_threadpool_size,
+                tfds_read_cycle_length=tfds_read_cycle_length,
+                tfds_read_block_length=tfds_read_block_length,
+                tfds_read_decode_parallelism=tfds_read_decode_parallelism,
+                tfds_read_interleave_parallelism=tfds_read_interleave_parallelism,
+                pipeline_episode_concurrency=pipeline_episode_concurrency,
+                pipeline_transform_parallelism=pipeline_transform_parallelism,
+                pipeline_interleave_parallelism=pipeline_interleave_parallelism,
             )
             self.val_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
-                gcs_path=cfg.get("gcs_path"),
                 split=cfg["val_split"],
-                offset=cfg["offset"],
-                image_size=self.image_size,
-                episode_queue_shuffle_buffer=self.val_episode_queue_shuffle_buffer,
-                intra_episode_sample_shuffle_buffer=self.val_intra_episode_sample_shuffle_buffer,
-                final_stream_prefetch_buffer=self.final_stream_prefetch_buffer,
-                return_metadata=self.return_metadata,
-                persistent_iterator=self.persistent_iterator,
-                samples_per_episode=cfg.get("samples_per_episode", self.samples_per_episode),
-                seed=cfg.get("seed", self.sampling_seed),
-                precomputed_size=cfg["size"],
-                num_parallel_episodes=self.num_parallel_episodes,
-                num_parallel_calls=self.num_parallel_calls,
-                episode_queue_prefetch_buffer=self.episode_queue_prefetch_buffer,
-                private_threadpool_size=self.per_dataset_private_threadpool_size,
+                offset=int(cfg["pair_offset_steps"]),
+                final_stream_prefetch_buffer=final_stream_prefetch_buffer,
+                episode_queue_shuffle_buffer=int(tf_val["episode_queue_shuffle_buffer"]),
+                intra_episode_sample_shuffle_buffer=int(tf_val["intra_episode_sample_shuffle_buffer"]),
+                image_size=image_size,
+                return_metadata=return_metadata,
+                persistent_iterator=persistent_iterator,
+                samples_per_episode=samples_per_episode,
+                seed=seed,
+                debug_use_synthetic_data=debug_use_synthetic_data,
+                debug_synthetic_num_samples=debug_synthetic_num_samples,
+                precomputed_size=cfg["approx_num_pairs"],
+                episode_queue_prefetch_buffer=episode_queue_prefetch_buffer,
+                private_threadpool_size=per_dataset_private_threadpool_size,
+                tfds_read_cycle_length=tfds_read_cycle_length,
+                tfds_read_block_length=tfds_read_block_length,
+                tfds_read_decode_parallelism=tfds_read_decode_parallelism,
+                tfds_read_interleave_parallelism=tfds_read_interleave_parallelism,
+                pipeline_episode_concurrency=pipeline_episode_concurrency,
+                pipeline_transform_parallelism=pipeline_transform_parallelism,
+                pipeline_interleave_parallelism=pipeline_interleave_parallelism,
             )
-            logger.info(f"✓ OXE DataModule initialized (single dataset)")
-            logger.info(f"  - Dataset: {cfg['name']}")
-            logger.info(f"  - Train split: {cfg['train_split']}")
-            logger.info(f"  - Val split: {cfg['val_split']}")
+            logger.info(f"✓ OXE DataModule initialized (single dataset: {cfg['name']})")
         else:
-            # Multiple datasets - use interleaving
             self.train_dataset = MultiOXEFramePairDataset(
-                datasets=self.dataset_configs,
-                image_size=self.image_size,
-                episode_queue_shuffle_buffer=self.episode_queue_shuffle_buffer,
-                intra_episode_sample_shuffle_buffer=self.intra_episode_sample_shuffle_buffer,
-                global_stream_shuffle_buffer=self.global_stream_shuffle_buffer,
-                final_stream_prefetch_buffer=self.final_stream_prefetch_buffer,
-                per_dataset_stream_prefetch_buffer=self.per_dataset_stream_prefetch_buffer,
-                return_metadata=self.return_metadata,
+                datasets=self.datasets,
+                final_stream_prefetch_buffer=final_stream_prefetch_buffer,
+                episode_queue_prefetch_buffer=episode_queue_prefetch_buffer,
+                episode_queue_shuffle_buffer=int(tf_train["episode_queue_shuffle_buffer"]),
+                intra_episode_sample_shuffle_buffer=int(tf_train["intra_episode_sample_shuffle_buffer"]),
+                global_stream_shuffle_buffer=int(tf_train["global_stream_shuffle_buffer"]),
+                image_size=image_size,
+                return_metadata=return_metadata,
                 is_train=True,
-                persistent_iterator=self.persistent_iterator,
-                samples_per_episode=self.samples_per_episode,
-                seed=self.sampling_seed,
-                num_parallel_episodes=self.num_parallel_episodes,
-                num_parallel_calls=self.num_parallel_calls,
-                episode_queue_prefetch_buffer=self.episode_queue_prefetch_buffer,
-                mix_block_length=self.multi_dataset_mix_block_length,
-                parallelism_mode=self.multi_dataset_parallelism_mode,
-                mixing_strategy=self.multi_dataset_mixing_strategy,
-                per_dataset_private_threadpool_size=self.per_dataset_private_threadpool_size,
+                persistent_iterator=persistent_iterator,
+                samples_per_episode=samples_per_episode,
+                seed=seed,
+                debug_use_synthetic_data=debug_use_synthetic_data,
+                debug_synthetic_num_samples=debug_synthetic_num_samples,
+                pipeline_episode_concurrency_total=pipeline_episode_concurrency,
+                pipeline_transform_parallelism=pipeline_transform_parallelism,
+                pipeline_interleave_parallelism=pipeline_interleave_parallelism,
+                mix_block_length=mix_block_length,
+                parallelism_mode=parallelism_mode,
+                per_dataset_stream_prefetch_buffer=per_dataset_stream_prefetch_buffer,
+                mixing_strategy=mixing_strategy,
+                per_dataset_private_threadpool_size=per_dataset_private_threadpool_size,
+                tfds_read_cycle_length=tfds_read_cycle_length,
+                tfds_read_block_length=tfds_read_block_length,
+                tfds_read_decode_parallelism=tfds_read_decode_parallelism,
+                tfds_read_interleave_parallelism=tfds_read_interleave_parallelism,
             )
             self.val_dataset = MultiOXEFramePairDataset(
-                datasets=self.dataset_configs,
-                image_size=self.image_size,
-                episode_queue_shuffle_buffer=self.val_episode_queue_shuffle_buffer,
-                intra_episode_sample_shuffle_buffer=self.val_intra_episode_sample_shuffle_buffer,
-                global_stream_shuffle_buffer=self.val_global_stream_shuffle_buffer,
-                final_stream_prefetch_buffer=self.final_stream_prefetch_buffer,
-                per_dataset_stream_prefetch_buffer=self.per_dataset_stream_prefetch_buffer,
-                return_metadata=self.return_metadata,
+                datasets=self.datasets,
+                final_stream_prefetch_buffer=final_stream_prefetch_buffer,
+                episode_queue_prefetch_buffer=episode_queue_prefetch_buffer,
+                episode_queue_shuffle_buffer=int(tf_val["episode_queue_shuffle_buffer"]),
+                intra_episode_sample_shuffle_buffer=int(tf_val["intra_episode_sample_shuffle_buffer"]),
+                global_stream_shuffle_buffer=int(tf_val["global_stream_shuffle_buffer"]),
+                image_size=image_size,
+                return_metadata=return_metadata,
                 is_train=False,
-                persistent_iterator=self.persistent_iterator,
-                samples_per_episode=self.samples_per_episode,
-                seed=self.sampling_seed,
-                num_parallel_episodes=self.num_parallel_episodes,
-                num_parallel_calls=self.num_parallel_calls,
-                episode_queue_prefetch_buffer=self.episode_queue_prefetch_buffer,
-                mix_block_length=self.multi_dataset_mix_block_length,
-                parallelism_mode=self.multi_dataset_parallelism_mode,
-                mixing_strategy=self.multi_dataset_mixing_strategy,
-                per_dataset_private_threadpool_size=self.per_dataset_private_threadpool_size,
+                persistent_iterator=persistent_iterator,
+                samples_per_episode=samples_per_episode,
+                seed=seed,
+                debug_use_synthetic_data=debug_use_synthetic_data,
+                debug_synthetic_num_samples=debug_synthetic_num_samples,
+                pipeline_episode_concurrency_total=pipeline_episode_concurrency,
+                pipeline_transform_parallelism=pipeline_transform_parallelism,
+                pipeline_interleave_parallelism=pipeline_interleave_parallelism,
+                mix_block_length=mix_block_length,
+                parallelism_mode=parallelism_mode,
+                per_dataset_stream_prefetch_buffer=per_dataset_stream_prefetch_buffer,
+                mixing_strategy=mixing_strategy,
+                per_dataset_private_threadpool_size=per_dataset_private_threadpool_size,
+                tfds_read_cycle_length=tfds_read_cycle_length,
+                tfds_read_block_length=tfds_read_block_length,
+                tfds_read_decode_parallelism=tfds_read_decode_parallelism,
+                tfds_read_interleave_parallelism=tfds_read_interleave_parallelism,
             )
-            dataset_names = [cfg["name"] for cfg in self.dataset_configs]
-            logger.info(f"✓ OXE DataModule initialized (multi-dataset)")
-            logger.info(f"  - Datasets: {', '.join(dataset_names)}")
-
-        logger.info(f"  - Offset: {self.offset} steps")
-        logger.info(f"  - Samples per episode: {self.samples_per_episode if self.samples_per_episode else 'all'}")
-        logger.info(f"  - Sampling seed: {self.sampling_seed}")
-        logger.info(f"  - Image size: {self.image_size}")
-        logger.info(f"  - Episode queue shuffle buffer: {self.episode_queue_shuffle_buffer}")
-        logger.info(
-            f"  - Intra-episode sample shuffle buffer: {self.intra_episode_sample_shuffle_buffer}"
-        )
-        logger.info(
-            f"  - Global stream shuffle buffer (multi-dataset only): {self.global_stream_shuffle_buffer}"
-        )
+            dataset_names = [cfg["name"] for cfg in self.datasets]
+            logger.info(f"✓ OXE DataModule initialized (multi-dataset: {', '.join(dataset_names)})")
 
     def train_dataloader(self):
         """Create training dataloader."""
         return DataLoader(
             self.train_dataset,
-            batch_size=self.batch_size,
-            num_workers=self.num_workers,
-            pin_memory=True,
-            collate_fn=oxe_collate_fn if self.return_metadata else None,
+            batch_size=int(self.loader["batch_size"]),
+            num_workers=int(self.loader["num_workers"]),
+            pin_memory=bool(self.loader["pin_memory"]),
+            collate_fn=oxe_collate_fn if bool(self.preprocess["return_metadata"]) else None,
             # Note: shuffle=False because IterableDataset handles shuffling internally
         )
 
@@ -1254,10 +1165,10 @@ class OXEDataModule(pl.LightningDataModule):
         """Create validation dataloader."""
         return DataLoader(
             self.val_dataset,
-            batch_size=self.batch_size,
-            num_workers=self.num_workers,
-            pin_memory=True,
-            collate_fn=oxe_collate_fn if self.return_metadata else None,
+            batch_size=int(self.loader["batch_size"]),
+            num_workers=int(self.loader["num_workers"]),
+            pin_memory=bool(self.loader["pin_memory"]),
+            collate_fn=oxe_collate_fn if bool(self.preprocess["return_metadata"]) else None,
         )
 
     def teardown(self, stage: Optional[str] = None) -> None:
