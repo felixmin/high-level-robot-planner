@@ -81,8 +81,12 @@ data:
 
 training:
   max_steps: 500
-  enable_progress_bar: true
-  enable_model_summary: true
+  progress_bar:
+    enabled: true
+    refresh_rate: 10
+    leave: false
+  model_summary:
+    enabled: true
   scheduler:
     type: none
   profiler:

@@ -20,10 +20,12 @@ experiment:
 model:
   flow:
     enabled: true
-    model: raft_large    # "raft_small" or "raft_large"
+    model: raft_small    # "raft_small" or "raft_large"
     loss_weight: 0.1     # Weight for flow loss in total loss
-    decoder_depth: 8     # Transformer depth for flow decoder
+    decoder_depth: 2     # Transformer depth for flow decoder
     warmup_steps: 10000
+    teacher_num_flow_updates: 6
+    teacher_chunk_size: 64
 
 data:
   loader:
@@ -68,8 +70,12 @@ data:
     return_metadata: true
 
 training:
-  enable_progress_bar: true
-  enable_model_summary: true
+  progress_bar:
+    enabled: true
+    refresh_rate: 10
+    leave: false
+  model_summary:
+    enabled: true
   scheduler:
     type: none
   profiler:

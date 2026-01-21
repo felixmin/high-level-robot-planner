@@ -15,7 +15,7 @@ import logging
 import math
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -91,6 +91,7 @@ class LatentActionQuantization(nn.Module):
         use_dinov3_encoder = False,
         dinov3_model_name = "facebook/dinov3-vits16-pretrain-lvd1689m",
         dinov3_pool_to_grid = None,  # Pool DINO features to this grid size (e.g., 8 for 8x8)
+        metrics_num_unique_codes_every_n_steps: int,
         # Training decoder flags (at least one must be True, or flow_config must be set)
         use_dino_decoder = True,
         use_pixel_decoder = False,
@@ -118,6 +119,9 @@ class LatentActionQuantization(nn.Module):
                 f"latent_ablation must be one of ['none', 'permute_batch'], got {latent_ablation!r}"
             )
         self.latent_ablation = latent_ablation
+        self.metrics_num_unique_codes_every_n_steps = int(metrics_num_unique_codes_every_n_steps)
+        if self.metrics_num_unique_codes_every_n_steps <= 0:
+            raise ValueError("metrics_num_unique_codes_every_n_steps must be a positive integer")
 
         # Store decoder flags
         self.use_dino_decoder = use_dino_decoder
@@ -287,7 +291,11 @@ class LatentActionQuantization(nn.Module):
                 attn_dropout=attn_dropout,
                 ff_dropout=ff_dropout,
             )
-            self.flow_teacher = RAFTTeacher(flow_config.model)
+            self.flow_teacher = RAFTTeacher(
+                flow_config.model,
+                chunk_size=flow_config.teacher_chunk_size,
+                num_flow_updates=flow_config.teacher_num_flow_updates,
+            )
         else:
             self.flow_decoder = None
             self.flow_teacher = None
@@ -507,12 +515,9 @@ class LatentActionQuantization(nn.Module):
 
         tokens, perplexity, _, indices = self.vq(first_tokens, last_tokens, codebook_training_only=False)
 
-        num_unique_indices = indices.unique().size(0)
-
         codebook_replaced = 0.0
         replaced_count = 0.0
         used_count = 0.0
-        window_total = float(self.vq.codebooks_used.sum().item())
         min_count = 0.0
 
         if step != 0 and self._should_replace_codebook(step):
@@ -524,6 +529,7 @@ class LatentActionQuantization(nn.Module):
             codebook_replaced = 1.0
             self.vq.replace_unused_codebooks()
             if int(os.environ.get("RANK", "0")) == 0:
+                window_total = float(self.vq.codebooks_used.sum().item())
                 print(
                     f"[Codebook] step={int(step)} replaced={int(replaced_count)} "
                     f"used={int(used_count)} total={int(window_total)} min_count={min_count:.4f}"
@@ -540,16 +546,19 @@ class LatentActionQuantization(nn.Module):
             tokens = tokens[perm]
 
         # Initialize loss and metrics
-        total_loss = torch.tensor(0.0, device=device, requires_grad=True)
-        metrics = {
-            "num_unique_codes": num_unique_indices,
+        # Avoid `torch.tensor(0.0, device=...)` which can introduce CPU->GPU sync.
+        total_loss = rest_frames.new_zeros((), requires_grad=True)
+        metrics: dict[str, Any] = {
             "vq_perplexity": perplexity.detach(),
-            "codebook_replaced": torch.tensor(codebook_replaced, device=device),
-            "codebook_replaced_count": torch.tensor(replaced_count, device=device),
-            "codebook_used_count": torch.tensor(used_count, device=device),
-            "codebook_window_total": torch.tensor(window_total, device=device),
-            "codebook_min_count": torch.tensor(min_count, device=device),
+            "codebook_replaced": codebook_replaced,
+            "codebook_replaced_count": replaced_count,
+            "codebook_used_count": used_count,
+            "codebook_min_count": min_count,
         }
+        if self.metrics_num_unique_codes_every_n_steps > 0 and int(step) % int(self.metrics_num_unique_codes_every_n_steps) == 0:
+            metrics["num_unique_codes"] = int(indices.unique().size(0))
+        # Avoid per-step GPU sync: keep this as a tensor and log it only at a configured interval.
+        metrics["codebook_window_total"] = self.vq.codebooks_used.sum().detach()
 
         # Precompute shared values for decoders
         h_dec, w_dec = self.patch_height_width
@@ -659,6 +668,14 @@ class LatentActionQuantization(nn.Module):
         if self.flow_decoder is not None:
             from laq.models.flow import compute_flow_loss
 
+            flow_weight = self.flow_config.get_weight(step)
+            metrics["flow_weight"] = flow_weight
+
+            # If flow loss is effectively disabled (e.g. warmup at step=0),
+            # skip the expensive RAFT teacher + decoder forward entirely.
+            if flow_weight == 0.0:
+                return total_loss, metrics
+
             # NO detach - gradients flow to encoder for motion-aware representations
             flow_actions = tokens
 
@@ -674,10 +691,8 @@ class LatentActionQuantization(nn.Module):
 
             # Flow loss with gradients to encoder
             flow_loss = compute_flow_loss(pred_flow, gt_flow)
-            flow_weight = self.flow_config.get_weight(step)
             total_loss = total_loss + flow_weight * flow_loss
             metrics["flow_loss"] = flow_loss.detach()
-            metrics["flow_weight"] = flow_weight
 
         return total_loss, metrics
         

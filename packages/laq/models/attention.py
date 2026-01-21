@@ -1,9 +1,18 @@
 import math
+import os
 import torch
 import torch.nn.functional as F
 from torch import nn, einsum
 
-from beartype import beartype
+try:
+    if os.environ.get("LAQ_DISABLE_BEARTYPE", "0") == "1":
+        raise ModuleNotFoundError
+    from beartype import beartype  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    def beartype(fn=None, **_kwargs):
+        if fn is None:
+            return lambda f: f
+        return fn
 
 from einops import rearrange, repeat
 

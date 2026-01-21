@@ -193,6 +193,7 @@ class TestDataIntegrationWithModel:
             dim_head=32,
             heads=4,
             code_seq_len=4,
+            metrics_num_unique_codes_every_n_steps=1,
         ).to(device)
 
         dm = make_laq_datamodule(

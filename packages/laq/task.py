@@ -97,6 +97,8 @@ class LAQTask(pl.LightningModule):
                         loss_weight=flow_cfg.loss_weight,
                         decoder_depth=flow_cfg.decoder_depth,
                         warmup_steps=flow_cfg.get("warmup_steps", 0),
+                        teacher_num_flow_updates=flow_cfg.get("teacher_num_flow_updates", 12),
+                        teacher_chunk_size=flow_cfg.get("teacher_chunk_size", 64),
                     )
                 except Exception as exc:
                     raise ValueError(
@@ -109,6 +111,8 @@ class LAQTask(pl.LightningModule):
                         "    loss_weight: <float>\n"
                         "    decoder_depth: <int>\n"
                         "    warmup_steps: <int, optional>\n"
+                        "    teacher_num_flow_updates: <int, optional>\n"
+                        "    teacher_chunk_size: <int, optional>\n"
                     ) from exc
 
         # Build codebook replacement schedule if specified
@@ -118,6 +122,16 @@ class LAQTask(pl.LightningModule):
             codebook_replace_schedule = [
                 tuple(entry) for entry in model_config.codebook_replace_schedule
             ]
+
+        metrics_cfg = training_config.get("metrics")
+        if metrics_cfg is None or metrics_cfg.get("num_unique_codes_every_n_steps") is None:
+            raise ValueError(
+                "Missing `training.metrics.num_unique_codes_every_n_steps` config. Expected:\n"
+                "training:\n"
+                "  metrics:\n"
+                "    log_every_n_steps: <int>\n"
+                "    num_unique_codes_every_n_steps: <int>\n"
+            )
 
         # Initialize LAQ model
         self.model = LatentActionQuantization(
@@ -139,6 +153,7 @@ class LAQTask(pl.LightningModule):
             use_dinov3_encoder=model_config.get("use_dinov3_encoder", False),
             dinov3_model_name=model_config.get("dinov3_model_name", "facebook/dinov3-vits16-pretrain-lvd1689m"),
             dinov3_pool_to_grid=model_config.get("dinov3_pool_to_grid", None),
+            metrics_num_unique_codes_every_n_steps=int(metrics_cfg.num_unique_codes_every_n_steps),
             # Training decoder flags
             use_dino_decoder=model_config.get("use_dino_decoder", True),
             use_pixel_decoder=model_config.get("use_pixel_decoder", False),
@@ -240,12 +255,21 @@ class LAQTask(pl.LightningModule):
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
             self.log("train/loss", loss, prog_bar=True, sync_dist=True)
-            self.log("train/lr", self.optimizers().param_groups[0]["lr"], prog_bar=True)
-            
-            # Dynamic logging of model metrics
-            for k, v in metrics.items():
-                is_prog_bar = (k == "num_unique_codes")
-                self.log(f"train/{k}", v, prog_bar=is_prog_bar, sync_dist=True)
+
+            metrics_cfg = self.training_config.metrics
+            log_every = int(metrics_cfg.log_every_n_steps)
+            step = int(self.global_step) + 1
+
+            if log_every > 0 and step % log_every == 0:
+                self.log(
+                    "train/lr",
+                    self.optimizers().param_groups[0]["lr"],
+                    prog_bar=False,
+                )
+
+                # Dynamic logging of model metrics (avoid progress-bar GPU sync)
+                for k, v in metrics.items():
+                    self.log(f"train/{k}", v, prog_bar=False, sync_dist=True)
 
         # Store first batch for visualization
         if batch_idx == 0 and self.training_batch is None:

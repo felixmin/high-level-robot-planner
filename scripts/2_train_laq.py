@@ -25,7 +25,7 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 import wandb
 import lightning.pytorch as pl
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Callback, TQDMProgressBar
 
 
 from common.data_factory import create_datamodule
@@ -113,7 +113,9 @@ def main(cfg: DictConfig):
     elif cfg.data.backend == "oxe_tf":
         dataset_names = [d.name for d in cfg.data.dataset.oxe.datasets]
         logger.info(f"  - Datasets: {dataset_names}")
-        logger.info(f"  - Estimated train pairs: ~{len(datamodule.train_dataset):,}")
+        est_batches = int(len(datamodule.train_dataset))
+        est_pairs = est_batches * int(cfg.data.loader.batch_size)
+        logger.info(f"  - Estimated train batches/epoch: ~{est_batches:,} (~{est_pairs:,} pairs)")
     elif cfg.data.backend == "oxe_hf":
         dataset_names = [d.name for d in cfg.data.dataset.hf_oxe.datasets]
         logger.info(f"  - Datasets: {dataset_names}")
@@ -147,6 +149,29 @@ def main(cfg: DictConfig):
 
     callbacks = []
 
+    progress_bar_cfg = training_config.get("progress_bar")
+    if progress_bar_cfg is None:
+        raise ValueError(
+            "Missing `training.progress_bar` config. Expected:\n"
+            "training:\n"
+            "  progress_bar:\n"
+            "    enabled: true|false\n"
+            "    refresh_rate: <int>\n"
+            "    leave: true|false\n"
+        )
+    if bool(progress_bar_cfg.enabled):
+        callbacks.append(
+            TQDMProgressBar(
+                refresh_rate=int(progress_bar_cfg.refresh_rate),
+                leave=bool(progress_bar_cfg.leave),
+            )
+        )
+        logger.info("✓ Progress bar enabled")
+        logger.info(f"  - refresh_rate: {int(progress_bar_cfg.refresh_rate)}")
+        logger.info(f"  - leave: {bool(progress_bar_cfg.leave)}")
+    else:
+        logger.info("✓ Progress bar disabled")
+
     # Checkpointing (save to unified output directory)
     checkpoint_config = training_config.checkpoint
     checkpoint_dir = output_dir / "checkpoints"
@@ -174,18 +199,40 @@ def main(cfg: DictConfig):
     # Learning rate monitoring requires a Lightning logger and is added after logger setup.
 
     # Progress logging (for cluster jobs where tqdm doesn't work in log files)
-    progress_logger = ProgressLoggerCallback(log_every_n_steps=100)
-    callbacks.append(progress_logger)
-    logger.info("✓ Progress logger added (logs every 100 steps)")
+    progress_logger_cfg = training_config.get("progress_logger")
+    if progress_logger_cfg is None:
+        raise ValueError(
+            "Missing `training.progress_logger` config. Expected:\n"
+            "training:\n"
+            "  progress_logger:\n"
+            "    enabled: true|false\n"
+            "    log_every_n_steps: <int>\n"
+        )
+    if bool(progress_logger_cfg.enabled):
+        callbacks.append(
+            ProgressLoggerCallback(
+                log_every_n_steps=int(progress_logger_cfg.log_every_n_steps)
+            )
+        )
+        logger.info("✓ Progress logger added")
+        logger.info(f"  - log_every_n_steps: {int(progress_logger_cfg.log_every_n_steps)}")
 
     # Throughput logging: logs perf/steps_per_sec and perf/samples_per_sec to wandb
     perf_cfg = training_config.get("throughput")
     if perf_cfg and bool(perf_cfg.get("enabled", True)):
+        if perf_cfg.get("log_every_n_steps") is None:
+            raise ValueError(
+                "Missing `training.throughput.log_every_n_steps` config. Expected:\n"
+                "training:\n"
+                "  throughput:\n"
+                "    enabled: true\n"
+                "    log_every_n_steps: <int>\n"
+            )
         callbacks.append(
             ThroughputLoggingCallback(
                 ThroughputLoggingConfig(
                     enabled=True,
-                    log_every_n_steps=int(perf_cfg.get("log_every_n_steps", 10)),
+                    log_every_n_steps=int(perf_cfg.log_every_n_steps),
                 )
             )
         )
@@ -194,11 +241,19 @@ def main(cfg: DictConfig):
     # Dataset usage logging: print dataset mix consumed between validations.
     usage_cfg = training_config.get("dataset_usage_logger")
     if usage_cfg and bool(usage_cfg.get("enabled", True)):
+        if usage_cfg.get("log_every_n_steps") is None:
+            raise ValueError(
+                "Missing `training.dataset_usage_logger.log_every_n_steps` config. Expected:\n"
+                "training:\n"
+                "  dataset_usage_logger:\n"
+                "    enabled: true\n"
+                "    log_every_n_steps: <int>\n"
+            )
         callbacks.append(
             DatasetUsageLoggerCallback(
                 enabled=True,
                 log_on_validation_end=bool(usage_cfg.get("log_on_validation_end", True)),
-                log_every_n_steps=usage_cfg.get("log_every_n_steps"),
+                log_every_n_steps=int(usage_cfg.log_every_n_steps),
                 key=str(usage_cfg.get("key", "dataset_name")),
                 top_k=int(usage_cfg.get("top_k", 12)),
             )
@@ -324,9 +379,25 @@ def main(cfg: DictConfig):
     logger.info("=" * 80)
 
     # Get validation check interval from config
-    val_check_interval = training_config.validation.get("check_interval", 10000)
-    # Limit validation batches to save time (default: run all, set to fraction or int)
-    limit_val_batches = training_config.validation.get("limit_batches", 1.0)
+    if training_config.validation.get("check_interval") is None:
+        raise ValueError("Missing `training.validation.check_interval` config.")
+    if training_config.validation.get("limit_batches") is None:
+        raise ValueError("Missing `training.validation.limit_batches` config.")
+    val_check_interval = training_config.validation.check_interval
+    limit_val_batches = training_config.validation.limit_batches
+
+    if training_config.get("log_every_n_steps") is None:
+        raise ValueError("Missing `training.log_every_n_steps` config.")
+    log_every_n_steps = int(training_config.log_every_n_steps)
+
+    model_summary_cfg = training_config.get("model_summary")
+    if model_summary_cfg is None:
+        raise ValueError(
+            "Missing `training.model_summary` config. Expected:\n"
+            "training:\n"
+            "  model_summary:\n"
+            "    enabled: true|false\n"
+        )
 
     trainer = pl.Trainer(
         max_epochs=training_config.epochs,
@@ -341,11 +412,11 @@ def main(cfg: DictConfig):
         logger=wandb_logger if wandb_logger is not None else False,
         default_root_dir=str(output_dir),
         profiler=profiler,
-        log_every_n_steps=10,
+        log_every_n_steps=log_every_n_steps,
         val_check_interval=val_check_interval,  # Configurable validation frequency
         limit_val_batches=limit_val_batches,  # Limit validation batches
-        enable_progress_bar=bool(training_config.get("enable_progress_bar", True)),
-        enable_model_summary=bool(training_config.get("enable_model_summary", True)),
+        enable_progress_bar=bool(progress_bar_cfg.enabled),
+        enable_model_summary=bool(model_summary_cfg.enabled),
     )
 
     logger.info(f"✓ Trainer initialized")

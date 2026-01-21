@@ -1,4 +1,5 @@
 import logging
+import math
 
 """
 Open X-Embodiment (OXE) adapter for streaming RLDS datasets from GCS.
@@ -269,6 +270,10 @@ class OXEFramePairDataset(IterableDataset):
         intra_episode_sample_shuffle_buffer: int,
         image_size: int,
         return_metadata: bool,
+        is_train: bool,
+        output_batch_size: Optional[int],
+        output_action_dim: Optional[int],
+        output_state_dim: Optional[int],
         persistent_iterator: bool,  # Keep iterator alive to avoid shuffle buffer refill
         samples_per_episode: int,
         seed: Optional[int],
@@ -299,6 +304,16 @@ class OXEFramePairDataset(IterableDataset):
         self.offset = offset
         self.image_size = image_size
         self.final_stream_prefetch_buffer = final_stream_prefetch_buffer
+        self.is_train = bool(is_train)
+        self.output_batch_size = int(output_batch_size) if output_batch_size is not None else None
+        if self.output_batch_size is not None and self.output_batch_size <= 0:
+            raise ValueError("output_batch_size must be a positive integer or None")
+        self.output_action_dim = int(output_action_dim) if output_action_dim is not None else None
+        self.output_state_dim = int(output_state_dim) if output_state_dim is not None else None
+        if self.output_action_dim is not None and self.output_action_dim <= 0:
+            raise ValueError("output_action_dim must be a positive integer or None")
+        if self.output_state_dim is not None and self.output_state_dim <= 0:
+            raise ValueError("output_state_dim must be a positive integer or None")
         
         self.tfds_read_cycle_length = tfds_read_cycle_length
         self.tfds_read_block_length = tfds_read_block_length
@@ -388,14 +403,26 @@ class OXEFramePairDataset(IterableDataset):
 
     def __len__(self):
         """
-        Approximate length based on episodes * avg pairs per episode.
+        Approximate length in yielded items.
+
+        When `output_batch_size` is set, this dataset yields batches (created in
+        tf.data) and the length is in batches. When `output_batch_size` is None,
+        this dataset yields individual samples and the length is in samples.
 
         IMPORTANT: If precomputed_size is set, returns that value directly to avoid
         TensorFlow initialization. This prevents startup hangs and OOM issues when
         DataLoader workers fork before TF is initialized.
         """
         if self._precomputed_size is not None:
-            return self._precomputed_size
+            if self.output_batch_size is None:
+                return int(self._precomputed_size)
+            if self.is_train:
+                return max(
+                    1, int(self._precomputed_size) // int(self.output_batch_size)
+                )
+            return int(
+                math.ceil(float(self._precomputed_size) / float(self.output_batch_size))
+            )
         raise ValueError(
             "OXEFramePairDataset.__len__ requires precomputed_size to be provided "
             "(to avoid initializing TensorFlow/TFDS inside DataLoader workers)."
@@ -418,6 +445,8 @@ class OXEFramePairDataset(IterableDataset):
             offset = tf.constant(int(self.offset), dtype=tf.int32)
             action_dim = int(self.config.action_dim)
             state_dim = int(self.config.state_dim)
+            output_action_dim = int(self.output_action_dim) if self.output_action_dim is not None else action_dim
+            output_state_dim = int(self.output_state_dim) if self.output_state_dim is not None else state_dim
             h = int(self.image_size)
             w = int(self.image_size)
 
@@ -435,12 +464,13 @@ class OXEFramePairDataset(IterableDataset):
                 )
                 meta = {
                     "dataset_name": dataset_name,
+                    "dataset_type": dataset_name,
                     "episode_id": episode_id,
                     "frame_idx": tf.cast(idx, tf.int32),
                     "offset": offset,
                     "language": tf.constant("dummy instruction", dtype=tf.string),
-                    "action": tf.zeros((action_dim,), dtype=tf.float32),
-                    "initial_state": tf.zeros((state_dim,), dtype=tf.float32),
+                    "action": tf.zeros((output_action_dim,), dtype=tf.float32),
+                    "initial_state": tf.zeros((output_state_dim,), dtype=tf.float32),
                     "robot": robot_val,
                 }
                 return pair, meta
@@ -515,6 +545,8 @@ class OXEFramePairDataset(IterableDataset):
         dataset_name = self.config.name
         action_dim = int(self.config.action_dim)
         state_dim = int(self.config.state_dim)
+        output_action_dim = int(self.output_action_dim) if self.output_action_dim is not None else action_dim
+        output_state_dim = int(self.output_state_dim) if self.output_state_dim is not None else state_dim
         action_key = self.config.action_key
         action_is_dict = bool(self.config.action_is_dict)
         instruction_in_step = bool(self.config.instruction_in_step)
@@ -533,6 +565,13 @@ class OXEFramePairDataset(IterableDataset):
             if self.intra_episode_sample_shuffle_buffer > 1
             else 0
         )
+
+        def _pad_or_truncate_1d(vec: tf.Tensor, target_dim: int) -> tf.Tensor:
+            vec = tf.convert_to_tensor(vec)
+            vec = vec[:target_dim]
+            pad = tf.maximum(0, target_dim - tf.shape(vec)[0])
+            vec = tf.pad(vec, paddings=[[0, pad]])
+            return tf.ensure_shape(vec, [target_dim])
 
         def _strip_null_bytes(s: tf.Tensor) -> tf.Tensor:
             s = tf.convert_to_tensor(s, dtype=tf.string)
@@ -784,6 +823,10 @@ class OXEFramePairDataset(IterableDataset):
             scanned_ds = features_ds.scan(_init_state(), _scan_fn).skip(offset)
 
             def _to_pair_and_meta(pair, frame_idx, cumulative_action, initial_state, language):
+                if output_action_dim != action_dim:
+                    cumulative_action = _pad_or_truncate_1d(cumulative_action, output_action_dim)
+                if output_state_dim != state_dim:
+                    initial_state = _pad_or_truncate_1d(initial_state, output_state_dim)
                 meta = {
                     "episode_id": episode_id_tf,
                     "frame_idx": frame_idx,
@@ -820,18 +863,51 @@ class OXEFramePairDataset(IterableDataset):
             options.threading.private_threadpool_size = self.private_threadpool_size
         tf_ds = tf_ds.with_options(options)
 
-        # Prefetch for performance
-        prefetch_buffer = int(self.final_stream_prefetch_buffer)
-        if prefetch_buffer == -1:
-            return tf_ds.prefetch(tf.data.AUTOTUNE)
-        if prefetch_buffer <= 0:
-            return tf_ds
-        return tf_ds.prefetch(prefetch_buffer)
+        return tf_ds
 
     def _get_or_create_pipeline(self):
         """Get existing pipeline or create new one (lazy, persistent)."""
         if self._persistent_pipeline is None:
-            self._persistent_pipeline = self._create_tf_pipeline()
+            tf = _import_tensorflow_cpu_only()
+            tf_ds = self._create_tf_pipeline()
+
+            if (
+                self.return_metadata
+                and (self.output_action_dim is not None or self.output_state_dim is not None)
+            ):
+                out_action_dim = self.output_action_dim
+                out_state_dim = self.output_state_dim
+
+                def _pad_or_truncate_1d(vec, target_dim: int):
+                    vec = tf.convert_to_tensor(vec)
+                    vec = vec[:target_dim]
+                    pad = tf.maximum(0, target_dim - tf.shape(vec)[0])
+                    vec = tf.pad(vec, paddings=[[0, pad]])
+                    return tf.ensure_shape(vec, [target_dim])
+
+                def _pad_meta(pair, meta):
+                    meta = dict(meta)
+                    if out_action_dim is not None:
+                        meta["action"] = _pad_or_truncate_1d(meta["action"], int(out_action_dim))
+                    if out_state_dim is not None:
+                        meta["initial_state"] = _pad_or_truncate_1d(meta["initial_state"], int(out_state_dim))
+                    return pair, meta
+
+                tf_ds = tf_ds.map(_pad_meta, num_parallel_calls=tf.data.AUTOTUNE)
+
+            if self.output_batch_size is not None:
+                tf_ds = tf_ds.batch(
+                    int(self.output_batch_size),
+                    drop_remainder=bool(self.is_train),
+                )
+
+            prefetch_buffer = int(self.final_stream_prefetch_buffer)
+            if prefetch_buffer == -1:
+                tf_ds = tf_ds.prefetch(tf.data.AUTOTUNE)
+            elif prefetch_buffer > 0:
+                tf_ds = tf_ds.prefetch(prefetch_buffer)
+
+            self._persistent_pipeline = tf_ds
         return self._persistent_pipeline
 
     def cleanup(self, *, ignore_errors: bool = False) -> None:
@@ -924,43 +1000,94 @@ class OXEFramePairDataset(IterableDataset):
         for item in tf_iter:
             if self.return_metadata:
                 pair_tf, meta_tf = item
+                if self.output_batch_size is None:
+                    try:
+                        pair_pt = torch.utils.dlpack.from_dlpack(
+                            tf.experimental.dlpack.to_dlpack(pair_tf)
+                        ).permute(3, 0, 1, 2)
+                    except Exception:
+                        pair_np = pair_tf.numpy()
+                        pair_pt = torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+
+                    episode_id = _decode_str(meta_tf["episode_id"].numpy())
+                    language = _decode_str(meta_tf["language"].numpy())
+                    robot = _decode_str(meta_tf["robot"].numpy())
+                    dataset_name = (
+                        _decode_str(meta_tf["dataset_name"].numpy())
+                        if "dataset_name" in meta_tf
+                        else default_dataset_name
+                    ) or default_dataset_name
+
+                    meta = {
+                        "episode_id": episode_id,
+                        "frame_idx": int(meta_tf["frame_idx"].numpy()),
+                        "offset": offset,
+                        "language": language,
+                        "dataset_name": dataset_name,
+                        "dataset_type": dataset_name,
+                        "action": meta_tf["action"].numpy(),
+                        "initial_state": meta_tf["initial_state"].numpy(),
+                        "robot": robot,
+                    }
+                    yield {"frames": pair_pt, **meta}
+                    continue
+
+                # Batched output: convert one batched tensor instead of stacking N samples in PyTorch.
                 try:
                     pair_pt = torch.utils.dlpack.from_dlpack(
                         tf.experimental.dlpack.to_dlpack(pair_tf)
-                    ).permute(3, 0, 1, 2)
+                    ).permute(0, 4, 1, 2, 3)
                 except Exception:
                     pair_np = pair_tf.numpy()
-                    pair_pt = torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+                    pair_pt = torch.from_numpy(pair_np).permute(0, 4, 1, 2, 3)
 
-                episode_id = _decode_str(meta_tf["episode_id"].numpy())
-                language = _decode_str(meta_tf["language"].numpy())
-                robot = _decode_str(meta_tf["robot"].numpy())
-                dataset_name = (
-                    _decode_str(meta_tf["dataset_name"].numpy())
-                    if "dataset_name" in meta_tf
-                    else default_dataset_name
-                ) or default_dataset_name
+                episode_ids = [_decode_str(x) for x in meta_tf["episode_id"].numpy()]
+                frame_idxs = [int(x) for x in meta_tf["frame_idx"].numpy()]
+                languages = [_decode_str(x) for x in meta_tf["language"].numpy()]
+                robots = [_decode_str(x) for x in meta_tf["robot"].numpy()]
 
-                meta = {
-                    "episode_id": episode_id,
-                    "frame_idx": int(meta_tf["frame_idx"].numpy()),
+                if "dataset_name" in meta_tf:
+                    dataset_names = [
+                        _decode_str(x) or default_dataset_name
+                        for x in meta_tf["dataset_name"].numpy()
+                    ]
+                else:
+                    dataset_names = [default_dataset_name for _ in episode_ids]
+
+                actions_np = meta_tf["action"].numpy()
+                initial_states_np = meta_tf["initial_state"].numpy()
+                actions = [actions_np[i] for i in range(actions_np.shape[0])]
+                initial_states = [initial_states_np[i] for i in range(initial_states_np.shape[0])]
+
+                yield {
+                    "frames": pair_pt,
+                    "episode_id": episode_ids,
+                    "frame_idx": frame_idxs,
                     "offset": offset,
-                    "language": language,
-                    "dataset_name": dataset_name,
-                    "dataset_type": dataset_name,
-                    "action": meta_tf["action"].numpy(),
-                    "initial_state": meta_tf["initial_state"].numpy(),
-                    "robot": robot,
+                    "language": languages,
+                    "dataset_name": dataset_names,
+                    "dataset_type": dataset_names,
+                    "action": actions,
+                    "initial_state": initial_states,
+                    "robot": robots,
                 }
-                yield {"frames": pair_pt, **meta}
             else:
-                try:
-                    yield torch.utils.dlpack.from_dlpack(
-                        tf.experimental.dlpack.to_dlpack(item)
-                    ).permute(3, 0, 1, 2)
-                except Exception:
-                    pair_np = item.numpy()
-                    yield torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+                if self.output_batch_size is None:
+                    try:
+                        yield torch.utils.dlpack.from_dlpack(
+                            tf.experimental.dlpack.to_dlpack(item)
+                        ).permute(3, 0, 1, 2)
+                    except Exception:
+                        pair_np = item.numpy()
+                        yield torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+                else:
+                    try:
+                        yield torch.utils.dlpack.from_dlpack(
+                            tf.experimental.dlpack.to_dlpack(item)
+                        ).permute(0, 4, 1, 2, 3)
+                    except Exception:
+                        pair_np = item.numpy()
+                        yield torch.from_numpy(pair_np).permute(0, 4, 1, 2, 3)
 
 
 class MultiOXEFramePairDataset(IterableDataset):
@@ -999,6 +1126,7 @@ class MultiOXEFramePairDataset(IterableDataset):
         image_size: int,
         return_metadata: bool,
         is_train: bool,
+        output_batch_size: int,
         persistent_iterator: bool,  # Keep iterators alive to avoid shuffle buffer refill
         samples_per_episode: int,
         seed: Optional[int],
@@ -1027,6 +1155,9 @@ class MultiOXEFramePairDataset(IterableDataset):
             raise ValueError("per_dataset_stream_prefetch_buffer must be >= 0")
         self.return_metadata = return_metadata
         self.is_train = is_train
+        self.output_batch_size = int(output_batch_size)
+        if self.output_batch_size <= 0:
+            raise ValueError("output_batch_size must be a positive integer")
         self.persistent_iterator = persistent_iterator
         self.samples_per_episode = samples_per_episode
         self.seed = seed
@@ -1052,6 +1183,11 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.mixing_strategy = str(mixing_strategy)
         if self.mixing_strategy not in {"sample", "choose", "python"}:
             raise ValueError("mixing_strategy must be one of: 'sample', 'choose', 'python'")
+        if self.mixing_strategy == "python":
+            raise ValueError(
+                "mixing_strategy='python' is not supported with batched OXE output. "
+                "Use `data.adapter.tf.mixing.strategy=sample|choose`."
+            )
         self.per_dataset_private_threadpool_size = int(per_dataset_private_threadpool_size)
         
         self.tfds_read_cycle_length = tfds_read_cycle_length
@@ -1135,6 +1271,20 @@ class MultiOXEFramePairDataset(IterableDataset):
         # from blocking when it switches datasets.
         prefetch_buffer_per_ds = int(self.per_dataset_stream_prefetch_buffer)
 
+        output_action_dim = None
+        output_state_dim = None
+        if self.return_metadata:
+            max_action_dim = 0
+            max_state_dim = 0
+            for cfg, _w in kept:
+                name = str(cfg.get("name"))
+                if name not in OXE_DATASETS:
+                    raise ValueError(f"Unknown dataset in config: {name}")
+                max_action_dim = max(max_action_dim, int(OXE_DATASETS[name].action_dim))
+                max_state_dim = max(max_state_dim, int(OXE_DATASETS[name].state_dim))
+            output_action_dim = max_action_dim
+            output_state_dim = max_state_dim
+
         for cfg, _w in kept:
 
             # Get split based on train/val mode
@@ -1149,6 +1299,10 @@ class MultiOXEFramePairDataset(IterableDataset):
                 offset=int(cfg["pair_offset_steps"]),
                 final_stream_prefetch_buffer=prefetch_buffer_per_ds,
                 return_metadata=self.return_metadata,
+                is_train=bool(self.is_train),
+                output_batch_size=None,  # batch after mixing (one place)
+                output_action_dim=output_action_dim,
+                output_state_dim=output_state_dim,
                 persistent_iterator=self.persistent_iterator,
                 samples_per_episode=self.samples_per_episode,
                 seed=self._get_dataset_seed(cfg),
@@ -1260,6 +1414,8 @@ class MultiOXEFramePairDataset(IterableDataset):
                     mixed = mixed.shuffle(self.global_stream_shuffle_buffer)
                 else:
                     mixed = mixed.shuffle(self.global_stream_shuffle_buffer, seed=seed)
+
+        mixed = mixed.batch(self.output_batch_size, drop_remainder=bool(self.is_train))
 
         prefetch_buffer = int(self.final_stream_prefetch_buffer)
         if prefetch_buffer == -1:
@@ -1375,9 +1531,12 @@ class MultiOXEFramePairDataset(IterableDataset):
         return final_weights
 
     def __len__(self):
-        """Approximate total length across all datasets."""
+        """Approximate total length in yielded batches across all datasets."""
         self._init_datasets()
-        return sum(len(ds) for ds in self._datasets)
+        total_pairs = sum(len(ds) for ds in self._datasets)
+        if self.is_train:
+            return max(1, int(total_pairs) // int(self.output_batch_size))
+        return int(math.ceil(float(total_pairs) / float(self.output_batch_size)))
 
     def cleanup(self, *, ignore_errors: bool = False) -> None:
         """
@@ -1495,11 +1654,6 @@ class MultiOXEFramePairDataset(IterableDataset):
                 return val.decode("utf-8").rstrip("\x00")
             return str(val) if val else ""
 
-        # Python-level mixing: iterate individual dataset pipelines and mix in Python
-        if self.mixing_strategy == "python" and len(self._datasets or []) > 1:
-            yield from self._iter_python_mixing(tf, _decode_str)
-            return
-
         tf_iter = self._get_or_create_iterator()
 
         for item in tf_iter:
@@ -1508,33 +1662,49 @@ class MultiOXEFramePairDataset(IterableDataset):
                 try:
                     pair_pt = torch.utils.dlpack.from_dlpack(
                         tf.experimental.dlpack.to_dlpack(pair_tf)
-                    ).permute(3, 0, 1, 2)
+                    ).permute(0, 4, 1, 2, 3)
                 except Exception as e:
                     logger.error(f"dlpack tf to pytorch failed: {e}")
                     raise
                     # pair_np = pair_tf.numpy()
-                    # pair_pt = torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+                    # pair_pt = torch.from_numpy(pair_np).permute(0, 4, 1, 2, 3)
 
-                meta = {
-                    "episode_id": _decode_str(meta_tf["episode_id"].numpy()),
-                    "frame_idx": int(meta_tf["frame_idx"].numpy()),
-                    "offset": int(meta_tf["offset"].numpy()),
-                    "language": _decode_str(meta_tf["language"].numpy()),
-                    "dataset_type": _decode_str(meta_tf["dataset_type"].numpy()),
-                    "dataset_name": _decode_str(meta_tf["dataset_name"].numpy()),
-                    "action": meta_tf["action"].numpy(),
-                    "initial_state": meta_tf["initial_state"].numpy(),
-                    "robot": _decode_str(meta_tf["robot"].numpy()),
+                episode_ids = [_decode_str(x) for x in meta_tf["episode_id"].numpy()]
+                frame_idxs = [int(x) for x in meta_tf["frame_idx"].numpy()]
+
+                offsets = meta_tf["offset"].numpy()
+                offset = int(offsets[0]) if len(offsets) else 0
+
+                languages = [_decode_str(x) for x in meta_tf["language"].numpy()]
+                dataset_types = [_decode_str(x) for x in meta_tf["dataset_type"].numpy()]
+                dataset_names = [_decode_str(x) for x in meta_tf["dataset_name"].numpy()]
+                robots = [_decode_str(x) for x in meta_tf["robot"].numpy()]
+
+                actions_np = meta_tf["action"].numpy()
+                initial_states_np = meta_tf["initial_state"].numpy()
+                actions = [actions_np[i] for i in range(actions_np.shape[0])]
+                initial_states = [initial_states_np[i] for i in range(initial_states_np.shape[0])]
+
+                yield {
+                    "frames": pair_pt,
+                    "episode_id": episode_ids,
+                    "frame_idx": frame_idxs,
+                    "offset": offset,
+                    "language": languages,
+                    "dataset_type": dataset_types,
+                    "dataset_name": dataset_names,
+                    "action": actions,
+                    "initial_state": initial_states,
+                    "robot": robots,
                 }
-                yield {"frames": pair_pt, **meta}
             else:
                 try:
                     yield torch.utils.dlpack.from_dlpack(
                         tf.experimental.dlpack.to_dlpack(item)
-                    ).permute(3, 0, 1, 2)
+                    ).permute(0, 4, 1, 2, 3)
                 except Exception:
                     pair_np = item.numpy()
-                    yield torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+                    yield torch.from_numpy(pair_np).permute(0, 4, 1, 2, 3)
 
 
 def get_oxe_dataset_info(dataset_name: str = "language_table") -> Dict[str, Any]:

@@ -60,3 +60,6 @@ codebook_replace_schedule:
 #   loss_weight: 0.1     # Weight for flow loss in total loss
 #   decoder_depth: 4     # Transformer depth for flow decoder
 #   warmup_steps: 10000
+#   # Performance knobs (optional)
+#   teacher_num_flow_updates: 12  # RAFT refinement iterations (smaller = faster)
+#   teacher_chunk_size: 64        # Larger = faster, more GPU memory

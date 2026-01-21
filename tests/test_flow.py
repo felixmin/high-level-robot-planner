@@ -239,6 +239,10 @@ class TestLAQWithFlow:
         """Create training config for testing."""
         from omegaconf import OmegaConf
         return OmegaConf.create({
+            "metrics": {
+                "log_every_n_steps": 1,
+                "num_unique_codes_every_n_steps": 1,
+            },
             "optimizer": {
                 "type": "AdamW",
                 "lr": 1e-4,

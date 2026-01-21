@@ -36,6 +36,10 @@ def training_config():
     """Minimal training config for testing."""
     return OmegaConf.create({
         "max_steps": 10,
+        "metrics": {
+            "log_every_n_steps": 1,
+            "num_unique_codes_every_n_steps": 1,
+        },
         "optimizer": {
             "lr": 1e-4,
             "betas": [0.9, 0.999],

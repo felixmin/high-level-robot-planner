@@ -333,6 +333,7 @@ class TestWeightingIntegration:
             image_size=64,
             return_metadata=False,
             is_train=True,
+            output_batch_size=4,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,

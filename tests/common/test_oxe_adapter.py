@@ -117,6 +117,10 @@ class TestOXEFramePairDataset:
             intra_episode_sample_shuffle_buffer=0,
             image_size=64,  # Small for speed
             return_metadata=True,
+            is_train=True,
+            output_batch_size=4,
+            output_action_dim=None,
+            output_state_dim=None,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
@@ -151,6 +155,10 @@ class TestOXEFramePairDataset:
             intra_episode_sample_shuffle_buffer=10,
             image_size=64,
             return_metadata=True,
+            is_train=True,
+            output_batch_size=4,
+            output_action_dim=None,
+            output_state_dim=None,
             samples_per_episode=1,
             seed=123,
             persistent_iterator=True,
@@ -175,9 +183,11 @@ class TestOXEFramePairDataset:
         count = 0
         for item in small_dataset:
             assert "frames" in item
-            assert item["frames"].shape == (3, 2, 64, 64)
+            assert item["frames"].shape == (4, 3, 2, 64, 64)
             assert "action" in item
             assert "initial_state" in item
+            assert isinstance(item["episode_id"], list) and len(item["episode_id"]) == 4
+            assert isinstance(item["dataset_name"], list) and len(item["dataset_name"]) == 4
             count += 1
             if count >= 5:
                 break
@@ -225,16 +235,20 @@ class TestOXEFramePairDataset:
             assert "offset" in item
             # dataset_type now matches dataset_name (not generic "oxe")
             assert "dataset_type" in item
-            assert item["dataset_type"] == "language_table"
             assert "dataset_name" in item
-            assert item["dataset_name"] == "language_table"
+            assert isinstance(item["dataset_type"], list)
+            assert isinstance(item["dataset_name"], list)
+            assert set(item["dataset_type"]) == {"language_table"}
+            assert set(item["dataset_name"]) == {"language_table"}
             # language replaces instruction
             assert "language" in item
 
-            # Check action and state are numpy arrays (Phase 2c optimization: keep as numpy)
+            # Check action and state are numpy arrays per-sample (kept on CPU)
             import numpy as np
-            assert isinstance(item["action"], np.ndarray), f"Expected numpy array, got {type(item['action'])}"
-            assert isinstance(item["initial_state"], np.ndarray), f"Expected numpy array, got {type(item['initial_state'])}"
+            assert isinstance(item["action"], list) and len(item["action"]) == 4
+            assert isinstance(item["initial_state"], list) and len(item["initial_state"]) == 4
+            assert all(isinstance(x, np.ndarray) for x in item["action"])
+            assert all(isinstance(x, np.ndarray) for x in item["initial_state"])
             break
 
         print("✓ Metadata correctly extracted")
@@ -243,10 +257,11 @@ class TestOXEFramePairDataset:
         """Test that per-episode sampling yields unique episodes within a short window."""
         episode_ids = []
         for item in one_sample_per_episode_dataset:
-            episode_ids.append(item["episode_id"])
+            episode_ids.extend(item["episode_id"])
             if len(episode_ids) >= 10:
                 break
 
+        episode_ids = episode_ids[:10]
         assert len(episode_ids) == 10
         assert len(set(episode_ids)) == 10, "Expected unique episode_id when sampling 1 per episode"
         print("✓ One-sample-per-episode mode yields unique episodes")
@@ -287,6 +302,7 @@ class TestMultiOXEFramePairDataset:
             global_stream_shuffle_buffer=10,
             return_metadata=True,
             is_train=True,
+            output_batch_size=4,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
@@ -314,7 +330,9 @@ class TestMultiOXEFramePairDataset:
         count = 0
 
         for item in multi_dataset:
-            dataset_names.add(item.get("dataset_name", "unknown"))
+            assert isinstance(item, dict)
+            assert isinstance(item.get("dataset_name"), list)
+            dataset_names.update(item["dataset_name"])
             count += 1
             if count >= 20:
                 break
@@ -354,6 +372,7 @@ class TestMultiOXEFramePairDataset:
             global_stream_shuffle_buffer=10,
             return_metadata=False,
             is_train=True,
+            output_batch_size=4,
             samples_per_episode=1,
             seed=123,
             persistent_iterator=True,
@@ -401,6 +420,10 @@ class TestMemoryStability:
             intra_episode_sample_shuffle_buffer=0,
             image_size=64,
             return_metadata=False,
+            is_train=True,
+            output_batch_size=4,
+            output_action_dim=None,
+            output_state_dim=None,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
@@ -461,6 +484,7 @@ class TestMemoryStability:
             global_stream_shuffle_buffer=10,
             return_metadata=False,
             is_train=True,
+            output_batch_size=4,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
@@ -518,6 +542,10 @@ class TestRT1Dataset:
             intra_episode_sample_shuffle_buffer=0,
             image_size=64,
             return_metadata=True,
+            is_train=True,
+            output_batch_size=4,
+            output_action_dim=None,
+            output_state_dim=None,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
@@ -542,7 +570,7 @@ class TestRT1Dataset:
         count = 0
         for item in rt1_dataset:
             assert "frames" in item
-            assert item["frames"].shape == (3, 2, 64, 64)
+            assert item["frames"].shape == (4, 3, 2, 64, 64)
             assert "action" in item
             assert "initial_state" in item
             count += 1
@@ -556,18 +584,21 @@ class TestRT1Dataset:
         """Test that RT-1 metadata is correctly extracted."""
         for item in rt1_dataset:
             # Check required metadata
-            assert item["dataset_type"] == "rt1"
-            assert item["dataset_name"] == "rt1"
+            assert isinstance(item["dataset_type"], list) and set(item["dataset_type"]) == {"rt1"}
+            assert isinstance(item["dataset_name"], list) and set(item["dataset_name"]) == {"rt1"}
 
             # RT-1 has string instructions like "pick apple from white bowl"
             assert "language" in item
-            assert isinstance(item["language"], str)
+            assert isinstance(item["language"], list)
+            assert all(isinstance(x, str) for x in item["language"])
 
             # Action should be 3D (world_vector)
-            assert len(item["action"]) == 3, f"Expected 3D action, got {len(item['action'])}"
+            assert isinstance(item["action"], list) and len(item["action"]) == 4
+            assert len(item["action"][0]) == 3
 
             # State should be 3D (first 3 dims of base_pose_tool_reached)
-            assert len(item["initial_state"]) == 3, f"Expected 3D state, got {len(item['initial_state'])}"
+            assert isinstance(item["initial_state"], list) and len(item["initial_state"]) == 4
+            assert len(item["initial_state"][0]) == 3
 
             # Robot field should be empty for RT-1 (no robot metadata)
             assert "robot" in item
@@ -593,6 +624,10 @@ class TestRoboNetDataset:
             intra_episode_sample_shuffle_buffer=0,
             image_size=64,
             return_metadata=True,
+            is_train=True,
+            output_batch_size=4,
+            output_action_dim=None,
+            output_state_dim=None,
             persistent_iterator=True,
             samples_per_episode=0,
             seed=123,
@@ -617,7 +652,7 @@ class TestRoboNetDataset:
         count = 0
         for item in robonet_dataset:
             assert "frames" in item
-            assert item["frames"].shape == (3, 2, 64, 64)
+            assert item["frames"].shape == (4, 3, 2, 64, 64)
             assert "action" in item
             assert "initial_state" in item
             count += 1
@@ -631,26 +666,28 @@ class TestRoboNetDataset:
         """Test that RoboNet metadata is correctly extracted."""
         for item in robonet_dataset:
             # Check required metadata
-            assert item["dataset_type"] == "robonet"
-            assert item["dataset_name"] == "robonet"
+            assert isinstance(item["dataset_type"], list) and set(item["dataset_type"]) == {"robonet"}
+            assert isinstance(item["dataset_name"], list) and set(item["dataset_name"]) == {"robonet"}
 
             # RoboNet has step-level instructions like "Interact with the objects in the bin"
             assert "language" in item
-            assert isinstance(item["language"], str)
+            assert isinstance(item["language"], list)
+            assert all(isinstance(x, str) for x in item["language"])
 
             # Action should be 3D (first 3 dims of 5D action)
-            assert len(item["action"]) == 3, f"Expected 3D action, got {len(item['action'])}"
+            assert isinstance(item["action"], list) and len(item["action"]) == 4
+            assert len(item["action"][0]) == 3
 
             # State should be 3D (first 3 dims of 5D state)
-            assert len(item["initial_state"]) == 3, f"Expected 3D state, got {len(item['initial_state'])}"
+            assert isinstance(item["initial_state"], list) and len(item["initial_state"]) == 4
+            assert len(item["initial_state"][0]) == 3
 
             # Robot field should contain robot type
             assert "robot" in item
-            assert isinstance(item["robot"], str)
+            assert isinstance(item["robot"], list) and len(item["robot"]) == 4
             # Valid robot types: widowx, franka, baxter, sawyer
-            if item["robot"]:  # May be empty in some cases
-                assert item["robot"] in ["widowx", "franka", "baxter", "sawyer"], \
-                    f"Unexpected robot type: {item['robot']}"
+            valid_robots = {"widowx", "franka", "baxter", "sawyer", ""}
+            assert set(item["robot"]).issubset(valid_robots)
             break
 
         print("RoboNet: Metadata correctly extracted")
@@ -661,8 +698,9 @@ class TestRoboNetDataset:
         count = 0
 
         for item in robonet_dataset:
-            if item["robot"]:
-                robot_types.add(item["robot"])
+            for robot in item["robot"]:
+                if robot:
+                    robot_types.add(robot)
             count += 1
             if count >= 50 or len(robot_types) >= 3:
                 break

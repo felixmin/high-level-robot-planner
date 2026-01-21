@@ -187,6 +187,7 @@ class TestLAQWithDINO:
             heads=4,
             dim_head=32,
             code_seq_len=4,
+            metrics_num_unique_codes_every_n_steps=1,
             use_dinov3_encoder=True,
             dinov3_model_name=dino_model_name,
         ).to(device)

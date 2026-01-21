@@ -32,12 +32,14 @@ class FlowConfig:
     """Configuration for flow supervision.
 
     All fields are required when flow supervision is enabled.
-    No defaults - caller must explicitly configure.
     """
     model: FlowModelType
     loss_weight: float
     decoder_depth: int
     warmup_steps: int = 0  # Steps to linearly ramp up flow loss (0 = no warmup)
+    # RAFT teacher performance knobs
+    teacher_num_flow_updates: int = 12  # RAFT refinement iterations (smaller = faster)
+    teacher_chunk_size: int = 64  # Teacher batch chunking (larger = faster, more memory)
 
     def __post_init__(self):
         if self.model not in ("raft_small", "raft_large"):
@@ -48,6 +50,12 @@ class FlowConfig:
             raise ValueError(f"flow.decoder_depth must be positive, got {self.decoder_depth}")
         if self.warmup_steps < 0:
             raise ValueError(f"flow.warmup_steps must be non-negative, got {self.warmup_steps}")
+        if self.teacher_num_flow_updates <= 0:
+            raise ValueError(
+                f"flow.teacher_num_flow_updates must be positive, got {self.teacher_num_flow_updates}"
+            )
+        if self.teacher_chunk_size <= 0:
+            raise ValueError(f"flow.teacher_chunk_size must be positive, got {self.teacher_chunk_size}")
 
     def get_weight(self, step: int) -> float:
         """Get effective loss weight at given training step.
@@ -65,47 +73,67 @@ class RAFTTeacher(nn.Module):
     """
     Frozen RAFT optical flow model for ground-truth generation.
 
-    Not registered as a submodule to avoid checkpoint pollution.
-    Weights are always loaded fresh from torchvision on first use.
+    Lazily loads torchvision's RAFT model on first use.
+    The RAFT model is intentionally not registered as a submodule to avoid
+    checkpoint/state_dict pollution and unnecessary traversal overhead.
 
-    Uses official transforms for proper input normalization.
+    Input normalization matches torchvision's RAFT weights preset:
+    map image pixels from [0, 1] to [-1, 1].
     """
 
-    def __init__(self, model_name: FlowModelType, chunk_size: int = 64):
+    def __init__(
+        self,
+        model_name: FlowModelType,
+        chunk_size: int = 64,
+        num_flow_updates: int = 12,
+    ):
         super().__init__()
         self._model_name = model_name
         self._chunk_size = chunk_size
+        self._num_flow_updates = num_flow_updates
 
-        from torchvision.models.optical_flow import (
-            raft_small, raft_large,
-            Raft_Small_Weights, Raft_Large_Weights
-        )
+        # Intentionally kept out of nn.Module registration; see docstring.
+        self._model_device: Optional[torch.device] = None
+        self.__dict__["_model"] = None
 
-        if self._model_name == "raft_small":
-            weights = Raft_Small_Weights.DEFAULT
-            model = raft_small(weights=weights)
-            logger.info("Loaded RAFT-Small optical flow teacher")
-        else:
-            weights = Raft_Large_Weights.DEFAULT
-            model = raft_large(weights=weights)
-            logger.info("Loaded RAFT-Large optical flow teacher")
+    def _ensure_loaded(self, device: torch.device) -> nn.Module:
+        model = self.__dict__.get("_model", None)
+        if model is None:
+            from torchvision.models.optical_flow import (
+                raft_small, raft_large,
+                Raft_Small_Weights, Raft_Large_Weights,
+            )
 
-        # Store official transforms for proper normalization
-        # Registered as submodule so it moves to device automatically
-        self._transforms = weights.transforms()
+            if self._model_name == "raft_small":
+                weights = Raft_Small_Weights.DEFAULT
+                model = raft_small(weights=weights)
+                logger.info("Loaded RAFT-Small optical flow teacher")
+            else:
+                weights = Raft_Large_Weights.DEFAULT
+                model = raft_large(weights=weights)
+                logger.info("Loaded RAFT-Large optical flow teacher")
 
-        model.eval()
-        for p in model.parameters():
-            p.requires_grad = False
-        
-        # Registered as submodule so it moves to device automatically
-        self._model = model
+            model.eval()
+            for p in model.parameters():
+                p.requires_grad = False
 
-    @torch.no_grad()
+            # Avoid registering as a submodule.
+            self.__dict__["_model"] = model
+
+        if self._model_device != device:
+            model = model.to(device)
+            self.__dict__["_model"] = model
+            self._model_device = device
+
+        return model
+
+    @torch.inference_mode()
     def compute_flow(
         self,
         frame1: torch.Tensor,
         frame2: torch.Tensor,
+        *,
+        num_flow_updates: Optional[int] = None,
     ) -> torch.Tensor:
         """
         Compute optical flow between two frames.
@@ -113,17 +141,16 @@ class RAFTTeacher(nn.Module):
         Args:
             frame1: First frame [B, C, 1, H, W] in [0, 1] range
             frame2: Second frame [B, C, 1, H, W] in [0, 1] range
+            num_flow_updates: Optional RAFT refinement iterations override
 
         Returns:
             flow: Optical flow field [B, 2, H, W] (dx, dy per pixel)
         """
+        model = self._ensure_loaded(frame1.device)
+
         # Remove time dimension: [B, C, 1, H, W] -> [B, C, H, W]
         img1 = frame1.squeeze(2)
         img2 = frame2.squeeze(2)
-
-        # Scale to [0, 255] range and convert to uint8 for transforms
-        img1 = (img1 * 255.0).clamp(0, 255).to(torch.uint8)
-        img2 = (img2 * 255.0).clamp(0, 255).to(torch.uint8)
 
         # Run RAFT teacher in full precision to avoid AMP-related cuDNN/grid_sample issues
         # (this also overrides any outer autocast context, e.g. from Lightning AMP).
@@ -144,14 +171,16 @@ class RAFTTeacher(nn.Module):
                 img1_chunk = img1[start:end]
                 img2_chunk = img2[start:end]
 
-                # Apply official RAFT transforms (handles normalization)
-                img1_t, img2_t = self._transforms(img1_chunk, img2_chunk)
-                img1_t = img1_t.contiguous()
-                img2_t = img2_t.contiguous()
+                # Normalize like torchvision.transforms._presets.OpticalFlow:
+                # - Ensure float32
+                # - map [0, 1] -> [-1, 1]
+                img1_t = img1_chunk.to(dtype=torch.float32).mul(2.0).sub(1.0).contiguous()
+                img2_t = img2_chunk.to(dtype=torch.float32).mul(2.0).sub(1.0).contiguous()
 
                 # RAFT returns list of flow predictions at different refinement levels
                 # Take the last (most refined) prediction
-                flow_predictions = self._model(img1_t, img2_t)
+                updates = self._num_flow_updates if num_flow_updates is None else num_flow_updates
+                flow_predictions = model(img1_t, img2_t, num_flow_updates=updates)
                 flow_chunks.append(flow_predictions[-1].float())
 
         return torch.cat(flow_chunks, dim=0)
@@ -302,8 +331,7 @@ def compute_flow_loss(
         _, _, H, W = gt_flow.shape
 
         # Create normalization tensor [1, 2, 1, 1] for broadcasting
-        norm = torch.tensor([W, H], device=gt_flow.device, dtype=gt_flow.dtype)
-        norm = norm.view(1, 2, 1, 1)
+        norm = gt_flow.new_tensor([W, H]).view(1, 2, 1, 1)
 
         pred_flow = pred_flow / norm
         gt_flow = gt_flow / norm

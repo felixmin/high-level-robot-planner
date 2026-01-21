@@ -1048,6 +1048,10 @@ class OXEDataModule(pl.LightningDataModule):
                 intra_episode_sample_shuffle_buffer=int(tf_train["intra_episode_sample_shuffle_buffer"]),
                 image_size=image_size,
                 return_metadata=return_metadata,
+                is_train=True,
+                output_batch_size=int(self.loader["batch_size"]),
+                output_action_dim=None,
+                output_state_dim=None,
                 persistent_iterator=persistent_iterator,
                 samples_per_episode=samples_per_episode,
                 seed=seed,
@@ -1073,6 +1077,10 @@ class OXEDataModule(pl.LightningDataModule):
                 intra_episode_sample_shuffle_buffer=int(tf_val["intra_episode_sample_shuffle_buffer"]),
                 image_size=image_size,
                 return_metadata=return_metadata,
+                is_train=False,
+                output_batch_size=int(self.loader["batch_size"]),
+                output_action_dim=None,
+                output_state_dim=None,
                 persistent_iterator=persistent_iterator,
                 samples_per_episode=samples_per_episode,
                 seed=seed,
@@ -1101,6 +1109,7 @@ class OXEDataModule(pl.LightningDataModule):
                 image_size=image_size,
                 return_metadata=return_metadata,
                 is_train=True,
+                output_batch_size=int(self.loader["batch_size"]),
                 persistent_iterator=persistent_iterator,
                 samples_per_episode=samples_per_episode,
                 seed=seed,
@@ -1129,6 +1138,7 @@ class OXEDataModule(pl.LightningDataModule):
                 image_size=image_size,
                 return_metadata=return_metadata,
                 is_train=False,
+                output_batch_size=int(self.loader["batch_size"]),
                 persistent_iterator=persistent_iterator,
                 samples_per_episode=samples_per_episode,
                 seed=seed,
@@ -1154,10 +1164,10 @@ class OXEDataModule(pl.LightningDataModule):
         """Create training dataloader."""
         return DataLoader(
             self.train_dataset,
-            batch_size=int(self.loader["batch_size"]),
+            batch_size=None,  # batching happens in tf.data for OXE
             num_workers=int(self.loader["num_workers"]),
             pin_memory=bool(self.loader["pin_memory"]),
-            collate_fn=oxe_collate_fn if bool(self.preprocess["return_metadata"]) else None,
+            collate_fn=None,
             # Note: shuffle=False because IterableDataset handles shuffling internally
         )
 
@@ -1165,10 +1175,10 @@ class OXEDataModule(pl.LightningDataModule):
         """Create validation dataloader."""
         return DataLoader(
             self.val_dataset,
-            batch_size=int(self.loader["batch_size"]),
+            batch_size=None,  # batching happens in tf.data for OXE
             num_workers=int(self.loader["num_workers"]),
             pin_memory=bool(self.loader["pin_memory"]),
-            collate_fn=oxe_collate_fn if bool(self.preprocess["return_metadata"]) else None,
+            collate_fn=None,
         )
 
     def teardown(self, stage: Optional[str] = None) -> None:

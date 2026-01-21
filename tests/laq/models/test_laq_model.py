@@ -23,6 +23,7 @@ def laq_model_config(device):
         'dim_head': 32,
         'heads': 4,
         'code_seq_len': 4,
+        'metrics_num_unique_codes_every_n_steps': 1,
         'device': device,
     }
 

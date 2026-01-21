@@ -96,8 +96,12 @@ data:
 training:
   epochs: 1
   max_steps: 5
-  enable_progress_bar: false
-  enable_model_summary: false
+  progress_bar:
+    enabled: false
+    refresh_rate: 10
+    leave: false
+  model_summary:
+    enabled: false
   scheduler:
     type: none
   profiler:
