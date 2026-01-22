@@ -32,6 +32,15 @@ latent_ablation: none
 use_dino_decoder: true  # Predict next frame's encoder tokens (DINO or pixel-projected)
 use_pixel_decoder: false # Predict next frame's pixels with gradients to encoder
 
+flow:
+  enabled: true
+  model: raft_small    # "raft_small" or "raft_large"
+  loss_weight: 0.1     # Weight for flow loss in total loss
+  decoder_depth: 2     # Transformer depth for flow decoder
+  warmup_steps: 10000
+  teacher_num_flow_updates: 6
+  teacher_chunk_size: 64
+
 # Interpretability decoder (optional, for visualization only)
 use_aux_decoder: true   # Predict pixels for visualization (gradients detached from encoder)
 

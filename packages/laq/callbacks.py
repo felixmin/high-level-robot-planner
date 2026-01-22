@@ -280,11 +280,6 @@ class ValidationStrategyCallback(Callback):
                     print(f"Warning: Strategy {strategy.name} failed: {e}")
                 continue
 
-            # Run on each bucket
-            # If only one bucket is assigned, don't suffix the metric with the bucket name
-            # (The strategy name itself, e.g. "transfer_bridge", provides enough context)
-            use_bucket_suffix = len(bucket_names) > 1
-
             for bucket_name in bucket_names:
                 if bucket_name not in self.bucket_caches:
                     print(f"⚠️ Bucket '{bucket_name}' not found for {strategy.name}")
@@ -298,8 +293,12 @@ class ValidationStrategyCallback(Callback):
                     if len(bucket_names) == 1:
                         print(f"⚠️ Skipping {strategy.name} on {bucket_name}: {reason}")
                     continue
-                
-                suffix = f"_{bucket_name}" if use_bucket_suffix else ""
+
+                # Always suffix bucket-bound metrics/images with bucket name to avoid
+                # collisions between different per-bucket strategy instances.
+                suffix = f"_{bucket_name}"
+                if getattr(cache, "is_holdout", False):
+                    suffix += "_holdout"
                 
                 try:
                     strategy.run(cache, pl_module, trainer, metric_suffix=suffix)

@@ -457,7 +457,7 @@ def main():
             container_image=container_image,
             job_name=job_name,
             container_mounts=container_mounts,
-            slurm_logs_dir=job_runs_dir,  # Slurm logs go in job's run dir
+            slurm_logs_dir=job_runs_dir,
             cache_dir=cache_dir,
             hf_token_path=hf_token_path,
         )

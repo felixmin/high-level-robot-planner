@@ -16,7 +16,7 @@ import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import lightning.pytorch as pl
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from laq.models.latent_action_quantization import LatentActionQuantization
 from laq.models.flow import FlowConfig
@@ -250,7 +250,12 @@ class LAQTask(pl.LightningModule):
             frames = batch
 
         # Forward pass - model returns (loss, metrics_dict)
-        loss, metrics = self.model(frames, step=self.global_step)
+        #
+        # IMPORTANT: Keep the model's notion of "step" aligned with Lightning logging
+        # cadence (which is typically (global_step + 1) % N == 0). The LAQ model's
+        # codebook replacement schedule is step-modulo based, so an off-by-one here
+        # can cause replacement stats to never coincide with logged steps.
+        loss, metrics = self.model(frames, step=int(self.global_step) + 1)
 
         # Log metrics (skip if no trainer attached, e.g., in unit tests)
         if self._trainer is not None:
@@ -431,6 +436,14 @@ class LAQTask(pl.LightningModule):
         opt_config = self.training_config.optimizer
         sched_config = self.training_config.scheduler
 
+        # Check for common configuration error: passing a list for LR without multirun
+        if isinstance(opt_config.lr, (list, ListConfig)):
+            raise ValueError(
+                f"Optimizer 'lr' is a list ({opt_config.lr}). "
+                "If you intended to run a hyperparameter sweep, make sure to add "
+                "'-m' or '--multirun' to your command line arguments."
+            )
+
         # Separate parameters for weight decay
         all_params = list(self.model.parameters())
         wd_params, no_wd_params = separate_weight_decayable_params(all_params)
@@ -475,9 +488,7 @@ class LAQTask(pl.LightningModule):
                 start_factor = warmup_start_lr / base_lr if base_lr > 0 else 1.0
                 # LinearLR expects multiplicative factor; clamp to avoid negative/zero.
                 start_factor = max(1e-8, start_factor)
-                # Ensure the very first optimizer step uses the warmup-start LR.
-                for param_group in optimizer.param_groups:
-                    param_group["lr"] = base_lr * start_factor
+                
                 warmup = LinearLR(
                     optimizer,
                     start_factor=start_factor,

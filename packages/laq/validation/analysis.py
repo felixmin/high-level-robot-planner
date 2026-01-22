@@ -139,6 +139,7 @@ class LatentTransferStrategy(ValidationStrategy):
                 target_indices[:4].cpu(),
                 wandb_logger,
                 trainer.global_step,
+                metric_suffix=metric_suffix,
             )
 
         return metrics
@@ -153,6 +154,7 @@ class LatentTransferStrategy(ValidationStrategy):
         target_indices: torch.Tensor,
         wandb_logger,
         global_step: int,
+        metric_suffix: str = "",
     ):
         """
         Visualize latent transfer results with true reconstruction comparison.
@@ -228,7 +230,7 @@ class LatentTransferStrategy(ValidationStrategy):
         img = Image.open(buf)
         
         wandb_logger.log_image(
-            key="val/latent_transfer",
+            key=f"val/latent_transfer{metric_suffix}",
             images=[img],
             caption=[f"Step {global_step}"],
         )
@@ -302,7 +304,7 @@ class CodebookHistogramStrategy(ValidationStrategy):
         # Create histogram visualization
         wandb_logger = self._get_wandb_logger(trainer)
         if wandb_logger is not None:
-            self._create_histogram(counts, wandb_logger, trainer.global_step, codebook_size)
+            self._create_histogram(counts, wandb_logger, trainer.global_step, codebook_size, metric_suffix=metric_suffix)
 
         return metrics
 
@@ -312,6 +314,7 @@ class CodebookHistogramStrategy(ValidationStrategy):
         wandb_logger,
         global_step: int,
         codebook_size: int,
+        metric_suffix: str = "",
     ):
         """Create and log histogram of codebook usage."""
         try:
@@ -338,7 +341,7 @@ class CodebookHistogramStrategy(ValidationStrategy):
             img = Image.open(buf)
 
             wandb_logger.log_image(
-                key="val/codebook_histogram",
+                key=f"val/codebook_histogram{metric_suffix}",
                 images=[img],
                 caption=[f"Step {global_step}"],
             )
@@ -417,7 +420,7 @@ class LatentSequenceHistogramStrategy(ValidationStrategy):
         # Visualize
         wandb_logger = self._get_wandb_logger(trainer)
         if wandb_logger is not None:
-            self._create_histogram(counter, wandb_logger, trainer.global_step)
+            self._create_histogram(counter, wandb_logger, trainer.global_step, metric_suffix=metric_suffix)
 
         return metrics
 
@@ -426,6 +429,7 @@ class LatentSequenceHistogramStrategy(ValidationStrategy):
         counter,
         wandb_logger,
         global_step: int,
+        metric_suffix: str = "",
     ):
         """Create and log histogram of top sequence usage."""
         try:
@@ -457,7 +461,7 @@ class LatentSequenceHistogramStrategy(ValidationStrategy):
             img = Image.open(buf)
 
             wandb_logger.log_image(
-                key="val/sequence_histogram",
+                key=f"val/sequence_histogram{metric_suffix}",
                 images=[img],
                 caption=[f"Step {global_step}: Distribution of top {len(values)} sequences"],
             )
@@ -563,7 +567,7 @@ class AllSequencesHistogramStrategy(ValidationStrategy):
             img = Image.open(buf)
 
             wandb_logger.log_image(
-                key="val/all_sequences_histogram",
+                key=f"val/all_sequences_histogram{metric_suffix}",
                 images=[img],
                 caption=[f"Step {global_step}: Long tail distribution (log scale)"],
             )
@@ -657,6 +661,7 @@ class CodebookEmbeddingStrategy(ValidationStrategy):
                 wandb_logger,
                 trainer.global_step,
                 num_embeddings,
+                metric_suffix=metric_suffix,
             )
 
         return metrics
@@ -736,6 +741,7 @@ class CodebookEmbeddingStrategy(ValidationStrategy):
         wandb_logger,
         global_step: int,
         num_embeddings: int,
+        metric_suffix: str = "",
     ):
         """Create and log scatter plot of codebook embeddings."""
         import numpy as np
@@ -778,7 +784,7 @@ class CodebookEmbeddingStrategy(ValidationStrategy):
             img = Image.open(buf)
 
             wandb_logger.log_image(
-                key="val/codebook_embedding",
+                key=f"val/codebook_embedding{metric_suffix}",
                 images=[img],
                 caption=[
                     f"Step {global_step}: {self.method.upper()} of {num_embeddings} codebook vectors, "
@@ -967,7 +973,7 @@ class SequenceExamplesStrategy(ValidationStrategy):
             img = Image.open(buf)
 
             wandb_logger.log_image(
-                key="val/sequence_examples",
+                key=f"val/sequence_examples{metric_suffix}",
                 images=[img],
                 caption=[
                     f"Step {global_step}: Frame pairs grouped by exact code sequence"

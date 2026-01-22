@@ -289,6 +289,9 @@ class OXEFramePairDataset(IterableDataset):
         pipeline_transform_parallelism: int,
         pipeline_interleave_parallelism: int,
         private_threadpool_size: int,  # 0 = use shared global threadpool
+        pair_frames_mode: str = "endpoints",
+        pair_frames_stride: int = 1,
+        pair_frames_n: int = 2,
     ):
         super().__init__()
 
@@ -301,7 +304,9 @@ class OXEFramePairDataset(IterableDataset):
         self.config = OXE_DATASETS.get(dataset_name)
 
         self.split = split
-        self.offset = offset
+        self.offset = int(offset)
+        if self.offset <= 0:
+            raise ValueError("offset must be a positive integer (>= 1)")
         self.image_size = image_size
         self.final_stream_prefetch_buffer = final_stream_prefetch_buffer
         self.is_train = bool(is_train)
@@ -339,6 +344,18 @@ class OXEFramePairDataset(IterableDataset):
         self.episode_queue_shuffle_buffer = int(episode_queue_shuffle_buffer)
         self.intra_episode_sample_shuffle_buffer = int(intra_episode_sample_shuffle_buffer)
 
+        self.pair_frames_mode = str(pair_frames_mode)
+        if self.pair_frames_mode not in {"endpoints", "all", "stride", "fixed_n"}:
+            raise ValueError(
+                "pair_frames_mode must be one of: 'endpoints', 'all', 'stride', 'fixed_n'"
+            )
+        self.pair_frames_stride = int(pair_frames_stride)
+        if self.pair_frames_stride <= 0:
+            raise ValueError("pair_frames_stride must be a positive integer (>= 1)")
+        self.pair_frames_n = int(pair_frames_n)
+        if self.pair_frames_mode == "fixed_n" and self.pair_frames_n < 2:
+            raise ValueError("pair_frames_n must be >= 2 when pair_frames_mode='fixed_n'")
+
         # Lazy initialization of tf.data pipeline
         self._builder = None
         self._num_episodes = None
@@ -348,6 +365,50 @@ class OXEFramePairDataset(IterableDataset):
         self._pipeline_iterator = None
         # Idempotency flag for cleanup
         self._cleaned_up = False
+
+    def _compute_pair_frame_indices(self, offset: int) -> list[int]:
+        """
+        Compute (Python-side) step indices in [0, offset] to include in the output.
+
+        Contract:
+        - indices[0] == 0
+        - indices[-1] == offset
+        - len(indices) >= 2 when offset > 0
+        - non-decreasing order (duplicates allowed)
+        """
+        offset = int(offset)
+        if offset <= 0:
+            raise ValueError("offset must be >= 1 to form frame pairs")
+
+        mode = str(self.pair_frames_mode)
+        if mode == "endpoints":
+            return [0, offset]
+        if mode == "all":
+            return list(range(0, offset + 1))
+        if mode == "stride":
+            stride = int(self.pair_frames_stride)
+            if stride <= 0:
+                raise ValueError("pair_frames_stride must be >= 1")
+            idxs = list(range(0, offset + 1, stride))
+            if not idxs or idxs[0] != 0:
+                idxs = [0] + idxs
+            if idxs[-1] != offset:
+                idxs.append(offset)
+            return idxs
+        if mode == "fixed_n":
+            n = int(self.pair_frames_n)
+            if n < 2:
+                raise ValueError("pair_frames_n must be >= 2 when pair_frames_mode='fixed_n'")
+            idxs = np.rint(np.linspace(0, offset, num=n)).astype(np.int32).tolist()
+            if not idxs:
+                idxs = [0, offset]
+            idxs[0] = 0
+            idxs[-1] = offset
+            idxs = [int(min(offset, max(0, x))) for x in idxs]
+            idxs.sort()
+            return idxs
+
+        raise ValueError(f"Unknown pair_frames_mode: {mode}")
 
     def _init_rng_for_worker(self) -> None:
         """
@@ -443,6 +504,8 @@ class OXEFramePairDataset(IterableDataset):
         if self.debug_use_synthetic_data:
             dataset_name = tf.constant(self.config.name, dtype=tf.string)
             offset = tf.constant(int(self.offset), dtype=tf.int32)
+            pair_frame_indices = self._compute_pair_frame_indices(int(self.offset))
+            num_frames = int(len(pair_frame_indices))
             action_dim = int(self.config.action_dim)
             state_dim = int(self.config.state_dim)
             output_action_dim = int(self.output_action_dim) if self.output_action_dim is not None else action_dim
@@ -455,7 +518,7 @@ class OXEFramePairDataset(IterableDataset):
             )
 
             def _make(idx: tf.Tensor):
-                pair = tf.zeros((2, h, w, 3), dtype=tf.uint8)
+                pair = tf.zeros((num_frames, h, w, 3), dtype=tf.uint8)
                 if not self.return_metadata:
                     return pair
 
@@ -543,6 +606,9 @@ class OXEFramePairDataset(IterableDataset):
         image_size = int(self.image_size)
         return_metadata = bool(self.return_metadata)
         dataset_name = self.config.name
+        pair_frames_mode = str(self.pair_frames_mode)
+        pair_frame_indices = self._compute_pair_frame_indices(offset)
+        pair_num_frames = int(len(pair_frame_indices))
         action_dim = int(self.config.action_dim)
         state_dim = int(self.config.state_dim)
         output_action_dim = int(self.output_action_dim) if self.output_action_dim is not None else action_dim
@@ -555,6 +621,8 @@ class OXEFramePairDataset(IterableDataset):
 
         offset_tf = tf.constant(offset, dtype=tf.int32)
         dataset_name_tf = tf.constant(dataset_name, dtype=tf.string)
+        pair_frame_indices_tf = tf.constant(pair_frame_indices, dtype=tf.int32)
+        pair_frame_prefix_indices_tf = tf.constant(pair_frame_indices[:-1], dtype=tf.int32)
         # When `intra_episode_sample_shuffle_buffer` is 0, users expect "no shuffling"
         # rather than a hidden, large per-episode shuffle buffer (which can be very
         # expensive when `samples_per_episode` is small).
@@ -641,18 +709,19 @@ class OXEFramePairDataset(IterableDataset):
                 # is much cheaper and avoids decoding/resizing unnecessary frames.
                 if samples_per_episode == 1 and per_episode_sample_shuffle <= 0:
                     # We still have to iterate through `offset` intermediate frames to
-                    # reach the target frame, but we can avoid resizing them (only the
-                    # first + last frame of the pair are needed). Batch the prefix once
-                    # so we don't read/decode frames twice.
+                    # reach the target frame, but we can avoid resizing unnecessary
+                    # frames by selecting and resizing only the requested indices.
+                    # Batch the prefix once so we don't read/decode frames twice.
                     frames_prefix = frames_ds.take(offset + 1).batch(
                         offset + 1, drop_remainder=True
                     )
 
                     def _make_one_pair(frames):
-                        first_frame = _resize_frame(frames[0])
-                        last_frame = _resize_frame(frames[-1])
-                        pair = tf.stack([first_frame, last_frame], axis=0)
-                        return tf.ensure_shape(pair, [2, image_size, image_size, 3])
+                        selected = tf.gather(frames, pair_frame_indices_tf, axis=0)
+                        selected = _resize_frames_batch(selected)
+                        return tf.ensure_shape(
+                            selected, [pair_num_frames, image_size, image_size, 3]
+                        )
 
                     return frames_prefix.map(_make_one_pair, num_parallel_calls=1)
 
@@ -660,7 +729,9 @@ class OXEFramePairDataset(IterableDataset):
                     _resize_frames_batch, num_parallel_calls=pipeline_transform_parallelism
                 ).unbatch()
 
-                dummy_pair = tf.zeros([2, image_size, image_size, 3], dtype=tf.uint8)
+                dummy_pair = tf.zeros(
+                    [pair_num_frames, image_size, image_size, 3], dtype=tf.uint8
+                )
 
                 def _init_state():
                     frames_ta = tf.TensorArray(
@@ -672,20 +743,54 @@ class OXEFramePairDataset(IterableDataset):
                     step_idx = tf.constant(0, dtype=tf.int32)
                     return frames_ta, step_idx
 
-                def _scan_fn(state, frame):
-                    frames_ta, step_idx = state
-                    pos = tf.math.mod(step_idx, offset_tf)
-                    ready = tf.greater_equal(step_idx, offset_tf)
+                if pair_frames_mode == "endpoints":
 
-                    def _emit():
-                        start_frame = frames_ta.read(pos)
-                        pair = tf.stack([start_frame, frame], axis=0)
-                        pair = tf.ensure_shape(pair, [2, image_size, image_size, 3])
-                        return pair
+                    def _scan_fn(state, frame):
+                        frames_ta, step_idx = state
+                        pos = tf.math.mod(step_idx, offset_tf)
+                        ready = tf.greater_equal(step_idx, offset_tf)
 
-                    out_pair = tf.cond(ready, _emit, lambda: dummy_pair)
-                    frames_ta = frames_ta.write(pos, frame)
-                    return (frames_ta, step_idx + 1), out_pair
+                        def _emit():
+                            start_frame = frames_ta.read(pos)
+                            pair = tf.stack([start_frame, frame], axis=0)
+                            pair = tf.ensure_shape(
+                                pair, [2, image_size, image_size, 3]
+                            )
+                            return pair
+
+                        out_pair = tf.cond(ready, _emit, lambda: dummy_pair)
+                        frames_ta = frames_ta.write(pos, frame)
+                        return (frames_ta, step_idx + 1), out_pair
+
+                else:
+
+                    def _scan_fn(state, frame):
+                        frames_ta, step_idx = state
+                        pos = tf.math.mod(step_idx, offset_tf)
+                        ready = tf.greater_equal(step_idx, offset_tf)
+
+                        def _emit():
+                            # `pair_frame_prefix_indices_tf` excludes the last endpoint
+                            # (offset), which is the current `frame`.
+                            ta_positions = tf.math.mod(
+                                pos + pair_frame_prefix_indices_tf, offset_tf
+                            )
+                            prefix_frames = frames_ta.gather(ta_positions)
+                            prefix_frames = tf.ensure_shape(
+                                prefix_frames,
+                                [pair_num_frames - 1, image_size, image_size, 3],
+                            )
+                            selected = tf.concat(
+                                [prefix_frames, tf.expand_dims(frame, axis=0)], axis=0
+                            )
+                            return tf.ensure_shape(
+                                selected,
+                                [pair_num_frames, image_size, image_size, 3],
+                            )
+
+                        out_pair = tf.cond(ready, _emit, lambda: dummy_pair)
+                        frames_ta = frames_ta.write(pos, frame)
+                        return (frames_ta, step_idx + 1), out_pair
 
                 pairs_ds = frames_ds.scan(_init_state(), _scan_fn).skip(offset)
                 if samples_per_episode > 0:
@@ -738,6 +843,53 @@ class OXEFramePairDataset(IterableDataset):
                 language = _extract_language(step)
                 return frame, action, state, language
 
+            # Fast path: if we only take a single sample per episode and do not need
+            # per-episode sampling shuffle, avoid decoding/resizing the full episode
+            # and avoid the scan pipeline altogether.
+            if samples_per_episode == 1 and per_episode_sample_shuffle <= 0:
+                prefix_steps = steps_ds.take(offset + 1)
+                prefix_feats = prefix_steps.map(
+                    _step_to_features, num_parallel_calls=pipeline_transform_parallelism
+                )
+                prefix_batch = prefix_feats.batch(offset + 1, drop_remainder=True)
+
+                frame_idx0 = tf.constant(0, dtype=tf.int32)
+
+                def _make_one_sample(frames, actions, states, languages):
+                    selected = tf.gather(frames, pair_frame_indices_tf, axis=0)
+                    selected = _resize_frames_batch(selected)
+                    selected = tf.ensure_shape(
+                        selected, [pair_num_frames, image_size, image_size, 3]
+                    )
+
+                    cumulative_action = tf.reduce_sum(actions[:offset], axis=0)
+                    initial_state = states[0]
+                    language = languages[0]
+
+                    if output_action_dim != action_dim:
+                        cumulative_action = _pad_or_truncate_1d(
+                            cumulative_action, output_action_dim
+                        )
+                    if output_state_dim != state_dim:
+                        initial_state = _pad_or_truncate_1d(
+                            initial_state, output_state_dim
+                        )
+
+                    meta = {
+                        "episode_id": episode_id_tf,
+                        "frame_idx": frame_idx0,
+                        "offset": offset_tf,
+                        "language": language,
+                        "dataset_type": dataset_name_tf,
+                        "dataset_name": dataset_name_tf,
+                        "action": cumulative_action,
+                        "initial_state": initial_state,
+                        "robot": robot_tf,
+                    }
+                    return selected, meta
+
+                return prefix_batch.map(_make_one_sample, num_parallel_calls=1)
+
             features_ds = steps_ds.map(_step_to_features, num_parallel_calls=pipeline_transform_parallelism)
 
             def _resize_features_batch(frames, actions, states, languages):
@@ -747,7 +899,7 @@ class OXEFramePairDataset(IterableDataset):
                 _resize_features_batch, num_parallel_calls=pipeline_transform_parallelism
             ).unbatch()
 
-            dummy_pair = tf.zeros([2, image_size, image_size, 3], dtype=tf.uint8)
+            dummy_pair = tf.zeros([pair_num_frames, image_size, image_size, 3], dtype=tf.uint8)
             dummy_action = tf.zeros([action_dim], dtype=tf.float32)
             dummy_state = tf.zeros([state_dim], dtype=tf.float32)
             dummy_lang = tf.constant("", dtype=tf.string)
@@ -790,13 +942,29 @@ class OXEFramePairDataset(IterableDataset):
                 ready = tf.greater_equal(step_idx, offset_tf)
 
                 def _emit():
-                    start_frame = frames_ta.read(pos)
                     start_state = states_ta.read(pos)
                     start_lang = langs_ta.read(pos)
-                    pair = tf.stack([start_frame, frame], axis=0)
-                    pair = tf.ensure_shape(pair, [2, image_size, image_size, 3])
                     frame_idx = tf.cast(step_idx - offset_tf, tf.int32)
-                    return pair, frame_idx, action_sum, start_state, start_lang
+
+                    if pair_frames_mode == "endpoints":
+                        start_frame = frames_ta.read(pos)
+                        pair = tf.stack([start_frame, frame], axis=0)
+                        pair = tf.ensure_shape(pair, [2, image_size, image_size, 3])
+                        return pair, frame_idx, action_sum, start_state, start_lang
+
+                    ta_positions = tf.math.mod(pos + pair_frame_prefix_indices_tf, offset_tf)
+                    prefix_frames = frames_ta.gather(ta_positions)
+                    prefix_frames = tf.ensure_shape(
+                        prefix_frames,
+                        [pair_num_frames - 1, image_size, image_size, 3],
+                    )
+                    selected = tf.concat(
+                        [prefix_frames, tf.expand_dims(frame, axis=0)], axis=0
+                    )
+                    selected = tf.ensure_shape(
+                        selected, [pair_num_frames, image_size, image_size, 3]
+                    )
+                    return selected, frame_idx, action_sum, start_state, start_lang
 
                 out_pair, out_frame_idx, out_action, out_init_state, out_lang = tf.cond(
                     ready,
@@ -1147,6 +1315,9 @@ class MultiOXEFramePairDataset(IterableDataset):
         tfds_read_block_length: int,
         tfds_read_decode_parallelism: int,
         tfds_read_interleave_parallelism: int,
+        pair_frames_mode: str = "endpoints",
+        pair_frames_stride: int = 1,
+        pair_frames_n: int = 2,
     ):
         super().__init__()
 
@@ -1197,6 +1368,10 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.tfds_read_block_length = tfds_read_block_length
         self.tfds_read_decode_parallelism = tfds_read_decode_parallelism
         self.tfds_read_interleave_parallelism = tfds_read_interleave_parallelism
+
+        self.pair_frames_mode = str(pair_frames_mode)
+        self.pair_frames_stride = int(pair_frames_stride)
+        self.pair_frames_n = int(pair_frames_n)
 
         # Will be populated lazily
         self._datasets = None
@@ -1323,6 +1498,9 @@ class MultiOXEFramePairDataset(IterableDataset):
                 pipeline_episode_concurrency=pipeline_episode_concurrency,
                 pipeline_transform_parallelism=pipeline_transform_parallelism,
                 pipeline_interleave_parallelism=pipeline_interleave_parallelism,
+                pair_frames_mode=self.pair_frames_mode,
+                pair_frames_stride=self.pair_frames_stride,
+                pair_frames_n=self.pair_frames_n,
             )
             self._datasets.append(ds)
 

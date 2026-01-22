@@ -515,24 +515,30 @@ class LatentActionQuantization(nn.Module):
 
         tokens, perplexity, _, indices = self.vq(first_tokens, last_tokens, codebook_training_only=False)
 
+        # Codebook usage stats (windowed by `self.vq.codebooks_used`, which is reset
+        # after a replacement). These are useful diagnostics even when we are not
+        # performing a replacement on this exact step.
+        window_total = self.vq.codebooks_used.sum().detach()
+        unused_indices, used_indices, min_count_val = self.vq._get_replacement_indices()
+
         codebook_replaced = 0.0
-        replaced_count = 0.0
-        used_count = 0.0
-        min_count = 0.0
+        replaced_count = float(unused_indices.shape[0])
+        used_count = float(used_indices.shape[0])
+        min_count = float(min_count_val)
 
         if step != 0 and self._should_replace_codebook(step):
             logger.debug(f"Replacing unused codebook entries at step {step}")
-            unused_indices, used_indices, min_count_val = self.vq._get_replacement_indices()
-            replaced_count = float(unused_indices.shape[0])
-            used_count = float(used_indices.shape[0])
-            min_count = float(min_count_val)
             codebook_replaced = 1.0
-            self.vq.replace_unused_codebooks()
+            unused_c, used_c, total_c, min_c = self.vq.replace_unused_codebooks()
+            # Ensure logged stats match the actual replacement decision.
+            replaced_count = float(unused_c)
+            used_count = float(used_c)
+            min_count = float(min_c)
+            window_total = window_total.new_tensor(float(total_c))
             if int(os.environ.get("RANK", "0")) == 0:
-                window_total = float(self.vq.codebooks_used.sum().item())
                 print(
                     f"[Codebook] step={int(step)} replaced={int(replaced_count)} "
-                    f"used={int(used_count)} total={int(window_total)} min_count={min_count:.4f}"
+                    f"used={int(used_count)} total={int(total_c)} min_count={min_count:.4f}"
                 )
 
         if return_only_codebook_ids:
@@ -558,7 +564,8 @@ class LatentActionQuantization(nn.Module):
         if self.metrics_num_unique_codes_every_n_steps > 0 and int(step) % int(self.metrics_num_unique_codes_every_n_steps) == 0:
             metrics["num_unique_codes"] = int(indices.unique().size(0))
         # Avoid per-step GPU sync: keep this as a tensor and log it only at a configured interval.
-        metrics["codebook_window_total"] = self.vq.codebooks_used.sum().detach()
+        # Log the window total *before* any replacement (replacement resets the counter).
+        metrics["codebook_window_total"] = window_total
 
         # Precompute shared values for decoders
         h_dec, w_dec = self.patch_height_width

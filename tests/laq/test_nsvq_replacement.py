@@ -71,3 +71,20 @@ class TestNSVQReplacement:
         vq.replace_unused_codebooks()
 
         assert int(vq.codebooks_used.sum().item()) == 0
+
+    def test_replace_unused_codebooks_does_not_modify_used_entries(self):
+        vq = _make_nsvq(num_embeddings=8, discarding_threshold=0.5)
+
+        # total=6 => expected=0.75 => min_count=0.375
+        # used: entries with count >= 0.375 => those with count >= 1
+        vq.codebooks_used[:] = torch.tensor([3, 2, 1, 0, 0, 0, 0, 0], dtype=torch.int32)
+        unused, used, _ = vq._get_replacement_indices()
+        assert set(used.tolist()) == {0, 1, 2}
+        assert 3 in set(unused.tolist())
+
+        before = vq.codebooks.detach().clone()
+        vq.replace_unused_codebooks()
+        after = vq.codebooks.detach().clone()
+
+        # Used entries should be bitwise identical; only unused are overwritten.
+        assert torch.equal(after[used], before[used])

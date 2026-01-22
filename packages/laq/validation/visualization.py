@@ -302,6 +302,8 @@ class BasicVisualizationStrategy(ValidationStrategy):
                 return None, None
 
             all_frames = torch.cat(frames_list, dim=0)[:num_samples]
+            if all_frames.dtype == torch.uint8:
+                all_frames = all_frames.to(dtype=torch.float32).div_(255.0)
             all_metadata = metadata_list[:num_samples]
 
             return all_frames, all_metadata

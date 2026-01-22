@@ -276,7 +276,7 @@ class ActionTokenScatterStrategy(MetadataScatterStrategy):
 
             if img:
                 wandb_logger.log_image(
-                    key="val/action_token_scatter",
+                    key=f"val/action_token_scatter{metric_suffix}",
                     images=[img],
                     caption=[f"Step {trainer.global_step}: 2D actions colored by assigned token"],
                 )
@@ -407,7 +407,7 @@ class ActionSequenceScatterStrategy(MetadataScatterStrategy):
             img = Image.open(buf)
 
             wandb_logger.log_image(
-                key="val/action_sequence_scatter",
+                key=f"val/action_sequence_scatter{metric_suffix}",
                 images=[img],
                 caption=[f"Step {global_step}: Colored by unique sequence ID"],
             )
@@ -539,7 +539,7 @@ class TopSequencesScatterStrategy(MetadataScatterStrategy):
             img = Image.open(buf)
 
             wandb_logger.log_image(
-                key="val/top_sequences_scatter",
+                key=f"val/top_sequences_scatter{metric_suffix}",
                 images=[img],
                 caption=[f"Step {global_step}: Top {self.num_top_sequences} sequences highlighted"],
             )
@@ -672,7 +672,7 @@ class StateSequenceScatterStrategy(MetadataScatterStrategy):
             img = Image.open(buf)
 
             wandb_logger.log_image(
-                key="val/state_sequence_scatter",
+                key=f"val/state_sequence_scatter{metric_suffix}",
                 images=[img],
                 caption=[f"Step {global_step}: Top {self.num_top_sequences} sequences by state"],
             )

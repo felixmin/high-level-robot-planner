@@ -6,6 +6,11 @@
 # - no concurrency
 
 tf:
+  pair_frames:
+    mode: endpoints
+    stride: 1
+    n: 2
+
   debug:
     use_synthetic_data: false
     synthetic_num_samples: 10000

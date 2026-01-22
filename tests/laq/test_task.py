@@ -158,6 +158,9 @@ class TestLAQTaskForward:
         assert loss.item() >= 0
         assert isinstance(metrics, dict)
         assert metrics["num_unique_codes"] > 0
+        assert metrics["codebook_used_count"] > 0
+        assert metrics["codebook_min_count"] >= 0
+        assert float(metrics["codebook_window_total"].item()) > 0
 
         print(f"✓ Forward pass: loss={loss.item():.4f}, num_unique={metrics['num_unique_codes']}")
 

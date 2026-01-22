@@ -261,7 +261,7 @@ def metadata_collate_fn(batch: List[Dict]) -> Dict:
 
     Returns:
         Dict with standardized keys:
-        - 'frames': Stacked tensor [B, C, 2, H, W]
+        - 'frames': Stacked tensor [B, C, T, H, W] (T=2 by default)
         - 'episode_id': List of strings (was: scene_idx)
         - 'frame_idx': List of ints (was: first_frame_idx)
         - 'dataset_name': List of strings (source identifier)
@@ -317,7 +317,7 @@ def metadata_collate_fn(batch: List[Dict]) -> Dict:
 
 # Standard batch keys expected in LAQ training batches
 STANDARD_BATCH_KEYS = frozenset({
-    "frames",       # [B, C, 2, H, W] frame pairs tensor
+    "frames",       # [B, C, T, H, W] (T=2 by default)
     "episode_id",   # List[str] unique episode/scene identifiers
     "frame_idx",    # List[int] start frame indices
     "dataset_name", # List[str] source dataset names
@@ -1012,6 +1012,7 @@ class OXEDataModule(pl.LightningDataModule):
         tf_sampling = tf_cfg["sampling"]
         tf_iter = tf_cfg["iterator"]
         tf_debug = tf_cfg["debug"]
+        tf_pair_frames = tf_cfg.get("pair_frames", {}) or {}
 
         final_stream_prefetch_buffer = int(tf_prefetch["final_stream_buffer"])
         per_dataset_stream_prefetch_buffer = int(tf_prefetch["per_dataset_stream_buffer"])
@@ -1022,6 +1023,9 @@ class OXEDataModule(pl.LightningDataModule):
         persistent_iterator = bool(tf_iter["persistent"])
         debug_use_synthetic_data = bool(tf_debug["use_synthetic_data"])
         debug_synthetic_num_samples = int(tf_debug["synthetic_num_samples"])
+        pair_frames_mode = str(tf_pair_frames.get("mode", "endpoints"))
+        pair_frames_stride = int(tf_pair_frames.get("stride", 1))
+        pair_frames_n = int(tf_pair_frames.get("n", 2))
 
         tfds_read_cycle_length = int(tf_read["cycle_length"])
         tfds_read_block_length = int(tf_read["block_length"])
@@ -1067,6 +1071,9 @@ class OXEDataModule(pl.LightningDataModule):
                 pipeline_episode_concurrency=pipeline_episode_concurrency,
                 pipeline_transform_parallelism=pipeline_transform_parallelism,
                 pipeline_interleave_parallelism=pipeline_interleave_parallelism,
+                pair_frames_mode=pair_frames_mode,
+                pair_frames_stride=pair_frames_stride,
+                pair_frames_n=pair_frames_n,
             )
             self.val_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
@@ -1096,6 +1103,9 @@ class OXEDataModule(pl.LightningDataModule):
                 pipeline_episode_concurrency=pipeline_episode_concurrency,
                 pipeline_transform_parallelism=pipeline_transform_parallelism,
                 pipeline_interleave_parallelism=pipeline_interleave_parallelism,
+                pair_frames_mode=pair_frames_mode,
+                pair_frames_stride=pair_frames_stride,
+                pair_frames_n=pair_frames_n,
             )
             logger.info(f"✓ OXE DataModule initialized (single dataset: {cfg['name']})")
         else:
@@ -1127,6 +1137,9 @@ class OXEDataModule(pl.LightningDataModule):
                 tfds_read_block_length=tfds_read_block_length,
                 tfds_read_decode_parallelism=tfds_read_decode_parallelism,
                 tfds_read_interleave_parallelism=tfds_read_interleave_parallelism,
+                pair_frames_mode=pair_frames_mode,
+                pair_frames_stride=pair_frames_stride,
+                pair_frames_n=pair_frames_n,
             )
             self.val_dataset = MultiOXEFramePairDataset(
                 datasets=self.datasets,
@@ -1156,6 +1169,9 @@ class OXEDataModule(pl.LightningDataModule):
                 tfds_read_block_length=tfds_read_block_length,
                 tfds_read_decode_parallelism=tfds_read_decode_parallelism,
                 tfds_read_interleave_parallelism=tfds_read_interleave_parallelism,
+                pair_frames_mode=pair_frames_mode,
+                pair_frames_stride=pair_frames_stride,
+                pair_frames_n=pair_frames_n,
             )
             dataset_names = [cfg["name"] for cfg in self.datasets]
             logger.info(f"✓ OXE DataModule initialized (multi-dataset: {', '.join(dataset_names)})")

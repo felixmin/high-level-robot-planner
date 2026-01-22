@@ -22,7 +22,8 @@ model_summary:
 # Periodic text logging (useful in non-interactive logs, e.g. SLURM).
 progress_logger:
   enabled: true
-  log_every_n_steps: 100
+  log_every_n_steps: 10
+  leave: false
 
 # Model metrics: control frequency of expensive computations and logging.
 metrics:
@@ -68,7 +69,7 @@ loss_weights:
 # Validation settings
 validation:
   # How often to run validation (can be float for percentage of epoch, or int for steps)
-  check_interval: 500
+  check_interval: 5000
 
   # Limit validation batches to save time (0.1 = 10% of val set, or int for exact batches)
   # Set to 1.0 to run full validation.
@@ -114,10 +115,10 @@ validation:
       num_train_samples: 8  # Training samples to visualize
 
     # Latent transfer analysis: test if latent actions transfer between scenes
-    latent_transfer:
-      enabled: true
-      every_n_validations: 2  # Run every 10th validation
-      num_pairs: 256  # Number of pairs to test transfer on
+    # latent_transfer:
+    #   enabled: true
+    #   every_n_validations: 2  # Run every 10th validation
+    #   num_pairs: 256  # Number of pairs to test transfer on
 
     # Sequence examples: visualize frame pairs grouped by exact code sequence
     sequence_examples:
@@ -146,7 +147,7 @@ checkpoint:
   mode: min
   save_top_k: 3
   save_last: true
-  every_n_train_steps: 1000
+  every_n_train_steps: 2500
 
 # Profiling
 profiler:

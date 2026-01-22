@@ -18,6 +18,7 @@ from laq.validation import (
     ESSENTIAL_METADATA_KEYS,
     STRATEGY_REGISTRY,
 )
+from laq.callbacks import ValidationStrategyCallback
 
 
 class TestValidationCache:
@@ -237,6 +238,86 @@ class TestCodebookEmbeddingStrategy:
         assert strategy.perplexity == 30
         assert strategy.pca_components == 50
         assert strategy.every_n_validations == 10
+
+
+class TestValidationStrategyCallbackBucketSuffix:
+    def test_bucket_bound_strategy_gets_suffix(self):
+        class DummyBucketStrategy(ValidationStrategy):
+            def __init__(self):
+                super().__init__(
+                    name="dummy_bucket",
+                    enabled=True,
+                    every_n_validations=1,
+                    min_samples=0,
+                    buckets=["bridge"],
+                )
+                self.seen_suffix = None
+
+            def needs_caching(self) -> bool:
+                return False
+
+            def run(self, cache, pl_module, trainer, metric_suffix: str = ""):
+                self.seen_suffix = metric_suffix
+                return {}
+
+        strategy = DummyBucketStrategy()
+        cb = ValidationStrategyCallback(
+            strategies=[strategy],
+            bucket_configs={
+                "bridge": {"filters": {"dataset_name": "bridge"}, "max_samples": 1},
+            },
+            num_fixed_samples=0,
+            num_random_samples=0,
+            max_cached_samples=0,
+            run_gc_after_validation=False,
+        )
+
+        trainer = MagicMock()
+        pl_module = MagicMock()
+        cb.on_validation_epoch_end(trainer, pl_module)
+
+        assert strategy.seen_suffix == "_bridge"
+
+    def test_holdout_bucket_adds_holdout_suffix(self):
+        class DummyBucketStrategy(ValidationStrategy):
+            def __init__(self):
+                super().__init__(
+                    name="dummy_bucket",
+                    enabled=True,
+                    every_n_validations=1,
+                    min_samples=0,
+                    buckets=["bridge"],
+                )
+                self.seen_suffix = None
+
+            def needs_caching(self) -> bool:
+                return False
+
+            def run(self, cache, pl_module, trainer, metric_suffix: str = ""):
+                self.seen_suffix = metric_suffix
+                return {}
+
+        strategy = DummyBucketStrategy()
+        cb = ValidationStrategyCallback(
+            strategies=[strategy],
+            bucket_configs={
+                "bridge": {
+                    "filters": {"dataset_name": "bridge"},
+                    "max_samples": 1,
+                    "is_holdout": True,
+                },
+            },
+            num_fixed_samples=0,
+            num_random_samples=0,
+            max_cached_samples=0,
+            run_gc_after_validation=False,
+        )
+
+        trainer = MagicMock()
+        pl_module = MagicMock()
+        cb.on_validation_epoch_end(trainer, pl_module)
+
+        assert strategy.seen_suffix == "_bridge_holdout"
 
     def test_custom_params(self):
         """Test custom parameters."""

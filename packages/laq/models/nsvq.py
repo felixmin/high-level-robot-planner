@@ -227,7 +227,14 @@ class NSVQ(torch.nn.Module):
         # Callers that need CPU/numpy stats should explicitly request/convert them.
         return quantized_input, perplexity, self.codebooks_used, min_indices.reshape(batch_size, -1)
 
-    def _get_replacement_indices(self):
+    def _is_distributed(self) -> bool:
+        try:
+            import torch.distributed as dist
+        except Exception:
+            return False
+        return dist.is_available() and dist.is_initialized()
+
+    def _get_replacement_indices_from_counts(self, counts: torch.Tensor):
         """
         Compute which codebook entries are considered unused/used for replacement.
 
@@ -244,8 +251,6 @@ class NSVQ(torch.nn.Module):
             used_indices: 1D LongTensor of indices considered active
             min_count: Float cutoff used for the split
         """
-        counts = self.codebooks_used
-
         total = int(counts.sum().item())
 
         if total <= 0 or self.num_embeddings <= 0:
@@ -263,6 +268,9 @@ class NSVQ(torch.nn.Module):
 
         return unused_indices, used_indices, min_count
 
+    def _get_replacement_indices(self):
+        return self._get_replacement_indices_from_counts(self.codebooks_used)
+
     def replace_unused_codebooks(self):
 
         """
@@ -276,31 +284,64 @@ class NSVQ(torch.nn.Module):
         """
 
         with torch.no_grad():
-            total_assignments = int(self.codebooks_used.sum().item())
-            unused_indices, used_indices, min_count = self._get_replacement_indices()
+            # Compute replacement decision on globally aggregated usage in DDP, so we don't
+            # accidentally replace entries that are used on other ranks.
+            counts = self.codebooks_used.to(dtype=torch.int64)
+            if self._is_distributed():
+                import torch.distributed as dist
+                counts = counts.clone()
+                dist.all_reduce(counts, op=dist.ReduceOp.SUM)
+
+            total_assignments = int(counts.sum().item())
+            unused_indices, used_indices, min_count = self._get_replacement_indices_from_counts(counts)
 
             unused_count = unused_indices.shape[0]
             used_count = used_indices.shape[0]
 
+            # Safety invariants: disjoint partition of the full codebook.
+            if int(unused_count + used_count) != int(self.num_embeddings):
+                raise RuntimeError(
+                    f"Replacement index partition mismatch: unused={int(unused_count)} "
+                    f"used={int(used_count)} num_embeddings={int(self.num_embeddings)}"
+                )
+            if unused_count > 0 and used_count > 0:
+                used_mask = torch.zeros(self.num_embeddings, dtype=torch.bool, device=unused_indices.device)
+                used_mask[used_indices] = True
+                if bool(used_mask[unused_indices].any().item()):
+                    raise RuntimeError("Replacement indices overlap: some indices are both used and unused")
+
+            is_dist = self._is_distributed()
+            dist_rank = 0
+            if is_dist:
+                import torch.distributed as dist
+                dist_rank = int(dist.get_rank())
+
             if used_count == 0:
-                logger.info("No active codebooks; shuffling entire codebook")
-                self.codebooks += self.eps * torch.randn(self.codebooks.size(), device=self.codebooks.device).clone()
+                if dist_rank == 0:
+                    logger.info("No active codebooks; shuffling entire codebook")
+                    self.codebooks += self.eps * torch.randn(self.codebooks.size(), device=self.codebooks.device).clone()
             elif unused_count == 0:
                 # Everything is considered active in this window; nothing to replace.
                 pass
             else:
-                used = self.codebooks[used_indices].clone()
-                if used_count < unused_count:
-                    used_codebooks = used.repeat(int((unused_count / (used_count + self.eps)) + 1), 1)
-                    used_codebooks = used_codebooks[
-                        torch.randperm(used_codebooks.shape[0], device=used_codebooks.device)
-                    ]
-                else:
-                    used_codebooks = used
+                if dist_rank == 0:
+                    used = self.codebooks[used_indices].clone()
+                    if used_count < unused_count:
+                        used_codebooks = used.repeat(int((unused_count / (used_count + self.eps)) + 1), 1)
+                        used_codebooks = used_codebooks[
+                            torch.randperm(used_codebooks.shape[0], device=used_codebooks.device)
+                        ]
+                    else:
+                        used_codebooks = used
 
-                self.codebooks[unused_indices] = used_codebooks[:unused_count] + 0.02 * torch.randn(
-                    (unused_count, self.embedding_dim), device=self.codebooks.device
-                )
+                    self.codebooks[unused_indices] = used_codebooks[:unused_count] + 0.02 * torch.randn(
+                        (unused_count, self.embedding_dim), device=self.codebooks.device
+                    )
+
+            # Broadcast updated codebooks so all ranks stay in sync.
+            if is_dist:
+                import torch.distributed as dist
+                dist.broadcast(self.codebooks.data, src=0)
 
             logger.info(
                 "Replaced %d codebooks (used=%d, total=%d, min_count=%.4f)",
@@ -310,6 +351,7 @@ class NSVQ(torch.nn.Module):
                 min_count,
             )
             self.codebooks_used.zero_()
+            return int(unused_count), int(used_count), int(total_assignments), float(min_count)
 
     def inference(self, input_data_first, input_data_last, user_action_token_num=None):
 

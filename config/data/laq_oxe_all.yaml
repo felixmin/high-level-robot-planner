@@ -4,7 +4,7 @@
 
 defaults:
   - dataset: oxe_all
-  - adapter: oxe_tf_default
+  - adapter: oxe_tf_low_ram
   - loader: oxe_streaming
   - preprocess: pair_256
   - _self_

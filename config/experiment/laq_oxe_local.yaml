@@ -17,85 +17,36 @@ experiment:
   name: laq_oxe_local
   description: "Minimal local OXE run (no shuffle/prefetch/autotune)"
 
-model:
-  flow:
-    enabled: true
-    model: raft_small    # "raft_small" or "raft_large"
-    loss_weight: 0.1     # Weight for flow loss in total loss
-    decoder_depth: 2     # Transformer depth for flow decoder
-    warmup_steps: 10000
-    teacher_num_flow_updates: 6
-    teacher_chunk_size: 64
-
 data:
   loader:
     batch_size: 32
-    num_workers: 0  # should be 0 for streamed dataset as otherwise
-                    # it adds IPC overhead and sync issues...
-                    # parallelism is handled by tfds directly
-                    # also dlpack apparently only works in the same process
-
-  adapter:
-    tf:
-      train:
-        episode_queue_shuffle_buffer: 0
-        intra_episode_sample_shuffle_buffer: 0
-        global_stream_shuffle_buffer: 0
-      val:
-        episode_queue_shuffle_buffer: 0
-        intra_episode_sample_shuffle_buffer: 0
-        global_stream_shuffle_buffer: 0
-      tfds_read:
-        cycle_length: 1
-        decode_parallelism: 1
-        interleave_parallelism: 1
-      pipeline:
-        episode_concurrency: 1
-        transform_parallelism: 1
-        interleave_parallelism: 1
-      mixing:
-        mix_block_length: 1
-        parallelism_mode: divide
-        strategy: sample
-        per_dataset_private_threadpool_size: 64
-      prefetch:
-        episode_queue_buffer: 0
-        per_dataset_stream_buffer: 0
-        final_stream_buffer: 0
-
-      iterator:
-        persistent: true
-      sampling:
-        samples_per_episode: 0
-        seed: 42
-
-  preprocess:
-    return_metadata: true
 
 training:
-  progress_bar:
-    enabled: true
-    refresh_rate: 10
-    leave: false
-  model_summary:
-    enabled: true
-  scheduler:
-    type: none
-  profiler:
-    enabled: true
-    type: advanced
-    filename: fit-profile
   throughput:
     enabled: true
   dataset_usage_logger:
-    enabled: false
+    enabled: true
   validation:
-    check_interval: 1000
+    #check_interval: 1000
     # Keep local validations snappy; increase for more reliable metrics.
     limit_batches: 50
-    max_cached_samples: 10
+    max_cached_samples: 100
     num_fixed_samples: 4
     num_random_samples: 4
+    # Buckets for each OXE dataset (enables per-dataset validation + per-bucket viz)
+    buckets:
+      language_table:
+        filters: {dataset_name: "language_table"}
+        max_samples: 10
+      bridge:
+        filters: {dataset_name: "bridge"}
+        max_samples: 10
+      rt1:
+        filters: {dataset_name: "rt1"}
+        max_samples: 10
+      robonet:
+        filters: {dataset_name: "robonet"}
+        max_samples: 10
 
     # --- Validation Strategies ---
     # NOTE: these must be nested under `strategies:`. If they are aligned with
@@ -118,21 +69,124 @@ training:
         every_n_validations: 1
         num_samples: 8
 
-      # Disable code-heavy analyses by default for local runs (they can
-      # substantially slow validation by requiring per-batch code extraction).
-      latent_transfer:
-        enabled: false
-      sequence_examples:
-        enabled: false
+      # Global analyses (compute codebook indices on the validation run).
       codebook_histogram:
-        enabled: false
+        enabled: true
+        every_n_validations: 4
       sequence_histogram:
-        enabled: false
+        enabled: true
+        every_n_validations: 4
+        num_top_sequences: 50
       all_sequences_histogram:
-        enabled: false
-    buckets: null
+        enabled: true
+        every_n_validations: 4
+      sequence_examples:
+        enabled: true
+        every_n_validations: 4
+        top_k_sequences: 16
+        examples_per_sequence: 4
 
-logging:
-  level: INFO
-  use_wandb: true
-  project: hlrp
+      # Per-dataset scatter plots (require per-batch code extraction; opt-in locally).
+      action_scatter_language_table:
+        type: action_token_scatter
+        buckets: ["language_table"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+      action_scatter_bridge:
+        type: action_token_scatter
+        buckets: ["bridge"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+      action_scatter_rt1:
+        type: action_token_scatter
+        buckets: ["rt1"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+      action_scatter_robonet:
+        type: action_token_scatter
+        buckets: ["robonet"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+
+      action_seq_language_table:
+        type: action_sequence_scatter
+        buckets: ["language_table"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+      action_seq_bridge:
+        type: action_sequence_scatter
+        buckets: ["bridge"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+      action_seq_rt1:
+        type: action_sequence_scatter
+        buckets: ["rt1"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+      action_seq_robonet:
+        type: action_sequence_scatter
+        buckets: ["robonet"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+
+      top_seq_language_table:
+        type: top_sequences_scatter
+        buckets: ["language_table"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+        num_top_sequences: 5
+      top_seq_bridge:
+        type: top_sequences_scatter
+        buckets: ["bridge"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+        num_top_sequences: 5
+      top_seq_rt1:
+        type: top_sequences_scatter
+        buckets: ["rt1"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+        num_top_sequences: 5
+      top_seq_robonet:
+        type: top_sequences_scatter
+        buckets: ["robonet"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+        num_top_sequences: 5
+
+      state_scatter_language_table:
+        type: state_sequence_scatter
+        buckets: ["language_table"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+      state_scatter_bridge:
+        type: state_sequence_scatter
+        buckets: ["bridge"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+      state_scatter_rt1:
+        type: state_sequence_scatter
+        buckets: ["rt1"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128
+      state_scatter_robonet:
+        type: state_sequence_scatter
+        buckets: ["robonet"]
+        enabled: false
+        every_n_validations: 4
+        num_samples: 128

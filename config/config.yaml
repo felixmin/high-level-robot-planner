@@ -10,7 +10,7 @@ defaults:
 # Global settings
 experiment_name: ${experiment.name}
 seed: 42
-precision: "32-true"  # "32-true", "16-mixed", "bf16-mixed"
+precision: "bf16-mixed"  # "32-true", "16-mixed", "bf16-mixed"
 
 # Hydra configuration (default; submit_job overrides these to keep snapshots inside the run dir)
 hydra:
@@ -47,8 +47,6 @@ submit:
   dry_run: false
   # Where to persist pretrained model downloads (HF + torch/torchvision).
   cache_dir: cache
-  # Deprecated/ignored by submit_job.py (Slurm stdout/err goes into the run directory).
-  slurm_logs_dir: slurm
 
 # Lightweight benchmarking knobs (used by scripts/bench_oxe_dataloader.py)
 benchmark:
