@@ -30,6 +30,9 @@ data:
 
 training:
   max_steps: 300
+  # `vla_lightning_debug` sets `max_epochs=1`, which would stop after a single
+  # (overfit) batch. Set max_epochs high and let max_steps control termination.
+  max_epochs: 1000
   overfit_batches: 1
 
   validation:
