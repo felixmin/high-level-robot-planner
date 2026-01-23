@@ -80,15 +80,17 @@ class VLATokenLightningModule(pl.LightningModule):
             )
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        loss, _codes, _frames, _instructions = self._loss_from_batch(batch)
+        loss, _codes, _frames, _instructions, _inputs, _outputs = self._loss_from_batch(batch)
 
         self.log("train/loss", loss, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        loss, codes, frames, instructions = self._loss_from_batch(batch)
+        loss, codes, frames, instructions, inputs, outputs = self._loss_from_batch(batch)
 
         self.log("val/loss", loss, prog_bar=True, sync_dist=True)
+        self._log_gt_code_stats(stage="val", codes=codes)
+        self._log_teacher_forced_code_metrics(stage="val", inputs=inputs, outputs=outputs)
 
         if (
             self.action_token_ids is not None
@@ -129,7 +131,14 @@ class VLATokenLightningModule(pl.LightningModule):
 
     def _loss_from_batch(
         self, batch: Any
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str]]:
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        list[str],
+        dict[str, torch.Tensor],
+        Any,
+    ]:
         if not isinstance(batch, dict):
             raise TypeError(
                 "Expected dict batch with keys from OXEDataModule (frames, language, ...)"
@@ -157,7 +166,165 @@ class VLATokenLightningModule(pl.LightningModule):
 
         outputs = self.vla_model(**inputs)
         loss = outputs.loss if hasattr(outputs, "loss") else outputs[0]
-        return loss, codes, frames, instructions
+        return loss, codes, frames, instructions, inputs, outputs
+
+    def _log_gt_code_stats(self, *, stage: str, codes: torch.Tensor) -> None:
+        token_ids = self.action_token_ids
+        if token_ids is None:
+            return
+
+        if codes.ndim != 2:
+            return
+
+        codebook_size = int(self.action_tokens.codebook_size)
+        if codebook_size <= 0 or codebook_size > 64:
+            return
+
+        codes = codes.to(torch.long)
+        if codes.numel() == 0:
+            return
+
+        # Overall code histogram across positions.
+        flat = codes.reshape(-1)
+        counts = torch.bincount(flat, minlength=codebook_size).to(torch.float32)
+        for c in range(codebook_size):
+            self.log(
+                f"{stage}/gt_code_count/code{c}",
+                counts[c],
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+                reduce_fx="sum",
+            )
+
+        # Majority-token baseline per position (helps spot label imbalance).
+        per_pos = []
+        for pos in range(codes.shape[1]):
+            pos_counts = torch.bincount(codes[:, pos], minlength=codebook_size).to(
+                torch.float32
+            )
+            denom = pos_counts.sum().clamp(min=1.0)
+            per_pos.append(pos_counts.max() / denom)
+        if per_pos:
+            baseline = torch.stack(per_pos).mean()
+            self.log(
+                f"{stage}/gt_majority_baseline_acc",
+                baseline,
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+                batch_size=int(codes.shape[0]),
+            )
+
+    def _log_teacher_forced_code_metrics(
+        self, *, stage: str, inputs: dict[str, torch.Tensor], outputs: Any
+    ) -> None:
+        token_ids = self.action_token_ids
+        if token_ids is None:
+            return
+
+        labels = inputs.get("labels")
+        if labels is None or not isinstance(labels, torch.Tensor):
+            return
+
+        logits = getattr(outputs, "logits", None)
+        if logits is None or not isinstance(logits, torch.Tensor):
+            return
+
+        code_ids = torch.tensor(
+            token_ids.action_code_ids, device=labels.device, dtype=torch.long
+        )
+        if code_ids.numel() == 0:
+            return
+
+        # Identify positions where the supervision token is an action code token.
+        active = labels != -100
+        is_code = (labels.unsqueeze(-1) == code_ids.view(1, 1, -1)).any(dim=-1) & active
+
+        code_tokens_per_sample = is_code.sum(dim=1).to(torch.float32)
+        expected = float(token_ids.code_seq_len)
+        if labels.shape[0] > 0:
+            mismatch = (code_tokens_per_sample != expected).to(torch.float32).mean()
+            self.log(
+                f"{stage}/label_code_token_mismatch_frac",
+                mismatch,
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+                batch_size=int(labels.shape[0]),
+            )
+            self.log(
+                f"{stage}/label_code_tokens_per_sample_mean",
+                code_tokens_per_sample.mean(),
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+                batch_size=int(labels.shape[0]),
+            )
+
+        total = int(is_code.sum().item())
+        if total <= 0:
+            return
+
+        # Restrict to the K action-code logits (K is small, e.g., 8).
+        code_logits = logits[..., code_ids]  # [B, T, K]
+        selected_logits = code_logits[is_code]  # [N, K]
+
+        # Teacher-forced predicted code index in [0, K-1].
+        pred_idx = torch.argmax(selected_logits, dim=-1)
+        pred_token_id = code_ids[pred_idx]
+        gt_token_id = labels[is_code]
+        correct = (pred_token_id == gt_token_id).to(torch.float32).sum()
+        acc = correct / float(total)
+
+        # Entropy over the *code* distribution; low entropy indicates collapse.
+        probs = torch.softmax(selected_logits, dim=-1)
+        entropy = (-probs * (probs + 1e-9).log()).sum(dim=-1).mean()
+
+        self.log(
+            f"{stage}/tf_code_token_accuracy",
+            acc,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+            prog_bar=(stage == "val"),
+            batch_size=total,
+        )
+        self.log(
+            f"{stage}/tf_code_token_entropy",
+            entropy,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+            batch_size=total,
+        )
+
+        # Distribution diagnostics (counts per code index).
+        k = int(code_ids.numel())
+        pred_counts = torch.bincount(pred_idx, minlength=k).to(torch.float32)
+
+        # Map gt token ids to indices 0..K-1 (safe because gt token ids are code tokens).
+        gt_match = gt_token_id.unsqueeze(-1) == code_ids.view(1, -1)
+        gt_idx = torch.argmax(gt_match.to(torch.long), dim=-1)
+        gt_counts = torch.bincount(gt_idx, minlength=k).to(torch.float32)
+
+        for i in range(k):
+            self.log(
+                f"{stage}/tf_pred_code_count/code{i}",
+                pred_counts[i],
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+                reduce_fx="sum",
+            )
+            self.log(
+                f"{stage}/tf_gt_code_count/code{i}",
+                gt_counts[i],
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+                reduce_fx="sum",
+            )
 
     @torch.no_grad()
     def _compute_generation_metrics(
@@ -231,6 +398,46 @@ class VLATokenLightningModule(pl.LightningModule):
                 pred = pred + ([-1] * (token_ids.code_seq_len - len(pred)))
             results.append(pred)
         return results
+
+    @torch.no_grad()
+    def _predict_freeform_text(
+        self,
+        *,
+        frames: torch.Tensor,
+        instructions: list[str],
+        max_new_tokens: int = 32,
+    ) -> list[str]:
+        images = self.frames_to_images(frames)
+        prompt_inputs = build_prompt_inputs(
+            processor=self.processor,
+            images=images,
+            instructions=instructions,
+            chat=self.chat,
+            device=self.device,
+        )
+
+        attention_mask = prompt_inputs.get("attention_mask")
+        if attention_mask is None:
+            raise KeyError("processor output must include attention_mask")
+        prompt_lens = attention_mask.sum(dim=1).to(torch.long)
+
+        generated = self.vla_model.generate(
+            **prompt_inputs,
+            max_new_tokens=int(max_new_tokens),
+            do_sample=False,
+        )
+
+        tok = getattr(self.processor, "tokenizer", None)
+        decode = getattr(tok, "decode", None) if tok is not None else None
+        if decode is None:
+            return ["" for _ in range(int(generated.shape[0]))]
+
+        texts: list[str] = []
+        for i in range(int(generated.shape[0])):
+            start = int(prompt_lens[i].item())
+            suffix_ids = generated[i, start:].tolist()
+            texts.append(str(decode(suffix_ids, skip_special_tokens=False)))
+        return texts
 
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]

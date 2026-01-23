@@ -22,12 +22,16 @@ validation:
     enabled: true
     num_samples: 4
     every_n_val: 1
+    include_freeform_pred: false
+    freeform_max_new_tokens: 32
 
 # Save a few training samples (image + instruction + GT/pred tokens).
 train_visualization:
   enabled: true
   num_samples: 4
   every_n_steps: 500
+  include_freeform_pred: false
+  freeform_max_new_tokens: 32
 
 # Log throughput metrics (useful for WandB).
 throughput:
@@ -47,3 +51,7 @@ checkpoint:
   save_top_k: 1
   save_last: true
   every_n_train_steps: 100
+
+# Optional Lightning debug controls.
+overfit_batches: null
+limit_train_batches: null

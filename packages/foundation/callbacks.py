@@ -23,6 +23,8 @@ class VLASampleVizConfig:
     enabled: bool = True
     num_samples: int = 4
     every_n_val: int = 1
+    include_freeform_pred: bool = False
+    freeform_max_new_tokens: int = 32
 
 
 @dataclass
@@ -57,6 +59,7 @@ def _render_panel(
     instruction: str,
     gt: str,
     pred: str,
+    freeform_pred: Optional[str] = None,
     width: int = 384,
 ) -> Image.Image:
     font = _default_font()
@@ -68,6 +71,8 @@ def _render_panel(
     text_lines += ["instruction:"] + _wrap_text(instruction, width=56)
     text_lines += ["", "gt:"] + _wrap_text(gt, width=56)
     text_lines += ["", "pred:"] + _wrap_text(pred, width=56)
+    if freeform_pred is not None:
+        text_lines += ["", "freeform:"] + _wrap_text(str(freeform_pred), width=56)
 
     line_h = 14
     pad = 10
@@ -244,6 +249,20 @@ class VLASampleVisualizationCallback(Callback):
             max_items=num,
         )
 
+        freeform_texts: Optional[list[str]] = None
+        if self.cfg.include_freeform_pred and hasattr(pl_module, "_predict_freeform_text"):
+            try:
+                frames_sel = frames[indices]
+                instr_sel = [str(instructions[i]) for i in indices]
+                freeform_texts = pl_module._predict_freeform_text(  # type: ignore[attr-defined]
+                    frames=frames_sel,
+                    instructions=instr_sel,
+                    max_new_tokens=int(self.cfg.freeform_max_new_tokens),
+                )
+            except Exception:
+                logger.debug("val sample viz: freeform generation failed", exc_info=True)
+                freeform_texts = None
+
         out_dir = Path(str(trainer.default_root_dir)) / "visualizations"
         step = int(getattr(trainer, "global_step", 0))
 
@@ -255,6 +274,7 @@ class VLASampleVisualizationCallback(Callback):
                 pred_str = action_tokens.format_target(pred_codes[i])
             except Exception:
                 pred_str = f"<INVALID> {pred_codes[i]}"
+            freeform = freeform_texts[j] if freeform_texts is not None and j < len(freeform_texts) else None
             panels.append(
                 _render_panel(
                     image=images[i],
@@ -267,6 +287,7 @@ class VLASampleVisualizationCallback(Callback):
                     instruction=str(instructions[i]),
                     gt=gt_str,
                     pred=pred_str,
+                    freeform_pred=freeform,
                 )
             )
             records.append(
@@ -277,6 +298,7 @@ class VLASampleVisualizationCallback(Callback):
                     "instruction": str(instructions[i]),
                     "gt_codes": gt_codes[i],
                     "pred_codes": pred_codes[i],
+                    "pred_freeform": freeform,
                     "episode_id": episode_id[i] if isinstance(episode_id, list) and i < len(episode_id) else None,
                     "frame_idx": frame_idx[i] if isinstance(frame_idx, list) and i < len(frame_idx) else None,
                 }
@@ -376,6 +398,8 @@ class VLATrainSampleVizConfig:
     enabled: bool = True
     num_samples: int = 4
     every_n_steps: int = 500
+    include_freeform_pred: bool = False
+    freeform_max_new_tokens: int = 32
 
 
 class VLATrainSampleVisualizationCallback(Callback):
@@ -470,6 +494,20 @@ class VLATrainSampleVisualizationCallback(Callback):
             max_items=max_items,
         )
 
+        freeform_texts: Optional[list[str]] = None
+        if self.cfg.include_freeform_pred and hasattr(pl_module, "_predict_freeform_text"):
+            try:
+                frames_sel = frames[chosen]
+                instr_sel = [str(instructions[i]) for i in chosen]
+                freeform_texts = pl_module._predict_freeform_text(  # type: ignore[attr-defined]
+                    frames=frames_sel,
+                    instructions=instr_sel,
+                    max_new_tokens=int(self.cfg.freeform_max_new_tokens),
+                )
+            except Exception:
+                logger.debug("train sample viz: freeform generation failed", exc_info=True)
+                freeform_texts = None
+
         out_dir = Path(str(trainer.default_root_dir)) / "visualizations"
 
         panels: list[Image.Image] = []
@@ -480,6 +518,11 @@ class VLATrainSampleVisualizationCallback(Callback):
                 pred_str = action_tokens.format_target(pred_codes[i])
             except Exception:
                 pred_str = f"<INVALID> {pred_codes[i]}"
+            freeform = (
+                freeform_texts[rank]
+                if freeform_texts is not None and rank < len(freeform_texts)
+                else None
+            )
 
             panels.append(
                 _render_panel(
@@ -493,6 +536,7 @@ class VLATrainSampleVisualizationCallback(Callback):
                     instruction=str(instructions[i]),
                     gt=gt_str,
                     pred=pred_str,
+                    freeform_pred=freeform,
                 )
             )
             records.append(
@@ -503,6 +547,7 @@ class VLATrainSampleVisualizationCallback(Callback):
                     "instruction": str(instructions[i]),
                     "gt_codes": gt_codes[i],
                     "pred_codes": pred_codes[i],
+                    "pred_freeform": freeform,
                     "episode_id": episode_id_list[i] if episode_id_list and i < len(episode_id_list) else None,
                     "frame_idx": frame_idx_list[i] if frame_idx_list and i < len(frame_idx_list) else None,
                 }

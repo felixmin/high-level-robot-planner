@@ -217,6 +217,26 @@ def main(cfg: DictConfig):
         code_seq_len=action_cfg.code_seq_len,
     )
 
+    # Sanity checks: action token ids must be distinct and must not map to UNK.
+    code_ids = list(action_token_ids.action_code_ids)
+    if len(set(code_ids)) != len(code_ids):
+        raise RuntimeError(
+            "Action code token ids are not unique. "
+            "This typically means the action tokens were not properly added to the tokenizer. "
+            f"code_ids={code_ids}"
+        )
+    if action_token_ids.action_start_id in code_ids or action_token_ids.action_end_id in code_ids:
+        raise RuntimeError(
+            "Action wrapper token id overlaps with an action code token id. "
+            f"start_id={action_token_ids.action_start_id} end_id={action_token_ids.action_end_id} code_ids={code_ids}"
+        )
+    unk_id = getattr(processor.tokenizer, "unk_token_id", None)
+    if unk_id is not None and unk_id in code_ids:
+        raise RuntimeError(
+            "One or more action code tokens mapped to unk_token_id; tokenization will be broken. "
+            f"unk_token_id={unk_id} code_ids={code_ids}"
+        )
+
     module = VLATokenLightningModule(
         vla_model=vla_model,
         processor=processor,
@@ -258,6 +278,8 @@ def main(cfg: DictConfig):
                     enabled=True,
                     num_samples=int(viz_cfg.get("num_samples", 4)),
                     every_n_val=int(viz_cfg.get("every_n_val", 1)),
+                    include_freeform_pred=bool(viz_cfg.get("include_freeform_pred", False)),
+                    freeform_max_new_tokens=int(viz_cfg.get("freeform_max_new_tokens", 32)),
                 )
             )
         )
@@ -269,6 +291,12 @@ def main(cfg: DictConfig):
                     enabled=True,
                     num_samples=int(train_viz_cfg.get("num_samples", 4)),
                     every_n_steps=int(train_viz_cfg.get("every_n_steps", 500)),
+                    include_freeform_pred=bool(
+                        train_viz_cfg.get("include_freeform_pred", False)
+                    ),
+                    freeform_max_new_tokens=int(
+                        train_viz_cfg.get("freeform_max_new_tokens", 32)
+                    ),
                 )
             )
         )
@@ -324,6 +352,12 @@ def main(cfg: DictConfig):
     num_sanity_val_steps = cfg.training.validation.get("num_sanity_val_steps")
     if num_sanity_val_steps is not None:
         trainer_extra_kwargs["num_sanity_val_steps"] = int(num_sanity_val_steps)
+    overfit_batches = cfg.training.get("overfit_batches")
+    if overfit_batches is not None:
+        trainer_extra_kwargs["overfit_batches"] = overfit_batches
+    limit_train_batches = cfg.training.get("limit_train_batches")
+    if limit_train_batches is not None:
+        trainer_extra_kwargs["limit_train_batches"] = limit_train_batches
 
     # Optional profiler (matches Stage 1 conventions).
     profiler = None

@@ -21,11 +21,15 @@ validation:
     enabled: true
     num_samples: 4
     every_n_val: 1
+    include_freeform_pred: false
+    freeform_max_new_tokens: 32
 
 train_visualization:
   enabled: true
   num_samples: 4
   every_n_steps: 5000
+  include_freeform_pred: false
+  freeform_max_new_tokens: 32
 
 throughput:
   enabled: true
@@ -48,9 +52,14 @@ checkpoint:
   save_last: true
   every_n_train_steps: 1000
 
+# Optional Lightning debug controls.
+# - Set `overfit_batches=1` to sanity-check that loss and accuracy improve on a single batch.
+# - Use `limit_train_batches` to bound epoch length for non-step-based runs.
+overfit_batches: null
+limit_train_batches: null
+
 profiler:
   enabled: false
   type: simple
   dirpath: ./profiles
   filename: profile
-
