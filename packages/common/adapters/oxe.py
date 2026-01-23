@@ -1,6 +1,5 @@
 import logging
 import math
-import re
 
 """
 Open X-Embodiment (OXE) adapter for streaming RLDS datasets from GCS.
@@ -138,7 +137,7 @@ class OXEDatasetConfig:
 OXE_DATASETS = {
     "language_table": OXEDatasetConfig(
         name="language_table",
-        gcs_path="gs://gresearch/robotics/language_table/0.0.1",
+        gcs_path="gs://gresearch/robotics/language_table/0.1.0",
         image_key="rgb",
         instruction_key="instruction",
         state_key="effector_translation",
@@ -222,7 +221,7 @@ OXE_DATASETS = {
     # 83k episodes across widowx, franka, baxter, sawyer robots
     "robonet": OXEDatasetConfig(
         name="robonet",
-        gcs_path="gs://gresearch/robotics/robo_net/1.0.0",
+        gcs_path="gs://gresearch/robotics/robo_net/0.1.0",
         image_key="image",  # Main camera (also has image1, image2)
         instruction_key="language_instruction",  # Step-level, not in observation
         state_key="state",  # 5D: [eef_x, eef_y, eef_z, theta, gripper]
@@ -255,65 +254,6 @@ def _parse_tfds_prepared_dataset_dir(builder_dir: str) -> tuple[str, str]:
     return parts[-2], parts[-1]
 
 
-_TFDS_VERSION_DIR_RE = re.compile(r"^\d+(?:\.\d+)*$")
-
-
-def _tfds_version_key(version: str) -> tuple[int, ...]:
-    parts = [p for p in str(version).split(".") if p]
-    out: list[int] = []
-    for p in parts:
-        try:
-            out.append(int(p))
-        except ValueError:
-            # Unknown version format; treat as 0 to keep deterministic ordering.
-            out.append(0)
-    return tuple(out)
-
-
-def _find_best_local_tfds_builder_dir(
-    *, local_root: str, dataset_dirname: str, expected_version: str
-) -> tuple[Optional[str], str]:
-    """
-    Find a local TFDS prepared dataset dir.
-
-    Returns:
-      (builder_dir or None, reason)
-    """
-    dataset_dir = Path(str(local_root)) / str(dataset_dirname)
-
-    # First try the version implied by the GCS path.
-    expected = dataset_dir / str(expected_version)
-    try:
-        if expected.exists():
-            return str(expected), "exact_version"
-    except PermissionError:
-        return None, f"permission_denied:{expected}"
-    except OSError as e:
-        return None, f"os_error:{expected}:{e}"
-
-    # Then try to discover a usable version in the mirror (some mirrors use
-    # different TFDS version numbers than the public GCS bucket).
-    try:
-        candidates: list[Path] = []
-        if dataset_dir.exists():
-            for child in dataset_dir.iterdir():
-                if not child.is_dir():
-                    continue
-                if not _TFDS_VERSION_DIR_RE.match(child.name):
-                    continue
-                if not (child / "dataset_info.json").is_file():
-                    continue
-                candidates.append(child)
-        if candidates:
-            candidates.sort(key=lambda p: _tfds_version_key(p.name))
-            return str(candidates[-1]), f"fallback_version:{candidates[-1].name}"
-        return None, "no_versions_found"
-    except PermissionError:
-        return None, f"permission_denied:{dataset_dir}"
-    except OSError as e:
-        return None, f"os_error:{dataset_dir}:{e}"
-
-
 def _resolve_tfds_builder_dir(
     *, gcs_builder_dir: str, source: str, local_root: Optional[str]
 ) -> str:
@@ -340,35 +280,17 @@ def _resolve_tfds_builder_dir(
         return str(gcs_builder_dir)
 
     dataset_dirname, version = _parse_tfds_prepared_dataset_dir(gcs_builder_dir)
-    local_builder_dir, local_reason = _find_best_local_tfds_builder_dir(
-        local_root=str(local_root),
-        dataset_dirname=dataset_dirname,
-        expected_version=version,
-    )
+    local_builder_dir = str(Path(str(local_root)) / dataset_dirname / version)
 
     if source == "local":
-        if local_builder_dir is None:
+        if not Path(local_builder_dir).exists():
             raise FileNotFoundError(
-                "Local TFDS dataset not found or not accessible: "
-                f"local_root={local_root!r} dataset={dataset_dirname!r} expected_version={version!r} "
-                f"(reason={local_reason})"
+                f"Local TFDS dataset not found: {local_builder_dir} (from local_root={local_root!r})"
             )
-        return str(local_builder_dir)
+        return local_builder_dir
 
     # auto: local if present, else gcs
-    if local_builder_dir is not None:
-        if local_reason != "exact_version":
-            logger.warning(
-                "OXE TFDS auto source: local mirror version mismatch; "
-                f"dataset={dataset_dirname} expected_version={version} selected={Path(local_builder_dir).name}"
-            )
-        return str(local_builder_dir)
-
-    logger.warning(
-        "OXE TFDS auto source: local mirror unavailable; falling back to GCS. "
-        f"dataset={dataset_dirname} expected_version={version} reason={local_reason}"
-    )
-    return str(gcs_builder_dir)
+    return local_builder_dir if Path(local_builder_dir).exists() else str(gcs_builder_dir)
 
 
 

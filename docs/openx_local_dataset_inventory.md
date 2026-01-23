@@ -9,9 +9,9 @@ Set the TF OXE adapter to prefer the local mirror (and fall back to GCS when not
 - `data.adapter.tf.tfds_read.source=auto`
 - `data.adapter.tf.tfds_read.local_root=/dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment`
 
-Note: this mirror may use different TFDS version directories than the public `gs://gresearch/robotics/...` bucket
-(e.g., `language_table` and `robo_net`). When `source=auto|local`, the loader will pick the best available local
-version if the exact `<version>` from the `gs://.../<version>` path is not present.
+Note: the loader expects the TFDS version directories to match between local and `gs://gresearch/robotics/...`
+(i.e., `<dataset_dirname>/<version>` exists in both places). If you update the mirror or GCS versions, keep
+`packages/common/adapters/oxe.py` (`OXE_DATASETS[*].gcs_path`) consistent.
 
 ## On-disk structure
 
