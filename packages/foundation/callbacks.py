@@ -185,7 +185,11 @@ def _save_grid_and_records(
 
         if hasattr(trainer, "logger") and getattr(trainer.logger, "experiment", None):
             trainer.logger.experiment.log(  # type: ignore[attr-defined]
-                {wandb_key: wandb.Image(str(png_path))}, step=step
+                # Do not pass an explicit `step=` here: Lightning's WandB integration
+                # may advance W&B's internal step counter differently (e.g., logging
+                # multiple times per global_step), which causes W&B to drop these
+                # image logs as "out of order".
+                {wandb_key: wandb.Image(str(png_path))}
             )
     except Exception:
         pass
