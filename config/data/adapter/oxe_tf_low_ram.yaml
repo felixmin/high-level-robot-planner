@@ -48,8 +48,8 @@ tf:
     # - gcs:  use the `gs://...` paths baked into `common.adapters.oxe.OXE_DATASETS`
     # - local: use a local mirror at `${local_root}/<dataset_dirname>/<version>`
     # - auto: prefer local if present, else fall back to gcs
-    source: gcs            # gcs|local|auto
-    local_root: null       # e.g. /dss/.../datasets/open-x-embodiment
+    source: auto           # gcs|local|auto
+    local_root: /dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment
     cycle_length: 1
     block_length: 1
     decode_parallelism: 1           # -1 = tf.data.AUTOTUNE
