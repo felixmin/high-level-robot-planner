@@ -38,6 +38,8 @@ tf:
     episode_queue_buffer: 0
 
   tfds_read:
+    source: gcs            # gcs|local|auto
+    local_root: null       # e.g. /dss/.../datasets/open-x-embodiment
     cycle_length: 1
     block_length: 1
     decode_parallelism: 1

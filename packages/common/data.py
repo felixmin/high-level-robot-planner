@@ -1031,6 +1031,8 @@ class OXEDataModule(pl.LightningDataModule):
         tfds_read_block_length = int(tf_read["block_length"])
         tfds_read_decode_parallelism = int(tf_read["decode_parallelism"])
         tfds_read_interleave_parallelism = int(tf_read["interleave_parallelism"])
+        tfds_source = str(tf_read.get("source", "gcs"))
+        tfds_local_root = tf_read.get("local_root")
 
         pipeline_episode_concurrency = int(tf_pipe["episode_concurrency"])
         pipeline_transform_parallelism = int(tf_pipe["transform_parallelism"])
@@ -1074,6 +1076,8 @@ class OXEDataModule(pl.LightningDataModule):
                 pair_frames_mode=pair_frames_mode,
                 pair_frames_stride=pair_frames_stride,
                 pair_frames_n=pair_frames_n,
+                tfds_source=tfds_source,
+                tfds_local_root=tfds_local_root,
             )
             self.val_dataset = OXEFramePairDataset(
                 dataset_name=cfg["name"],
@@ -1106,6 +1110,8 @@ class OXEDataModule(pl.LightningDataModule):
                 pair_frames_mode=pair_frames_mode,
                 pair_frames_stride=pair_frames_stride,
                 pair_frames_n=pair_frames_n,
+                tfds_source=tfds_source,
+                tfds_local_root=tfds_local_root,
             )
             logger.info(f"✓ OXE DataModule initialized (single dataset: {cfg['name']})")
         else:
@@ -1140,6 +1146,8 @@ class OXEDataModule(pl.LightningDataModule):
                 pair_frames_mode=pair_frames_mode,
                 pair_frames_stride=pair_frames_stride,
                 pair_frames_n=pair_frames_n,
+                tfds_source=tfds_source,
+                tfds_local_root=tfds_local_root,
             )
             self.val_dataset = MultiOXEFramePairDataset(
                 datasets=self.datasets,
@@ -1172,6 +1180,8 @@ class OXEDataModule(pl.LightningDataModule):
                 pair_frames_mode=pair_frames_mode,
                 pair_frames_stride=pair_frames_stride,
                 pair_frames_n=pair_frames_n,
+                tfds_source=tfds_source,
+                tfds_local_root=tfds_local_root,
             )
             dataset_names = [cfg["name"] for cfg in self.datasets]
             logger.info(f"✓ OXE DataModule initialized (multi-dataset: {', '.join(dataset_names)})")

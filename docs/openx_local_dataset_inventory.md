@@ -2,6 +2,13 @@
 
 Root path (remote): `/dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment`
 
+## Using this mirror in this repo
+
+Set the TF OXE adapter to prefer the local mirror (and fall back to GCS when not present):
+
+- `data.adapter.tf.tfds_read.source=auto`
+- `data.adapter.tf.tfds_read.local_root=/dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment`
+
 ## On-disk structure
 
 Each dataset is stored as a TFDS prepared dataset directory (RLDS episodes in TFRecord shards).
@@ -949,4 +956,3 @@ Most common action dict keys (count across datasets):
 - Images: `agentview_rgb`: 224x224x3 uint8; `eye_in_hand_rgb`: 224x224x3 uint8
 - Language/text-like fields: observation: `natural_language_embedding` (float32 512), `natural_language_instruction` (string scalar)
 - Action: dict with keys `gripper_closedness_action` (float32 scalar), `rotation_delta` (float32 3), `terminate_episode` (float32 scalar), `world_vector` (float32 3)
-

@@ -98,6 +98,7 @@ def _import_tensorflow_cpu_only():
     return tf
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 import numpy as np
@@ -237,6 +238,61 @@ OXE_DATASETS = {
 }
 
 
+def _parse_tfds_prepared_dataset_dir(builder_dir: str) -> tuple[str, str]:
+    """
+    Parse a TFDS prepared dataset directory path into (dataset_dirname, version).
+
+    Works for both local paths and GCS paths like:
+      - gs://gresearch/robotics/bridge/0.1.0
+      - /some/root/bridge/0.1.0
+    """
+    parts = [p for p in str(builder_dir).rstrip("/").split("/") if p]
+    if len(parts) < 2:
+        raise ValueError(
+            f"Invalid TFDS builder dir (expected .../<dataset>/<version>): {builder_dir!r}"
+        )
+    return parts[-2], parts[-1]
+
+
+def _resolve_tfds_builder_dir(
+    *, gcs_builder_dir: str, source: str, local_root: Optional[str]
+) -> str:
+    """
+    Resolve the TFDS prepared dataset directory based on `source`.
+
+    `source`:
+      - "gcs": always use `gcs_builder_dir`
+      - "local": always use `<local_root>/<dataset_dirname>/<version>` (must exist)
+      - "auto": prefer local if available, else fall back to `gcs_builder_dir`
+    """
+    source = str(source).lower().strip()
+    if source not in {"gcs", "local", "auto"}:
+        raise ValueError(
+            f"tfds_source must be one of: 'gcs', 'local', 'auto' (got {source!r})"
+        )
+
+    if source == "gcs":
+        return str(gcs_builder_dir)
+
+    if not local_root:
+        if source == "local":
+            raise ValueError("tfds_source='local' requires tfds_local_root to be set")
+        return str(gcs_builder_dir)
+
+    dataset_dirname, version = _parse_tfds_prepared_dataset_dir(gcs_builder_dir)
+    local_builder_dir = str(Path(str(local_root)) / dataset_dirname / version)
+
+    if source == "local":
+        if not Path(local_builder_dir).exists():
+            raise FileNotFoundError(
+                f"Local TFDS dataset not found: {local_builder_dir} (from local_root={local_root!r})"
+            )
+        return local_builder_dir
+
+    # auto: local if present, else gcs
+    return local_builder_dir if Path(local_builder_dir).exists() else str(gcs_builder_dir)
+
+
 class OXEFramePairDataset(IterableDataset):
     """
     PyTorch IterableDataset that streams frame pairs from OXE datasets on GCS.
@@ -292,6 +348,8 @@ class OXEFramePairDataset(IterableDataset):
         pair_frames_mode: str = "endpoints",
         pair_frames_stride: int = 1,
         pair_frames_n: int = 2,
+        tfds_source: str = "gcs",
+        tfds_local_root: Optional[str] = None,
     ):
         super().__init__()
 
@@ -343,6 +401,9 @@ class OXEFramePairDataset(IterableDataset):
 
         self.episode_queue_shuffle_buffer = int(episode_queue_shuffle_buffer)
         self.intra_episode_sample_shuffle_buffer = int(intra_episode_sample_shuffle_buffer)
+
+        self.tfds_source = str(tfds_source)
+        self.tfds_local_root = tfds_local_root
 
         self.pair_frames_mode = str(pair_frames_mode)
         if self.pair_frames_mode not in {"endpoints", "all", "stride", "fixed_n"}:
@@ -456,8 +517,15 @@ class OXEFramePairDataset(IterableDataset):
         # Disable GPU for tf.data (we only use CPU for data loading)
         tf.config.set_visible_devices([], "GPU")
 
-        gcs_path = self.config.gcs_path
-        self._builder = tfds.builder_from_directory(gcs_path)
+        builder_dir = _resolve_tfds_builder_dir(
+            gcs_builder_dir=self.config.gcs_path,
+            source=self.tfds_source,
+            local_root=self.tfds_local_root,
+        )
+        logger.info(
+            f"OXE TFDS source: {self.tfds_source} | dataset={self.config.name} | builder_dir={builder_dir}"
+        )
+        self._builder = tfds.builder_from_directory(builder_dir)
         self._num_episodes = self._builder.info.splits[
             self.split.split("[")[0]
         ].num_examples
@@ -1318,6 +1386,8 @@ class MultiOXEFramePairDataset(IterableDataset):
         pair_frames_mode: str = "endpoints",
         pair_frames_stride: int = 1,
         pair_frames_n: int = 2,
+        tfds_source: str = "gcs",
+        tfds_local_root: Optional[str] = None,
     ):
         super().__init__()
 
@@ -1368,6 +1438,9 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.tfds_read_block_length = tfds_read_block_length
         self.tfds_read_decode_parallelism = tfds_read_decode_parallelism
         self.tfds_read_interleave_parallelism = tfds_read_interleave_parallelism
+
+        self.tfds_source = str(tfds_source)
+        self.tfds_local_root = tfds_local_root
 
         self.pair_frames_mode = str(pair_frames_mode)
         self.pair_frames_stride = int(pair_frames_stride)
@@ -1501,6 +1574,8 @@ class MultiOXEFramePairDataset(IterableDataset):
                 pair_frames_mode=self.pair_frames_mode,
                 pair_frames_stride=self.pair_frames_stride,
                 pair_frames_n=self.pair_frames_n,
+                tfds_source=self.tfds_source,
+                tfds_local_root=self.tfds_local_root,
             )
             self._datasets.append(ds)
 
@@ -1888,7 +1963,12 @@ class MultiOXEFramePairDataset(IterableDataset):
                     yield torch.from_numpy(pair_np).permute(0, 4, 1, 2, 3)
 
 
-def get_oxe_dataset_info(dataset_name: str = "language_table") -> Dict[str, Any]:
+def get_oxe_dataset_info(
+    dataset_name: str = "language_table",
+    *,
+    tfds_source: str = "gcs",
+    tfds_local_root: Optional[str] = None,
+) -> Dict[str, Any]:
     """Get information about an OXE dataset."""
     import tensorflow as tf
     import tensorflow_datasets as tfds
@@ -1899,11 +1979,15 @@ def get_oxe_dataset_info(dataset_name: str = "language_table") -> Dict[str, Any]
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
     config = OXE_DATASETS[dataset_name]
-    builder = tfds.builder_from_directory(config.gcs_path)
+    builder_dir = _resolve_tfds_builder_dir(
+        gcs_builder_dir=config.gcs_path, source=tfds_source, local_root=tfds_local_root
+    )
+    builder = tfds.builder_from_directory(builder_dir)
 
     return {
         "name": config.name,
         "gcs_path": config.gcs_path,
+        "builder_dir": builder_dir,
         "splits": {
             name: split.num_examples for name, split in builder.info.splits.items()
         },
