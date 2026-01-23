@@ -33,7 +33,10 @@ training:
   overfit_batches: 1
 
   validation:
-    check_interval: 10
+    # When `overfit_batches=1`, Lightning defines an epoch as a single batch,
+    # so `val_check_interval` must be <= 1. Use epoch-based validation instead.
+    check_interval: null
+    check_val_every_n_epoch: 10
     limit_batches: 1
 
   # Keep artifacts small for debugging.
