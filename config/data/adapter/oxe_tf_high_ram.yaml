@@ -27,20 +27,20 @@ tf:
 
   # Shuffle behaviour (train vs val).
   train:
-    episode_queue_shuffle_buffer: 500
-    intra_episode_sample_shuffle_buffer: 0
-    global_stream_shuffle_buffer: 1000
+    episode_queue_shuffle_buffer: 2000
+    intra_episode_sample_shuffle_buffer: 100
+    global_stream_shuffle_buffer: 5000
 
   val:
-    episode_queue_shuffle_buffer: 0
-    intra_episode_sample_shuffle_buffer: 0
-    global_stream_shuffle_buffer: 0
+    episode_queue_shuffle_buffer: -1
+    intra_episode_sample_shuffle_buffer: 64
+    global_stream_shuffle_buffer: 2
 
   # Prefetch behaviour (memory/throughput trade-off).
   prefetch:
-    final_stream_buffer: 4           # after mixing (per-batch)
-    per_dataset_stream_buffer: 0     # per-dataset (multiplies memory)
-    episode_queue_buffer: 0          # episodes (keep small; episodes can be large)
+    final_stream_buffer: 32           # after mixing (per-batch)
+    per_dataset_stream_buffer: 4     # per-dataset (multiplies memory)
+    episode_queue_buffer: -1          # episodes (keep small; episodes can be large)
 
   # TFDS read (I/O) parallelism.
   tfds_read:
@@ -53,13 +53,13 @@ tf:
 
   # tf.data pipeline parallelism.
   pipeline:
-    episode_concurrency: 1
-    transform_parallelism: 1
-    interleave_parallelism: 1
+    episode_concurrency: 16
+    transform_parallelism: -1
+    interleave_parallelism: -1
 
   # Multi-dataset mixing behaviour.
   mixing:
     mix_block_length: 1              # 1 = per-sample mixing
-    parallelism_mode: divide         # divide|sqrt|full
+    parallelism_mode: full         # divide|sqrt|full
     strategy: sample                 # sample|choose|python
     per_dataset_private_threadpool_size: 0
