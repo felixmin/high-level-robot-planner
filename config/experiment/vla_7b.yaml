@@ -8,6 +8,7 @@ defaults:
   - /data@data: latent_labeled
   - /training@training: vla_fsdp
   - /cluster@cluster: lrz_h100_multinode
+  - optional /user_config: local
 
 experiment:
   name: vla_7b_foundation
