@@ -255,7 +255,7 @@ def _parse_tfds_prepared_dataset_dir(builder_dir: str) -> tuple[str, str]:
     return parts[-2], parts[-1]
 
 
-_TFDS_VERSION_DIR_RE = re.compile(r"^\\d+(?:\\.\\d+)*$")
+_TFDS_VERSION_DIR_RE = re.compile(r"^\d+(?:\.\d+)*$")
 
 
 def _tfds_version_key(version: str) -> tuple[int, ...]:
