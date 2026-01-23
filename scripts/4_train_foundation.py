@@ -365,6 +365,11 @@ def main(cfg: DictConfig):
     if profiler_cfg and bool(profiler_cfg.get("enabled", False)):
         profiler_type = str(profiler_cfg.get("type", "simple"))
         dirpath = str(profiler_cfg.get("dirpath", output_dir / "profiles"))
+        dirpath_path = Path(dirpath)
+        if not dirpath_path.is_absolute():
+            # Match Stage 1 behavior: resolve relative profiler paths inside the run directory.
+            dirpath_path = output_dir / dirpath_path
+        dirpath = str(dirpath_path)
         filename = str(profiler_cfg.get("filename", "profile"))
         if profiler_type == "simple":
             from lightning.pytorch.profilers import SimpleProfiler
