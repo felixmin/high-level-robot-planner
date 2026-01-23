@@ -46,14 +46,14 @@ tf:
   tfds_read:
     source: auto           # gcs|local|auto
     local_root: /dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment
-    cycle_length: 1
-    block_length: 1
+    cycle_length: 8
+    block_length: 4
     decode_parallelism: -1           # -1 = tf.data.AUTOTUNE
     interleave_parallelism: -1       # -1 = tf.data.AUTOTUNE
 
   # tf.data pipeline parallelism.
   pipeline:
-    episode_concurrency: 16
+    episode_concurrency: -1
     transform_parallelism: -1
     interleave_parallelism: -1
 
@@ -62,4 +62,4 @@ tf:
     mix_block_length: 1              # 1 = per-sample mixing
     parallelism_mode: full         # divide|sqrt|full
     strategy: sample                 # sample|choose|python
-    per_dataset_private_threadpool_size: 0
+    per_dataset_private_threadpool_size: 16

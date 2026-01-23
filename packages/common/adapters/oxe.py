@@ -1084,9 +1084,14 @@ class OXEFramePairDataset(IterableDataset):
                 out_ds = out_ds.take(samples_per_episode)
             return out_ds
 
+        if pipeline_episode_concurrency == -1:
+            cycle_length = tf.data.AUTOTUNE
+        else:
+            cycle_length = max(1, pipeline_episode_concurrency)
+
         tf_ds = ds.interleave(
             process_episode_to_pairs,
-            cycle_length=max(1, pipeline_episode_concurrency),
+            cycle_length=cycle_length,
             block_length=1,
             num_parallel_calls=pipeline_interleave_parallelism,
             deterministic=False,
@@ -1396,8 +1401,9 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.dataset_configs = datasets
         self.final_stream_prefetch_buffer = final_stream_prefetch_buffer
         self.per_dataset_stream_prefetch_buffer = int(per_dataset_stream_prefetch_buffer)
-        if self.per_dataset_stream_prefetch_buffer < 0:
-            raise ValueError("per_dataset_stream_prefetch_buffer must be >= 0")
+        # Allow -1 to delegate to tf.data.AUTOTUNE inside each per-dataset pipeline.
+        if self.per_dataset_stream_prefetch_buffer < -1:
+            raise ValueError("per_dataset_stream_prefetch_buffer must be >= -1")
         self.return_metadata = return_metadata
         self.is_train = is_train
         self.output_batch_size = int(output_batch_size)
@@ -1507,15 +1513,28 @@ class MultiOXEFramePairDataset(IterableDataset):
         tfds_read_cycle_length = max(
             1, int(float(self.tfds_read_cycle_length) / divisor)
         )
-        pipeline_episode_concurrency = max(
-            1, int(float(self.pipeline_episode_concurrency_total) / divisor)
-        )
-        pipeline_transform_parallelism = max(
-            1, int(float(self.pipeline_transform_parallelism) / divisor)
-        )
-        pipeline_interleave_parallelism = max(
-            1, int(float(self.pipeline_interleave_parallelism) / divisor)
-        )
+        # Preserve tf.data.AUTOTUNE (-1) for per-dataset pipelines when explicitly requested.
+        # Otherwise, scale down to avoid oversubscribing CPU/threadpools.
+        if int(self.pipeline_episode_concurrency_total) == -1:
+            pipeline_episode_concurrency = -1
+        else:
+            pipeline_episode_concurrency = max(
+                1, int(float(self.pipeline_episode_concurrency_total) / divisor)
+            )
+        # Preserve tf.data.AUTOTUNE (-1) for per-dataset pipelines when explicitly requested.
+        # Otherwise, scale down to avoid oversubscribing CPU/threadpools.
+        if int(self.pipeline_transform_parallelism) == -1:
+            pipeline_transform_parallelism = -1
+        else:
+            pipeline_transform_parallelism = max(
+                1, int(float(self.pipeline_transform_parallelism) / divisor)
+            )
+        if int(self.pipeline_interleave_parallelism) == -1:
+            pipeline_interleave_parallelism = -1
+        else:
+            pipeline_interleave_parallelism = max(
+                1, int(float(self.pipeline_interleave_parallelism) / divisor)
+            )
 
         # Prefetch at the mixed pipeline level (one place). Avoid per-dataset
         # prefetch buffers which multiply memory usage. For multi-dataset mixing,
