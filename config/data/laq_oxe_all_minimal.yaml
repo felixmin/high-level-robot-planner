@@ -1,0 +1,13 @@
+# @package data
+
+# TF OXE preset: language_table + bridge + rt1 + robonet, with the minimal TF adapter.
+
+defaults:
+  - dataset: oxe_all
+  - adapter: oxe_tf_minimal
+  - loader: oxe_streaming
+  - preprocess: pair_256
+  - _self_
+
+backend: oxe_tf
+

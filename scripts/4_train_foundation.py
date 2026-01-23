@@ -256,6 +256,7 @@ def main(cfg: DictConfig):
 
     checkpoint_cfg = cfg.training.checkpoint
     every_n_train_steps = checkpoint_cfg.get("every_n_train_steps")
+    save_weights_only = bool(checkpoint_cfg.get("save_weights_only", False))
 
     callbacks = [
         ModelCheckpoint(
@@ -264,6 +265,7 @@ def main(cfg: DictConfig):
             mode=checkpoint_cfg.mode,
             save_top_k=int(checkpoint_cfg.save_top_k),
             save_last=bool(checkpoint_cfg.save_last),
+            save_weights_only=save_weights_only,
             every_n_train_steps=int(every_n_train_steps) if every_n_train_steps is not None else None,
             filename="vla-step{step:06d}",
             verbose=True,

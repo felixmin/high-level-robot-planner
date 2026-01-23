@@ -110,6 +110,7 @@ def generate_sbatch_script(
     slurm_logs_dir: Path,
     cache_dir: Path,
     hf_token_path: Path | None,
+    tfds_local_root: Path | None,
     *,
     time_limit: str | None = None,
     time: str | None = None,
@@ -142,6 +143,19 @@ fi
         hf_auth_block = """# Hugging Face auth for gated repos (e.g. DINOv3).
 if [ -z "${HF_TOKEN:-}" ] && [ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]; then
   echo "WARNING: No Hugging Face token found; gated models may fail. Run huggingface-cli login or set HF_TOKEN." >&2
+fi
+"""
+
+    tfds_root_block = ""
+    if tfds_local_root is not None:
+        tfds_root_block = f"""# OXE TFDS local mirror visibility check.
+echo "TFDS_LOCAL_ROOT: {tfds_local_root}"
+if [ -d "{tfds_local_root}" ]; then
+  echo "✓ TFDS local root is visible inside the container"
+  ls -ld "{tfds_local_root}" || true
+else
+  echo "WARNING: TFDS local root is NOT visible inside the container (OXE will fall back to GCS when source=auto)." >&2
+  ls -ld "{tfds_local_root}" || true
 fi
 """
 
@@ -191,6 +205,8 @@ export NCCL_DEBUG=WARN
 
 # Show GPU info
 nvidia-smi
+
+{tfds_root_block}
 
 # Run training
 {python_cmd}
@@ -358,6 +374,23 @@ def main():
         if laq_ckpt_path.is_absolute():
             extra_mounts.append(laq_ckpt_path.parent)
 
+    # Local OXE TFDS mirrors must be mounted explicitly for Enroot containers.
+    # When absent, OXE will fall back to GCS (for source=auto) but will not be able
+    # to see the local filesystem path.
+    tfds_local_root_path: Path | None = None
+    tfds_local_root = OmegaConf.select(cfg, "data.adapter.tf.tfds_read.local_root")
+    if tfds_local_root:
+        candidate_root = Path(str(tfds_local_root))
+        if candidate_root.is_absolute():
+            if candidate_root.exists():
+                extra_mounts.append(candidate_root)
+                tfds_local_root_path = candidate_root
+            else:
+                print(
+                    "WARNING: data.adapter.tf.tfds_read.local_root does not exist on the submit host; "
+                    f"skipping container mount: {candidate_root}"
+                )
+
     # Build container mounts: always mount the project root, plus any external run/cache roots.
     # Mount runs_dir.parent to include all sweep job directories (which are siblings).
     mount_roots: list[Path] = [PROJECT_ROOT, runs_dir.parent, cache_dir, *extra_mounts]
@@ -460,6 +493,7 @@ def main():
             slurm_logs_dir=job_runs_dir,
             cache_dir=cache_dir,
             hf_token_path=hf_token_path,
+            tfds_local_root=tfds_local_root_path,
         )
 
         if dry_run:

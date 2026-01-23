@@ -1,0 +1,47 @@
+# @package _global_
+
+# Stage 2: diagnostic run to verify learning signal (overfit a single batch).
+#
+# Goal: quickly answer "does training work in principle?" without waiting for 30k steps.
+# Expected behavior if everything is wired correctly:
+# - val/label_code_token_mismatch_frac ~ 0
+# - val/tf_code_token_accuracy quickly rises toward 1.0 on the repeated batch
+# - val/tf_code_token_entropy drops (model becomes confident) without collapsing to a wrong token
+#
+# Uses the minimal TF adapter to avoid long shuffle-buffer warmup.
+
+defaults:
+  - /model@model: foundation_cosmos2_tokens_8_4
+  - /data@data: laq_oxe_all_minimal
+  - /training@training: vla_lightning_debug
+  - /cluster@cluster: lrz_h100
+  - optional /user_config: local
+
+experiment:
+  name: vla_cosmos2_tokens_overfit
+  description: "Diagnostic: overfit one batch (Cosmos-Reason2 tokens, 8x4)"
+
+submit:
+  script: 4_train_foundation
+
+data:
+  loader:
+    batch_size: 8
+
+training:
+  max_steps: 300
+  overfit_batches: 1
+
+  validation:
+    check_interval: 10
+    limit_batches: 1
+
+  # Keep artifacts small for debugging.
+  checkpoint:
+    save_top_k: 0
+    save_last: false
+    save_weights_only: true
+
+logging:
+  tags: ["debug", "foundation", "cosmos2", "tokens", "overfit"]
+  log_model: false
