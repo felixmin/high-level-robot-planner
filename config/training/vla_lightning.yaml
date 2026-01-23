@@ -59,7 +59,7 @@ overfit_batches: null
 limit_train_batches: null
 
 profiler:
-  enabled: false
-  type: simple
+  enabled: true
+  type: advanced
   dirpath: ./profiles
   filename: profile

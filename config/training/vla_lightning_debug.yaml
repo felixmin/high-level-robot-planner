@@ -55,3 +55,9 @@ checkpoint:
 # Optional Lightning debug controls.
 overfit_batches: null
 limit_train_batches: null
+
+profiler:
+  enabled: true
+  type: advanced
+  dirpath: ./profiles
+  filename: profile
