@@ -53,6 +53,10 @@ checkpoint:
   save_weights_only: false
   every_n_train_steps: 1000
 
+# Optional: log teacher-forced code-token diagnostics on *training* batches.
+# Set small (e.g. 1 or 10) for overfit/debug runs; keep null for production.
+train_teacher_forced_metrics_every_n_steps: null
+
 # Optional Lightning debug controls.
 # - Set `overfit_batches=1` to sanity-check that loss and accuracy improve on a single batch.
 # - Use `limit_train_batches` to bound epoch length for non-step-based runs.

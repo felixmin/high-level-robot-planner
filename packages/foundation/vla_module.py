@@ -52,6 +52,7 @@ class VLATokenLightningModule(pl.LightningModule):
         optimizer: Optional[VLAOptimizerConfig] = None,
         frames_to_images: Optional[Callable[[torch.Tensor], List[Any]]] = None,
         action_token_ids: Optional[ActionTokenIds] = None,
+        train_teacher_forced_metrics_every_n_steps: int | None = None,
     ):
         super().__init__()
         self.vla_model = vla_model
@@ -61,6 +62,9 @@ class VLATokenLightningModule(pl.LightningModule):
         self.chat = chat or ChatConfig(system_prompt=None)
         self.optimizer_cfg = optimizer or VLAOptimizerConfig()
         self.action_token_ids = action_token_ids
+        self.train_teacher_forced_metrics_every_n_steps = (
+            train_teacher_forced_metrics_every_n_steps
+        )
 
         # Convert OXE batch frames into image objects for the VLM processor.
         # In production this will likely return PIL Images; in tests we can inject a stub.
@@ -79,10 +83,21 @@ class VLATokenLightningModule(pl.LightningModule):
                 f"ActionTokenConfig ({self.action_tokens.code_seq_len})"
             )
 
+    def _should_log_train_teacher_forced_metrics(self) -> bool:
+        interval = self.train_teacher_forced_metrics_every_n_steps
+        if interval is None:
+            return False
+        if interval <= 0:
+            return False
+        return (int(self.global_step) % int(interval)) == 0
+
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        loss, _codes, _frames, _instructions, _inputs, _outputs = self._loss_from_batch(batch)
+        loss, codes, _frames, _instructions, inputs, outputs = self._loss_from_batch(batch)
 
         self.log("train/loss", loss, prog_bar=True, sync_dist=True)
+        if self._should_log_train_teacher_forced_metrics():
+            self._log_gt_code_stats(stage="train", codes=codes)
+            self._log_teacher_forced_code_metrics(stage="train", inputs=inputs, outputs=outputs)
         return loss
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
@@ -187,12 +202,14 @@ class VLATokenLightningModule(pl.LightningModule):
         # Overall code histogram across positions.
         flat = codes.reshape(-1)
         counts = torch.bincount(flat, minlength=codebook_size).to(torch.float32)
+        on_step = stage == "train"
+        on_epoch = not on_step
         for c in range(codebook_size):
             self.log(
                 f"{stage}/gt_code_count/code{c}",
                 counts[c],
-                on_step=False,
-                on_epoch=True,
+                on_step=on_step,
+                on_epoch=on_epoch,
                 sync_dist=True,
                 reduce_fx="sum",
             )
@@ -210,8 +227,8 @@ class VLATokenLightningModule(pl.LightningModule):
             self.log(
                 f"{stage}/gt_majority_baseline_acc",
                 baseline,
-                on_step=False,
-                on_epoch=True,
+                on_step=on_step,
+                on_epoch=on_epoch,
                 sync_dist=True,
                 batch_size=int(codes.shape[0]),
             )
@@ -243,21 +260,23 @@ class VLATokenLightningModule(pl.LightningModule):
 
         code_tokens_per_sample = is_code.sum(dim=1).to(torch.float32)
         expected = float(token_ids.code_seq_len)
+        on_step = stage == "train"
+        on_epoch = not on_step
         if labels.shape[0] > 0:
             mismatch = (code_tokens_per_sample != expected).to(torch.float32).mean()
             self.log(
                 f"{stage}/label_code_token_mismatch_frac",
                 mismatch,
-                on_step=False,
-                on_epoch=True,
+                on_step=on_step,
+                on_epoch=on_epoch,
                 sync_dist=True,
                 batch_size=int(labels.shape[0]),
             )
             self.log(
                 f"{stage}/label_code_tokens_per_sample_mean",
                 code_tokens_per_sample.mean(),
-                on_step=False,
-                on_epoch=True,
+                on_step=on_step,
+                on_epoch=on_epoch,
                 sync_dist=True,
                 batch_size=int(labels.shape[0]),
             )
@@ -284,8 +303,8 @@ class VLATokenLightningModule(pl.LightningModule):
         self.log(
             f"{stage}/tf_code_token_accuracy",
             acc,
-            on_step=False,
-            on_epoch=True,
+            on_step=on_step,
+            on_epoch=on_epoch,
             sync_dist=True,
             prog_bar=(stage == "val"),
             batch_size=total,
@@ -293,8 +312,8 @@ class VLATokenLightningModule(pl.LightningModule):
         self.log(
             f"{stage}/tf_code_token_entropy",
             entropy,
-            on_step=False,
-            on_epoch=True,
+            on_step=on_step,
+            on_epoch=on_epoch,
             sync_dist=True,
             batch_size=total,
         )
@@ -312,16 +331,16 @@ class VLATokenLightningModule(pl.LightningModule):
             self.log(
                 f"{stage}/tf_pred_code_count/code{i}",
                 pred_counts[i],
-                on_step=False,
-                on_epoch=True,
+                on_step=on_step,
+                on_epoch=on_epoch,
                 sync_dist=True,
                 reduce_fx="sum",
             )
             self.log(
                 f"{stage}/tf_gt_code_count/code{i}",
                 gt_counts[i],
-                on_step=False,
-                on_epoch=True,
+                on_step=on_step,
+                on_epoch=on_epoch,
                 sync_dist=True,
                 reduce_fx="sum",
             )

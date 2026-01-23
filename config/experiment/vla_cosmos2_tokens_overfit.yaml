@@ -34,6 +34,8 @@ training:
   # (overfit) batch. Set max_epochs high and let max_steps control termination.
   max_epochs: 1000
   overfit_batches: 1
+  log_every_n_steps: 1
+  train_teacher_forced_metrics_every_n_steps: 1
 
   validation:
     # When `overfit_batches=1`, Lightning defines an epoch as a single batch,

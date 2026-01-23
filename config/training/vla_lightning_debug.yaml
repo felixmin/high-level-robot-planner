@@ -5,6 +5,7 @@ max_epochs: 1
 accumulate_grad_batches: 1
 precision: bf16-mixed
 gradient_clip_val: 1.0
+log_every_n_steps: 10
 
 optimizer:
   lr: 1.0e-5
@@ -52,6 +53,10 @@ checkpoint:
   save_last: true
   save_weights_only: false
   every_n_train_steps: 100
+
+# Optional: log teacher-forced code-token diagnostics on *training* batches.
+# Set small (e.g. 1 or 10) for overfit/debug runs; keep null for regular smoke runs.
+train_teacher_forced_metrics_every_n_steps: null
 
 # Optional Lightning debug controls.
 overfit_batches: null

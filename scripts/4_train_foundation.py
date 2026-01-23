@@ -249,6 +249,11 @@ def main(cfg: DictConfig):
         ),
         action_token_ids=action_token_ids,
         frames_to_images=oxe_first_frames_to_pil,
+        train_teacher_forced_metrics_every_n_steps=(
+            int(cfg.training.train_teacher_forced_metrics_every_n_steps)
+            if cfg.training.get("train_teacher_forced_metrics_every_n_steps") is not None
+            else None
+        ),
     )
 
     checkpoint_dir = output_dir / "checkpoints"
