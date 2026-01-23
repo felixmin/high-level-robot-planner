@@ -16,11 +16,12 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      model.dim: 256, 512, 1024
+      data.loader.batch_size: 64, 128
+      training.optimizer.lr: 1.0e-4, 3.0e-4, 1.0e-3
 
 
 experiment:
-  name: laq_oxe_local_sweep_model_dim_${model.dim}
+  name: laq_oxe_local_sweep_model_bs_${data.loader.batch_size}_lr_${training.optimizer.lr}
   description: "Latent Action Model Sweep"
 
 data:
@@ -28,7 +29,7 @@ data:
     batch_size: 32
 
 training:
-  max_steps: 20010
+  max_steps: 20020
   progress_bar:
     enabled: true
     refresh_rate: 10
