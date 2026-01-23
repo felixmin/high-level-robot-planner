@@ -16,16 +16,44 @@ import random
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 import torch
-from torch.utils.data import Dataset, DataLoader, Subset
+from torch.utils.data import Dataset, DataLoader, IterableDataset, Subset
 from torchvision import transforms as T
 from PIL import Image
 import lightning.pytorch as pl
 
 # Module-level logger
 logger = logging.getLogger(__name__)
+
+
+class CacheFirstBatchIterableDataset(IterableDataset):
+    """
+    Wrap an IterableDataset and repeat its first yielded batch forever.
+
+    This is intended for "true overfit one batch" diagnostics when the underlying
+    dataset is streaming/non-deterministic (e.g., tf.data pipelines).
+    """
+
+    def __init__(self, base: IterableDataset):
+        super().__init__()
+        self._base = base
+        self._has_cached = False
+        self._cached_batch: object | None = None
+
+    def __iter__(self) -> Iterator:
+        if self._has_cached:
+            while True:
+                yield self._cached_batch
+
+        for batch in self._base:
+            self._cached_batch = batch
+            self._has_cached = True
+            while True:
+                yield self._cached_batch
+
+        raise RuntimeError("CacheFirstBatchIterableDataset: base dataset yielded no batches")
 
 
 @dataclass
@@ -994,6 +1022,7 @@ class OXEDataModule(pl.LightningDataModule):
         # Will be set in setup()
         self.train_dataset = None
         self.val_dataset = None
+        self._cache_first_train_batch = False
 
     def setup(self, stage: Optional[str] = None):
         """Create train and val datasets."""
@@ -1021,6 +1050,7 @@ class OXEDataModule(pl.LightningDataModule):
         samples_per_episode = int(tf_sampling["samples_per_episode"])
         seed = tf_sampling["seed"]
         persistent_iterator = bool(tf_iter["persistent"])
+        cache_first_train_batch = bool(tf_iter.get("cache_first_train_batch", False))
         debug_use_synthetic_data = bool(tf_debug["use_synthetic_data"])
         debug_synthetic_num_samples = int(tf_debug["synthetic_num_samples"])
         pair_frames_mode = str(tf_pair_frames.get("mode", "endpoints"))
@@ -1186,8 +1216,23 @@ class OXEDataModule(pl.LightningDataModule):
             dataset_names = [cfg["name"] for cfg in self.datasets]
             logger.info(f"✓ OXE DataModule initialized (multi-dataset: {', '.join(dataset_names)})")
 
+        self._cache_first_train_batch = bool(cache_first_train_batch)
+        if self._cache_first_train_batch:
+            if not isinstance(self.train_dataset, IterableDataset):
+                raise TypeError(
+                    "cache_first_train_batch requires an IterableDataset, got "
+                    f"{type(self.train_dataset)}"
+                )
+            self.train_dataset = CacheFirstBatchIterableDataset(self.train_dataset)
+            logger.info("✓ OXE debug mode: caching first train batch (reused forever)")
+
     def train_dataloader(self):
         """Create training dataloader."""
+        if self._cache_first_train_batch and int(self.loader["num_workers"]) != 0:
+            raise ValueError(
+                "cache_first_train_batch requires data.loader.num_workers=0 "
+                "(worker processes do not share the cached batch)"
+            )
         return DataLoader(
             self.train_dataset,
             batch_size=None,  # batching happens in tf.data for OXE
