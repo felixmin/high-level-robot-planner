@@ -9,6 +9,10 @@ Set the TF OXE adapter to prefer the local mirror (and fall back to GCS when not
 - `data.adapter.tf.tfds_read.source=auto`
 - `data.adapter.tf.tfds_read.local_root=/dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment`
 
+Note: this mirror may use different TFDS version directories than the public `gs://gresearch/robotics/...` bucket
+(e.g., `language_table` and `robo_net`). When `source=auto|local`, the loader will pick the best available local
+version if the exact `<version>` from the `gs://.../<version>` path is not present.
+
 ## On-disk structure
 
 Each dataset is stored as a TFDS prepared dataset directory (RLDS episodes in TFRecord shards).
