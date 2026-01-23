@@ -248,21 +248,28 @@ class VLATokenLightningModule(pl.LightningModule):
         if logits is None or not isinstance(logits, torch.Tensor):
             return
 
+        # Hugging Face causal LM convention: logits at position t predict label at t+1.
+        # The model loss uses shifted labels/logits, so metrics must do the same.
+        if labels.shape[1] < 2 or logits.shape[1] < 2:
+            return
+        shift_labels = labels[:, 1:].contiguous()
+        shift_logits = logits[:, :-1, :].contiguous()
+
         code_ids = torch.tensor(
-            token_ids.action_code_ids, device=labels.device, dtype=torch.long
+            token_ids.action_code_ids, device=shift_labels.device, dtype=torch.long
         )
         if code_ids.numel() == 0:
             return
 
         # Identify positions where the supervision token is an action code token.
-        active = labels != -100
-        is_code = (labels.unsqueeze(-1) == code_ids.view(1, 1, -1)).any(dim=-1) & active
+        active = shift_labels != -100
+        is_code = (shift_labels.unsqueeze(-1) == code_ids.view(1, 1, -1)).any(dim=-1) & active
 
         code_tokens_per_sample = is_code.sum(dim=1).to(torch.float32)
         expected = float(token_ids.code_seq_len)
         on_step = stage == "train"
         on_epoch = not on_step
-        if labels.shape[0] > 0:
+        if shift_labels.shape[0] > 0:
             mismatch = (code_tokens_per_sample != expected).to(torch.float32).mean()
             self.log(
                 f"{stage}/label_code_token_mismatch_frac",
@@ -270,7 +277,7 @@ class VLATokenLightningModule(pl.LightningModule):
                 on_step=on_step,
                 on_epoch=on_epoch,
                 sync_dist=True,
-                batch_size=int(labels.shape[0]),
+                batch_size=int(shift_labels.shape[0]),
             )
             self.log(
                 f"{stage}/label_code_tokens_per_sample_mean",
@@ -278,7 +285,7 @@ class VLATokenLightningModule(pl.LightningModule):
                 on_step=on_step,
                 on_epoch=on_epoch,
                 sync_dist=True,
-                batch_size=int(labels.shape[0]),
+                batch_size=int(shift_labels.shape[0]),
             )
 
         total = int(is_code.sum().item())
@@ -286,13 +293,13 @@ class VLATokenLightningModule(pl.LightningModule):
             return
 
         # Restrict to the K action-code logits (K is small, e.g., 8).
-        code_logits = logits[..., code_ids]  # [B, T, K]
+        code_logits = shift_logits[..., code_ids]  # [B, T-1, K]
         selected_logits = code_logits[is_code]  # [N, K]
 
         # Teacher-forced predicted code index in [0, K-1].
         pred_idx = torch.argmax(selected_logits, dim=-1)
         pred_token_id = code_ids[pred_idx]
-        gt_token_id = labels[is_code]
+        gt_token_id = shift_labels[is_code]
         correct = (pred_token_id == gt_token_id).to(torch.float32).sum()
         acc = correct / float(total)
 
