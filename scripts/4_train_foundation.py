@@ -137,6 +137,8 @@ def main(cfg: DictConfig):
         raise ValueError(
             "Set `model.laq.checkpoint=/path/to/laq.ckpt` for online LAQ labeling."
         )
+    from laq import LAQTask
+
     def load_laq_task_from_checkpoint(checkpoint_path: str) -> LAQTask:
         """
         Load an LAQ Lightning checkpoint across Torch/Lightning versions.
