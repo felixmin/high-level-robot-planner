@@ -123,3 +123,35 @@ def test_validation_step_logs_token_accuracy_without_error():
     )
     assert float(metrics["token_accuracy"].cpu().item()) == 1.0
     assert float(metrics["sequence_accuracy"].cpu().item()) == 1.0
+
+
+def test_predict_codes_slices_generated_suffix_after_padded_prompt():
+    token_ids = ActionTokenIds(
+        action_start_id=10,
+        action_end_id=11,
+        action_code_ids=list(range(20, 28)),
+        eos_token_id=2,
+        code_seq_len=4,
+    )
+
+    module = VLATokenLightningModule(
+        vla_model=DummyVLAWithGenerate(token_ids),
+        processor=FakeProcessor(),
+        code_provider=DummyCodeProvider(),  # type: ignore[arg-type]
+        action_tokens=ActionTokenConfig(codebook_size=8, code_seq_len=4),
+        chat=ChatConfig(system_prompt="You are a robot."),
+        optimizer=VLAOptimizerConfig(lr=1e-4, weight_decay=0.0),
+        frames_to_images=lambda frames: [object() for _ in range(frames.shape[0])],
+        action_token_ids=token_ids,
+    )
+
+    frames = torch.randint(0, 256, (2, 2, 16, 16, 3), dtype=torch.uint8)
+    # Different prompt lengths => padding in the prompt batch.
+    instructions = ["a b c d", "x"]
+
+    _pred_codes, debug = module._predict_codes_with_debug(frames=frames, instructions=instructions)
+    assert len(debug) == 2
+    for rec in debug:
+        suffix = rec.get("generated_suffix_ids")
+        assert isinstance(suffix, list) and suffix, "missing generated_suffix_ids in debug"
+        assert suffix[0] == token_ids.action_start_id

@@ -99,34 +99,40 @@ def build_inputs_with_prompt_mask(
         return_tensors="pt",
         padding=True,
     )
+
+    full_inputs = {
+        k: (v.to(device) if isinstance(v, torch.Tensor) else v)
+        for k, v in full_inputs.items()
+    }
+
+    if "input_ids" not in full_inputs or "attention_mask" not in full_inputs:
+        raise KeyError("processor output must include input_ids and attention_mask")
+
+    labels = full_inputs["input_ids"].clone()
+    full_attention_mask = full_inputs["attention_mask"]
+
+    # Compute prompt lengths via the processor with images to match multimodal tokenization.
     prompt_inputs = processor(
         text=prompt_texts,
         images=list(images),
         return_tensors="pt",
         padding=True,
     )
-
-    full_inputs = {
-        k: (v.to(device) if isinstance(v, torch.Tensor) else v)
-        for k, v in full_inputs.items()
-    }
     prompt_inputs = {
         k: (v.to(device) if isinstance(v, torch.Tensor) else v)
         for k, v in prompt_inputs.items()
     }
-
-    if "input_ids" not in full_inputs or "attention_mask" not in full_inputs:
-        raise KeyError("processor output must include input_ids and attention_mask")
     if "attention_mask" not in prompt_inputs:
         raise KeyError("prompt processor output must include attention_mask")
-
-    labels = full_inputs["input_ids"].clone()
-    full_attention_mask = full_inputs["attention_mask"]
     prompt_lens = prompt_inputs["attention_mask"].sum(dim=1).to(torch.long)
 
-    for i in range(labels.shape[0]):
-        prompt_len = int(prompt_lens[i].item())
-        labels[i, :prompt_len] = -100
+    # Mask prompt positions (vectorized; avoids per-sample Python loops and `.item()` syncs).
+    if labels.numel() > 0:
+        seq_len = int(labels.shape[1])
+        prompt_lens = prompt_lens.clamp(min=0, max=seq_len)
+        pos = torch.arange(seq_len, device=labels.device).view(1, -1)
+        prompt_mask = pos < prompt_lens.view(-1, 1)
+        labels = labels.masked_fill(prompt_mask, -100)
 
     # Always mask padding to avoid loss on padded positions.
     labels = labels.masked_fill(full_attention_mask == 0, -100)

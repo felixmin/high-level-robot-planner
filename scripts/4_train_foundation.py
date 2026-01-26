@@ -53,16 +53,16 @@ def main(cfg: DictConfig):
 
     # Setup unified logging
     runs_dir = resolve_runs_dir(
-        logging_root_dir=cfg.logging.get("root_dir"),
-        logging_runs_dir=cfg.logging.get("runs_dir"),
+        logging_root_dir=cfg.logging.root_dir,
+        logging_runs_dir=cfg.logging.runs_dir,
         workspace_root=workspace_root,
         experiment_name=OmegaConf.select(cfg, "experiment.name"),
     )
 
     logger, output_dir = setup_unified_logging(
         runs_dir=runs_dir,
-        job_id=cfg.logging.get("job_id"),
-        log_level=cfg.logging.get("level", "INFO"),
+        job_id=cfg.logging.job_id,
+        log_level=cfg.logging.level,
         logger_name="foundation.training",
     )
 
@@ -72,7 +72,33 @@ def main(cfg: DictConfig):
     logger.info("\nConfiguration:")
     logger.info(OmegaConf.to_yaml(cfg))
 
-    set_seed(int(getattr(cfg, "seed", 42)))
+    # This script currently implements the Lightning training stack (Stage 2, tokens).
+    # Fail fast if an incompatible training config (e.g., legacy FSDP schema) is composed.
+    required_training_keys = [
+        "max_steps",
+        "max_epochs",
+        "accumulate_grad_batches",
+        "precision",
+        "gradient_clip_val",
+        "log_every_n_steps",
+        "optimizer",
+        "validation",
+        "checkpoint",
+        "train_visualization",
+        "throughput",
+        "dataset_usage_logger",
+        "progress_logger",
+        "resume_from_checkpoint",
+    ]
+    missing = [k for k in required_training_keys if k not in cfg.training]
+    if missing:
+        raise RuntimeError(
+            "Unsupported training config for `scripts/4_train_foundation.py`. "
+            "Expected Lightning-style `training` schema. "
+            f"Missing keys: {missing}"
+        )
+
+    set_seed(int(cfg.seed))
 
     # Setup WandB logger (use unified logging paths). If disabled, avoid Lightning's default logger
     # to prevent creating extra `lightning_logs/` directories.
@@ -88,11 +114,11 @@ def main(cfg: DictConfig):
     wandb_logger = setup_wandb_with_unified_paths(
         logger=logger,
         output_dir=output_dir,
-        project=cfg.logging.get("project", "hlrp"),
+        project=cfg.logging.project,
         name=run_name,
         group=cfg.experiment.name,
-        tags=cfg.logging.get("tags", []),
-        use_wandb=bool(cfg.logging.get("use_wandb", True)),
+        tags=cfg.logging.tags,
+        use_wandb=bool(cfg.logging.use_wandb),
         settings=wandb.Settings(start_method="thread", reinit=True),
     )
 
@@ -111,8 +137,6 @@ def main(cfg: DictConfig):
         raise ValueError(
             "Set `model.laq.checkpoint=/path/to/laq.ckpt` for online LAQ labeling."
         )
-    from laq import LAQTask
-
     def load_laq_task_from_checkpoint(checkpoint_path: str) -> LAQTask:
         """
         Load an LAQ Lightning checkpoint across Torch/Lightning versions.
@@ -181,7 +205,7 @@ def main(cfg: DictConfig):
     model_name = cfg.model.vla.model_name
     from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
 
-    torch_dtype = str(cfg.model.vla.get("torch_dtype", "bf16")).lower()
+    torch_dtype = str(cfg.model.vla.torch_dtype).lower()
     dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
     if torch_dtype not in dtype_map:
         raise ValueError(
@@ -193,7 +217,7 @@ def main(cfg: DictConfig):
     vla_model = Qwen3VLForConditionalGeneration.from_pretrained(
         model_name,
         torch_dtype=dtype,
-        attn_implementation=cfg.model.vla.get("attn_implementation", "sdpa"),
+        attn_implementation=cfg.model.vla.attn_implementation,
     )
     # HuggingFace models default to eval mode after from_pretrained(); set train mode explicitly
     vla_model.train()
@@ -236,13 +260,19 @@ def main(cfg: DictConfig):
             "One or more action code tokens mapped to unk_token_id; tokenization will be broken. "
             f"unk_token_id={unk_id} code_ids={code_ids}"
         )
+    pad_id = getattr(processor.tokenizer, "pad_token_id", None)
+    if pad_id is not None and int(pad_id) in code_ids:
+        raise RuntimeError(
+            "pad_token_id overlaps with an action code token id; this will break decoding/parsing. "
+            f"pad_token_id={int(pad_id)} code_ids={code_ids}"
+        )
 
     module = VLATokenLightningModule(
         vla_model=vla_model,
         processor=processor,
         code_provider=laq_provider,
         action_tokens=action_cfg,
-        chat=ChatConfig(system_prompt=cfg.model.chat.get("system_prompt")),
+        chat=ChatConfig(system_prompt=cfg.model.chat.system_prompt),
         optimizer=VLAOptimizerConfig(
             lr=float(cfg.training.optimizer.lr),
             weight_decay=float(cfg.training.optimizer.weight_decay),
@@ -251,7 +281,7 @@ def main(cfg: DictConfig):
         frames_to_images=oxe_first_frames_to_pil,
         train_teacher_forced_metrics_every_n_steps=(
             int(cfg.training.train_teacher_forced_metrics_every_n_steps)
-            if cfg.training.get("train_teacher_forced_metrics_every_n_steps") is not None
+            if cfg.training.train_teacher_forced_metrics_every_n_steps is not None
             else None
         ),
     )
@@ -260,8 +290,8 @@ def main(cfg: DictConfig):
     checkpoint_dir.mkdir(exist_ok=True)
 
     checkpoint_cfg = cfg.training.checkpoint
-    every_n_train_steps = checkpoint_cfg.get("every_n_train_steps")
-    save_weights_only = bool(checkpoint_cfg.get("save_weights_only", False))
+    every_n_train_steps = checkpoint_cfg.every_n_train_steps
+    save_weights_only = bool(checkpoint_cfg.save_weights_only)
 
     callbacks = [
         ModelCheckpoint(
@@ -277,68 +307,62 @@ def main(cfg: DictConfig):
         ),
     ]
 
-    viz_cfg = cfg.training.validation.get("visualization")
-    if viz_cfg and bool(viz_cfg.get("enabled", True)):
+    viz_cfg = cfg.training.validation.visualization
+    if viz_cfg and bool(viz_cfg.enabled):
         callbacks.append(
             VLASampleVisualizationCallback(
                 VLASampleVizConfig(
                     enabled=True,
-                    num_samples=int(viz_cfg.get("num_samples", 4)),
-                    every_n_val=int(viz_cfg.get("every_n_val", 1)),
-                    include_freeform_pred=bool(viz_cfg.get("include_freeform_pred", False)),
-                    freeform_max_new_tokens=int(viz_cfg.get("freeform_max_new_tokens", 32)),
+                    num_samples=int(viz_cfg.num_samples),
+                    every_n_val=int(viz_cfg.every_n_val),
+                    include_freeform_pred=bool(viz_cfg.include_freeform_pred),
+                    freeform_max_new_tokens=int(viz_cfg.freeform_max_new_tokens),
                 )
             )
         )
-    train_viz_cfg = cfg.training.get("train_visualization")
-    if train_viz_cfg and bool(train_viz_cfg.get("enabled", True)):
+    train_viz_cfg = cfg.training.train_visualization
+    if train_viz_cfg and bool(train_viz_cfg.enabled):
         callbacks.append(
             VLATrainSampleVisualizationCallback(
                 VLATrainSampleVizConfig(
                     enabled=True,
-                    num_samples=int(train_viz_cfg.get("num_samples", 4)),
-                    every_n_steps=int(train_viz_cfg.get("every_n_steps", 500)),
-                    include_freeform_pred=bool(
-                        train_viz_cfg.get("include_freeform_pred", False)
-                    ),
-                    freeform_max_new_tokens=int(
-                        train_viz_cfg.get("freeform_max_new_tokens", 32)
-                    ),
+                    num_samples=int(train_viz_cfg.num_samples),
+                    every_n_steps=int(train_viz_cfg.every_n_steps),
+                    include_freeform_pred=bool(train_viz_cfg.include_freeform_pred),
+                    freeform_max_new_tokens=int(train_viz_cfg.freeform_max_new_tokens),
                 )
             )
         )
-    perf_cfg = cfg.training.get("throughput")
-    if perf_cfg and bool(perf_cfg.get("enabled", True)):
+    perf_cfg = cfg.training.throughput
+    if perf_cfg and bool(perf_cfg.enabled):
         callbacks.append(
             ThroughputLoggingCallback(
                 ThroughputLoggingConfig(
                     enabled=True,
-                    log_every_n_steps=int(perf_cfg.get("log_every_n_steps", 10)),
+                    log_every_n_steps=int(perf_cfg.log_every_n_steps),
                 )
             )
         )
 
     # Progress logging (useful on clusters where tqdm doesn't render nicely in logs).
     # Default: enable on Slurm, disabled for local runs unless explicitly configured.
-    progress_cfg = cfg.training.get("progress_logger")
-    enable_progress = bool(cfg.cluster.slurm.enabled) if progress_cfg is None else bool(
-        progress_cfg.get("enabled", True)
-    )
+    progress_cfg = cfg.training.progress_logger
+    enable_progress = bool(progress_cfg.enabled)
     if enable_progress:
-        log_every = 100 if progress_cfg is None else int(progress_cfg.get("log_every_n_steps", 100))
+        log_every = int(progress_cfg.log_every_n_steps)
         callbacks.append(ProgressLoggerCallback(log_every_n_steps=log_every))
 
     # Dataset usage logging (prints how much of each dataset was *actually consumed*).
     # Recommended to align with step-based validation cadence by logging on validation end.
-    usage_cfg = cfg.training.get("dataset_usage_logger")
-    if usage_cfg and bool(usage_cfg.get("enabled", True)):
+    usage_cfg = cfg.training.dataset_usage_logger
+    if usage_cfg and bool(usage_cfg.enabled):
         callbacks.append(
             DatasetUsageLoggerCallback(
                 enabled=True,
-                log_on_validation_end=bool(usage_cfg.get("log_on_validation_end", True)),
-                log_every_n_steps=usage_cfg.get("log_every_n_steps"),
-                key=str(usage_cfg.get("key", "dataset_name")),
-                top_k=int(usage_cfg.get("top_k", 12)),
+                log_on_validation_end=bool(usage_cfg.log_on_validation_end),
+                log_every_n_steps=usage_cfg.log_every_n_steps,
+                key=str(usage_cfg.key),
+                top_k=int(usage_cfg.top_k),
             )
         )
     if wandb_logger is not None:
@@ -350,34 +374,34 @@ def main(cfg: DictConfig):
     # For short max_steps runs with large IterableDatasets, validation may never run unless
     # we validate every N steps (like Stage 1) and/or limit validation batches.
     trainer_extra_kwargs: dict[str, object] = {}
-    val_check_interval = cfg.training.validation.get("check_interval")
+    val_check_interval = cfg.training.validation.check_interval
     if val_check_interval is not None:
         trainer_extra_kwargs["val_check_interval"] = val_check_interval
-    limit_val_batches = cfg.training.validation.get("limit_batches")
+    limit_val_batches = cfg.training.validation.limit_batches
     if limit_val_batches is not None:
         trainer_extra_kwargs["limit_val_batches"] = limit_val_batches
-    num_sanity_val_steps = cfg.training.validation.get("num_sanity_val_steps")
+    num_sanity_val_steps = cfg.training.validation.num_sanity_val_steps
     if num_sanity_val_steps is not None:
         trainer_extra_kwargs["num_sanity_val_steps"] = int(num_sanity_val_steps)
-    overfit_batches = cfg.training.get("overfit_batches")
+    overfit_batches = cfg.training.overfit_batches
     if overfit_batches is not None:
         trainer_extra_kwargs["overfit_batches"] = overfit_batches
-    limit_train_batches = cfg.training.get("limit_train_batches")
+    limit_train_batches = cfg.training.limit_train_batches
     if limit_train_batches is not None:
         trainer_extra_kwargs["limit_train_batches"] = limit_train_batches
 
     # Optional profiler (matches Stage 1 conventions).
     profiler = None
-    profiler_cfg = cfg.training.get("profiler")
-    if profiler_cfg and bool(profiler_cfg.get("enabled", False)):
-        profiler_type = str(profiler_cfg.get("type", "simple"))
-        dirpath = str(profiler_cfg.get("dirpath", output_dir / "profiles"))
+    profiler_cfg = cfg.training.profiler
+    if profiler_cfg and bool(profiler_cfg.enabled):
+        profiler_type = str(profiler_cfg.type)
+        dirpath = str(profiler_cfg.dirpath)
         dirpath_path = Path(dirpath)
         if not dirpath_path.is_absolute():
             # Match Stage 1 behavior: resolve relative profiler paths inside the run directory.
             dirpath_path = output_dir / dirpath_path
         dirpath = str(dirpath_path)
-        filename = str(profiler_cfg.get("filename", "profile"))
+        filename = str(profiler_cfg.filename)
         if profiler_type == "simple":
             from lightning.pytorch.profilers import SimpleProfiler
 
@@ -408,7 +432,7 @@ def main(cfg: DictConfig):
         accumulate_grad_batches=cfg.training.accumulate_grad_batches,
         precision=cfg.training.precision,
         gradient_clip_val=cfg.training.gradient_clip_val,
-        log_every_n_steps=int(cfg.training.get("log_every_n_steps", 10)),
+        log_every_n_steps=int(cfg.training.log_every_n_steps),
         callbacks=callbacks,
         check_val_every_n_epoch=cfg.training.validation.check_val_every_n_epoch,
         logger=wandb_logger if wandb_logger is not None else False,
@@ -417,7 +441,7 @@ def main(cfg: DictConfig):
         **trainer_extra_kwargs,
     )
 
-    ckpt_path = cfg.training.get("resume_from_checkpoint")
+    ckpt_path = cfg.training.resume_from_checkpoint
     if ckpt_path:
         logger.info(f"Resuming from checkpoint: {ckpt_path}")
     trainer.fit(module, datamodule=datamodule, ckpt_path=ckpt_path)

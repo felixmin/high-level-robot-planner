@@ -1,0 +1,11 @@
+# @package data.adapter
+
+# Default TF OXE adapter configuration.
+#
+# Keep this as a thin alias so other configs can depend on `adapter=oxe_tf_default`
+# without duplicating parameters.
+
+defaults:
+  - oxe_tf_low_ram
+  - _self_
+

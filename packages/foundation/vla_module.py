@@ -112,7 +112,9 @@ class VLATokenLightningModule(pl.LightningModule):
             and hasattr(self.vla_model, "generate")
             and batch_idx == 0
         ):
-            pred_codes = self._predict_codes(frames=frames, instructions=instructions)
+            pred_codes, gen_debug = self._predict_codes_with_debug(
+                frames=frames, instructions=instructions
+            )
             metrics = self._compute_generation_metrics(gt_codes=codes, pred_codes=pred_codes)
             self.log(
                 "val/token_accuracy",
@@ -126,6 +128,26 @@ class VLATokenLightningModule(pl.LightningModule):
                 prog_bar=False,
                 sync_dist=True,
             )
+            # Generation-parse health diagnostics.
+            if gen_debug:
+                start_frac = torch.tensor(
+                    sum(1 for r in gen_debug if r.get("has_action_start")) / float(len(gen_debug)),
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                end_frac = torch.tensor(
+                    sum(1 for r in gen_debug if r.get("has_action_end")) / float(len(gen_debug)),
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                mean_codes = torch.tensor(
+                    sum(int(r.get("num_codes_parsed", 0)) for r in gen_debug) / float(len(gen_debug)),
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                self.log("val/gen_has_action_start_frac", start_frac, prog_bar=False, sync_dist=True)
+                self.log("val/gen_has_action_end_frac", end_frac, prog_bar=False, sync_dist=True)
+                self.log("val/gen_num_codes_parsed_mean", mean_codes, prog_bar=False, sync_dist=True)
             # Stash a small sample for visualization callbacks (rank0 only will use it).
             try:
                 max_items = min(8, len(instructions), len(pred_codes))
@@ -136,6 +158,7 @@ class VLATokenLightningModule(pl.LightningModule):
                     "instructions": list(instructions[:max_items]),
                     "gt_codes": [row.tolist() for row in codes[:max_items].detach().cpu()],
                     "pred_codes": [list(row) for row in pred_codes[:max_items]],
+                    "gen_debug": gen_debug[:max_items],
                     "episode_id": list(episode_id[:max_items]) if episode_id else None,
                     "frame_idx": list(frame_idx[:max_items]) if frame_idx else None,
                 }
@@ -384,6 +407,13 @@ class VLATokenLightningModule(pl.LightningModule):
 
     @torch.no_grad()
     def _predict_codes(self, *, frames: torch.Tensor, instructions: list[str]) -> list[list[int]]:
+        pred_codes, _debug = self._predict_codes_with_debug(frames=frames, instructions=instructions)
+        return pred_codes
+
+    @torch.no_grad()
+    def _predict_codes_with_debug(
+        self, *, frames: torch.Tensor, instructions: list[str]
+    ) -> tuple[list[list[int]], list[dict[str, Any]]]:
         images = self.frames_to_images(frames)
         prompt_inputs = build_prompt_inputs(
             processor=self.processor,
@@ -393,10 +423,15 @@ class VLATokenLightningModule(pl.LightningModule):
             device=self.device,
         )
 
-        attention_mask = prompt_inputs.get("attention_mask")
-        if attention_mask is None:
-            raise KeyError("processor output must include attention_mask")
-        prompt_lens = attention_mask.sum(dim=1).to(torch.long)
+        input_ids = prompt_inputs.get("input_ids")
+        if input_ids is None:
+            raise KeyError("processor output must include input_ids")
+        if not isinstance(input_ids, torch.Tensor) or input_ids.ndim != 2:
+            raise TypeError("processor output input_ids must be a 2D tensor")
+        # `generate()` returns sequences that include the (padded) prompt for all items
+        # followed by newly generated tokens. Always slice by the padded prompt length
+        # to avoid misinterpreting prompt padding as generated output.
+        prompt_len = int(input_ids.shape[1])
 
         token_ids = self.action_token_ids
         if token_ids is None:
@@ -414,16 +449,76 @@ class VLATokenLightningModule(pl.LightningModule):
         # Map code token id -> code index
         code_id_to_index = {tid: i for i, tid in enumerate(token_ids.action_code_ids)}
 
+        tok = getattr(self.processor, "tokenizer", None)
+        decode = getattr(tok, "decode", None) if tok is not None else None
+
         results: list[list[int]] = []
+        debug: list[dict[str, Any]] = []
+        max_prompt_ids = 2048
+        max_mask_ids = 2048
+        max_suffix_ids = 256
         for i in range(generated.shape[0]):
-            start = int(prompt_lens[i].item())
-            gen_suffix = generated[i, start:].tolist()
-            pred_code_ids = [t for t in gen_suffix if t in code_id_to_index]
-            pred = [code_id_to_index[t] for t in pred_code_ids[: token_ids.code_seq_len]]
+            gen_suffix_t = generated[i, prompt_len:]
+            gen_suffix = gen_suffix_t.tolist()
+            # Parse strictly from the generated <ACTION> span to avoid accidentally
+            # treating stray/padded tokens as codes.
+            try:
+                start_pos = gen_suffix.index(int(token_ids.action_start_id))
+            except ValueError:
+                start_pos = -1
+
+            pred: list[int] = []
+            has_end = False
+            if start_pos >= 0:
+                for t in gen_suffix[start_pos + 1 :]:
+                    tid = int(t)
+                    if tid == int(token_ids.action_end_id):
+                        has_end = True
+                        break
+                    if tid in code_id_to_index:
+                        pred.append(code_id_to_index[tid])
+                        if len(pred) >= int(token_ids.code_seq_len):
+                            break
             if len(pred) < token_ids.code_seq_len:
                 pred = pred + ([-1] * (token_ids.code_seq_len - len(pred)))
             results.append(pred)
-        return results
+
+            dbg: dict[str, Any] = {
+                "has_action_start": start_pos >= 0,
+                "has_action_end": has_end,
+                "num_codes_parsed": int(sum(1 for x in pred if int(x) >= 0)),
+                "prompt_padded_len": int(prompt_len),
+            }
+            if decode is not None:
+                # Include padding in the prompt decode so it is visible.
+                try:
+                    dbg["prompt_text_with_specials"] = str(
+                        decode(input_ids[i].tolist(), skip_special_tokens=False)
+                    )
+                except Exception:
+                    pass
+                try:
+                    dbg["generated_suffix_text_with_specials"] = str(
+                        decode(gen_suffix, skip_special_tokens=False)
+                    )
+                except Exception:
+                    pass
+            # Always include raw ids for exact debugging; keep them bounded.
+            try:
+                prompt_ids = [int(x) for x in input_ids[i].tolist()]
+                dbg["prompt_input_ids"] = prompt_ids[:max_prompt_ids]
+                dbg["prompt_input_ids_truncated"] = len(prompt_ids) > max_prompt_ids
+                attention_mask = prompt_inputs.get("attention_mask")
+                if isinstance(attention_mask, torch.Tensor) and attention_mask.ndim == 2:
+                    mask_ids = [int(x) for x in attention_mask[i].tolist()]
+                    dbg["prompt_attention_mask"] = mask_ids[:max_mask_ids]
+                    dbg["prompt_attention_mask_truncated"] = len(mask_ids) > max_mask_ids
+                dbg["generated_suffix_ids"] = [int(x) for x in gen_suffix[:max_suffix_ids]]
+                dbg["generated_suffix_ids_truncated"] = len(gen_suffix) > max_suffix_ids
+            except Exception:
+                pass
+            debug.append(dbg)
+        return results, debug
 
     @torch.no_grad()
     def _predict_freeform_text(
@@ -442,10 +537,12 @@ class VLATokenLightningModule(pl.LightningModule):
             device=self.device,
         )
 
-        attention_mask = prompt_inputs.get("attention_mask")
-        if attention_mask is None:
-            raise KeyError("processor output must include attention_mask")
-        prompt_lens = attention_mask.sum(dim=1).to(torch.long)
+        input_ids = prompt_inputs.get("input_ids")
+        if input_ids is None:
+            raise KeyError("processor output must include input_ids")
+        if not isinstance(input_ids, torch.Tensor) or input_ids.ndim != 2:
+            raise TypeError("processor output input_ids must be a 2D tensor")
+        prompt_len = int(input_ids.shape[1])
 
         generated = self.vla_model.generate(
             **prompt_inputs,
@@ -460,8 +557,7 @@ class VLATokenLightningModule(pl.LightningModule):
 
         texts: list[str] = []
         for i in range(int(generated.shape[0])):
-            start = int(prompt_lens[i].item())
-            suffix_ids = generated[i, start:].tolist()
+            suffix_ids = generated[i, prompt_len:].tolist()
             texts.append(str(decode(suffix_ids, skip_special_tokens=False)))
         return texts
 

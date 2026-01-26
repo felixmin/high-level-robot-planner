@@ -184,6 +184,39 @@ def _save_grid_and_records(
         import wandb  # type: ignore
 
         if hasattr(trainer, "logger") and getattr(trainer.logger, "experiment", None):
+            # Optionally log a compact debug table when available (e.g., generated text
+            # with padding/special tokens). This is useful for diagnosing decoding/parsing
+            # issues without opening the JSON artifacts manually.
+            try:
+                cols = [
+                    "instruction",
+                    "gt_codes",
+                    "pred_codes",
+                    "prompt_padded_len",
+                    "prompt_text_with_specials",
+                    "generated_suffix_text_with_specials",
+                ]
+                rows = []
+                for r in records:
+                    dbg = r.get("gen_debug")
+                    if not isinstance(dbg, dict):
+                        continue
+                    rows.append(
+                        [
+                            str(r.get("instruction", "")),
+                            str(r.get("gt_codes")),
+                            str(r.get("pred_codes")),
+                            dbg.get("prompt_padded_len"),
+                            dbg.get("prompt_text_with_specials"),
+                            dbg.get("generated_suffix_text_with_specials"),
+                        ]
+                    )
+                if rows:
+                    trainer.logger.experiment.log(  # type: ignore[attr-defined]
+                        {f"{wandb_key}_debug": wandb.Table(columns=cols, data=rows)}
+                    )
+            except Exception:
+                pass
             trainer.logger.experiment.log(  # type: ignore[attr-defined]
                 # Do not pass an explicit `step=` here: Lightning's WandB integration
                 # may advance W&B's internal step counter differently (e.g., logging
@@ -231,6 +264,7 @@ class VLASampleVisualizationCallback(Callback):
         instructions = sample.get("instructions")
         gt_codes = sample.get("gt_codes")
         pred_codes = sample.get("pred_codes")
+        gen_debug = sample.get("gen_debug")
         episode_id = sample.get("episode_id")
         frame_idx = sample.get("frame_idx")
         if frames is None or instructions is None or gt_codes is None or pred_codes is None:
@@ -303,6 +337,9 @@ class VLASampleVisualizationCallback(Callback):
                     "gt_codes": gt_codes[i],
                     "pred_codes": pred_codes[i],
                     "pred_freeform": freeform,
+                    "gen_debug": gen_debug[i]
+                    if isinstance(gen_debug, list) and i < len(gen_debug)
+                    else None,
                     "episode_id": episode_id[i] if isinstance(episode_id, list) and i < len(episode_id) else None,
                     "frame_idx": frame_idx[i] if isinstance(frame_idx, list) and i < len(frame_idx) else None,
                 }
@@ -455,28 +492,6 @@ class VLATrainSampleVisualizationCallback(Callback):
             logger.debug("train sample viz: failed to extract language", exc_info=True)
             return
 
-        try:
-            images = pl_module.frames_to_images(frames)
-        except Exception:
-            logger.debug("train sample viz: frames_to_images failed", exc_info=True)
-            return
-
-        # Compute GT codes via frozen LAQ.
-        try:
-            video = oxe_frames_to_laq_video(frames)
-            gt_codes_t = pl_module.code_provider.codes_from_video(video)
-            gt_codes = [row.tolist() for row in gt_codes_t.detach().cpu()]
-        except Exception:
-            logger.debug("train sample viz: LAQ GT code extraction failed", exc_info=True)
-            return
-
-        # Predict codes via constrained generation.
-        try:
-            pred_codes = pl_module._predict_codes(frames=frames, instructions=instructions)  # type: ignore[attr-defined]
-        except Exception:
-            logger.debug("train sample viz: constrained generation failed", exc_info=True)
-            return
-
         episode_id = batch.get("episode_id")
         if isinstance(episode_id, list):
             episode_id_list = episode_id
@@ -487,7 +502,7 @@ class VLATrainSampleVisualizationCallback(Callback):
         frame_idx_list = frame_idx if isinstance(frame_idx, list) else None
 
         # Select diverse samples from this batch.
-        max_items = min(self.cfg.num_samples, len(instructions), len(images), len(pred_codes), len(gt_codes))
+        max_items = min(self.cfg.num_samples, len(instructions))
         if max_items <= 0:
             return
 
@@ -498,11 +513,48 @@ class VLATrainSampleVisualizationCallback(Callback):
             max_items=max_items,
         )
 
+        try:
+            frames_sel = frames[chosen]
+        except Exception:
+            logger.debug("train sample viz: failed to slice frames", exc_info=True)
+            return
+        instr_sel = [str(instructions[i]) for i in chosen]
+
+        # Recompute images for the selected frames to avoid processing the whole batch.
+        try:
+            images_sel = pl_module.frames_to_images(frames_sel)
+        except Exception:
+            logger.debug("train sample viz: frames_to_images failed on selection", exc_info=True)
+            return
+
+        # Compute GT codes via frozen LAQ on the selected subset.
+        try:
+            video_sel = oxe_frames_to_laq_video(frames_sel)
+            gt_codes_t = pl_module.code_provider.codes_from_video(video_sel)
+            gt_codes_sel = [row.tolist() for row in gt_codes_t.detach().cpu()]
+        except Exception:
+            logger.debug("train sample viz: LAQ GT code extraction failed", exc_info=True)
+            return
+
+        # Predict codes via constrained generation (prefer debug variant when available).
+        pred_codes_sel: list[list[int]]
+        gen_debug: Optional[list[dict[str, Any]]] = None
+        try:
+            if hasattr(pl_module, "_predict_codes_with_debug"):
+                pred_codes_sel, gen_debug = pl_module._predict_codes_with_debug(  # type: ignore[attr-defined]
+                    frames=frames_sel, instructions=instr_sel
+                )
+            else:
+                pred_codes_sel = pl_module._predict_codes(  # type: ignore[attr-defined]
+                    frames=frames_sel, instructions=instr_sel
+                )
+        except Exception:
+            logger.debug("train sample viz: constrained generation failed", exc_info=True)
+            return
+
         freeform_texts: Optional[list[str]] = None
         if self.cfg.include_freeform_pred and hasattr(pl_module, "_predict_freeform_text"):
             try:
-                frames_sel = frames[chosen]
-                instr_sel = [str(instructions[i]) for i in chosen]
                 freeform_texts = pl_module._predict_freeform_text(  # type: ignore[attr-defined]
                     frames=frames_sel,
                     instructions=instr_sel,
@@ -516,12 +568,12 @@ class VLATrainSampleVisualizationCallback(Callback):
 
         panels: list[Image.Image] = []
         records: list[dict[str, Any]] = []
-        for rank, i in enumerate(chosen):
-            gt_str = action_tokens.format_target(gt_codes[i])
+        for rank, original_idx in enumerate(chosen):
+            gt_str = action_tokens.format_target(gt_codes_sel[rank])
             try:
-                pred_str = action_tokens.format_target(pred_codes[i])
+                pred_str = action_tokens.format_target(pred_codes_sel[rank])
             except Exception:
-                pred_str = f"<INVALID> {pred_codes[i]}"
+                pred_str = f"<INVALID> {pred_codes_sel[rank]}"
             freeform = (
                 freeform_texts[rank]
                 if freeform_texts is not None and rank < len(freeform_texts)
@@ -530,14 +582,14 @@ class VLATrainSampleVisualizationCallback(Callback):
 
             panels.append(
                 _render_panel(
-                    image=images[i],
-                    meta=f"episode_id: {episode_id_list[i]}  frame_idx: {frame_idx_list[i]}"
+                    image=images_sel[rank],
+                    meta=f"episode_id: {episode_id_list[original_idx]}  frame_idx: {frame_idx_list[original_idx]}"
                     if episode_id_list is not None
                     and frame_idx_list is not None
-                    and i < len(episode_id_list)
-                    and i < len(frame_idx_list)
+                    and original_idx < len(episode_id_list)
+                    and original_idx < len(frame_idx_list)
                     else "",
-                    instruction=str(instructions[i]),
+                    instruction=str(instructions[original_idx]),
                     gt=gt_str,
                     pred=pred_str,
                     freeform_pred=freeform,
@@ -546,14 +598,21 @@ class VLATrainSampleVisualizationCallback(Callback):
             records.append(
                 {
                     "step": step,
-                    "index": int(i),
+                    "index": int(original_idx),
                     "rank": int(rank),
-                    "instruction": str(instructions[i]),
-                    "gt_codes": gt_codes[i],
-                    "pred_codes": pred_codes[i],
+                    "instruction": str(instructions[original_idx]),
+                    "gt_codes": gt_codes_sel[rank],
+                    "pred_codes": pred_codes_sel[rank],
                     "pred_freeform": freeform,
-                    "episode_id": episode_id_list[i] if episode_id_list and i < len(episode_id_list) else None,
-                    "frame_idx": frame_idx_list[i] if frame_idx_list and i < len(frame_idx_list) else None,
+                    "gen_debug": gen_debug[rank]
+                    if isinstance(gen_debug, list) and rank < len(gen_debug)
+                    else None,
+                    "episode_id": episode_id_list[original_idx]
+                    if episode_id_list and original_idx < len(episode_id_list)
+                    else None,
+                    "frame_idx": frame_idx_list[original_idx]
+                    if frame_idx_list and original_idx < len(frame_idx_list)
+                    else None,
                 }
             )
 
