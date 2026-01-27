@@ -45,6 +45,49 @@ from foundation.vla_inputs import ChatConfig
 from foundation.vla_module import VLATokenLightningModule, VLAOptimizerConfig
 
 
+def infer_between_action_token_ids(
+    *, tokenizer: object, action_cfg: ActionTokenConfig, token_id_map: dict[str, int]
+) -> list[int]:
+    """
+    Infer token ids that appear between action tokens in the supervised targets.
+
+    `ActionTokenConfig.format_target()` inserts separators (currently spaces) between
+    special tokens. Constrained decoding must allow these tokens; otherwise it forces
+    a different tokenization than what was trained and can produce misleading
+    "collapsed" constrained generations even when freeform outputs look better.
+    """
+    encode = getattr(tokenizer, "encode", None)
+    if encode is None:
+        raise TypeError("tokenizer must implement encode(text, add_special_tokens=...)")
+
+    example = action_cfg.format_target([0] * int(action_cfg.code_seq_len))
+    ids = [int(x) for x in encode(example, add_special_tokens=False)]
+
+    special: set[int] = {
+        int(token_id_map[action_cfg.action_start]),
+        int(token_id_map[action_cfg.action_end]),
+    }
+    for i in range(int(action_cfg.codebook_size)):
+        special.add(int(token_id_map[action_cfg.token_fmt.format(i=i)]))
+
+    between = [tid for tid in ids if int(tid) not in special]
+    # De-duplicate while preserving order.
+    out: list[int] = []
+    seen: set[int] = set()
+    for tid in between:
+        if tid in seen:
+            continue
+        seen.add(tid)
+        out.append(int(tid))
+
+    if not out:
+        raise RuntimeError(
+            "Could not infer any between-action token ids from the target string. "
+            "This would make constrained decoding mismatch the supervised targets."
+        )
+    return out
+
+
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig):
     # Force new W&B run per Hydra job (fix for sweeps)
@@ -239,6 +282,9 @@ def main(cfg: DictConfig):
             token_id_map[action_cfg.token_fmt.format(i=i)]
             for i in range(action_cfg.codebook_size)
         ],
+        between_token_ids=infer_between_action_token_ids(
+            tokenizer=processor.tokenizer, action_cfg=action_cfg, token_id_map=token_id_map
+        ),
         eos_token_id=int(getattr(processor.tokenizer, "eos_token_id", 0)),
         code_seq_len=action_cfg.code_seq_len,
     )
@@ -251,10 +297,27 @@ def main(cfg: DictConfig):
             "This typically means the action tokens were not properly added to the tokenizer. "
             f"code_ids={code_ids}"
         )
+    between_ids = list(action_token_ids.between_token_ids)
+    if not between_ids:
+        raise RuntimeError(
+            "between_token_ids is empty. Constrained decoding must allow separator tokens "
+            "to match the supervised target format."
+        )
+    if any(int(t) in set(code_ids) for t in between_ids):
+        raise RuntimeError(
+            "One or more between_token_ids overlaps with an action code token id; "
+            "this will confuse constrained decoding. "
+            f"between_token_ids={between_ids} code_ids={code_ids}"
+        )
     if action_token_ids.action_start_id in code_ids or action_token_ids.action_end_id in code_ids:
         raise RuntimeError(
             "Action wrapper token id overlaps with an action code token id. "
             f"start_id={action_token_ids.action_start_id} end_id={action_token_ids.action_end_id} code_ids={code_ids}"
+        )
+    if action_token_ids.action_start_id in between_ids or action_token_ids.action_end_id in between_ids:
+        raise RuntimeError(
+            "between_token_ids overlaps with an action wrapper token id; "
+            f"start_id={action_token_ids.action_start_id} end_id={action_token_ids.action_end_id} between_token_ids={between_ids}"
         )
     unk_id = getattr(processor.tokenizer, "unk_token_id", None)
     if unk_id is not None and unk_id in code_ids:

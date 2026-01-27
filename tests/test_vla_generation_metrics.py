@@ -70,13 +70,19 @@ class DummyVLAWithGenerate(torch.nn.Module):
     ):
         b, t = input_ids.shape
         # Emit the correct sequence for every sample.
+        sep = self.token_ids.between_token_ids[0] if self.token_ids.between_token_ids else None
         suffix = torch.tensor(
             [
                 self.token_ids.action_start_id,
+                *([sep] if sep is not None else []),
                 self.token_ids.action_code_ids[3],
+                *([sep] if sep is not None else []),
                 self.token_ids.action_code_ids[1],
+                *([sep] if sep is not None else []),
                 self.token_ids.action_code_ids[7],
+                *([sep] if sep is not None else []),
                 self.token_ids.action_code_ids[0],
+                *([sep] if sep is not None else []),
                 self.token_ids.action_end_id,
             ],
             dtype=torch.long,
@@ -90,6 +96,7 @@ def test_validation_step_logs_token_accuracy_without_error():
         action_start_id=10,
         action_end_id=11,
         action_code_ids=list(range(20, 28)),
+        between_token_ids=[99],
         eos_token_id=2,
         code_seq_len=4,
     )
@@ -130,6 +137,7 @@ def test_predict_codes_slices_generated_suffix_after_padded_prompt():
         action_start_id=10,
         action_end_id=11,
         action_code_ids=list(range(20, 28)),
+        between_token_ids=[99],
         eos_token_id=2,
         code_seq_len=4,
     )

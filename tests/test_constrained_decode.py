@@ -8,6 +8,7 @@ def test_constrained_decode_state_machine():
         action_start_id=10,
         action_end_id=11,
         action_code_ids=list(range(20, 28)),
+        between_token_ids=[99],
         eos_token_id=2,
         code_seq_len=4,
     )
@@ -16,11 +17,11 @@ def test_constrained_decode_state_machine():
     assert ids.next_allowed_ids([101, 102]) == [10]
 
     # After <ACTION>: can emit any code token until length is satisfied
-    assert ids.next_allowed_ids([101, 10]) == list(range(20, 28))
-    assert ids.next_allowed_ids([101, 10, 20, 21]) == list(range(20, 28))
+    assert ids.next_allowed_ids([101, 10]) == [99] + list(range(20, 28))
+    assert ids.next_allowed_ids([101, 10, 99, 20, 99, 21]) == [99] + list(range(20, 28))
 
     # After 4 codes: must emit </ACTION>
-    assert ids.next_allowed_ids([101, 10, 20, 21, 22, 23]) == [11]
+    assert ids.next_allowed_ids([101, 10, 99, 20, 99, 21, 99, 22, 99, 23]) == [99, 11]
 
     # After </ACTION>: must emit EOS
     assert ids.next_allowed_ids([101, 10, 20, 21, 22, 23, 11]) == [2]
@@ -31,6 +32,7 @@ def test_prefix_allowed_tokens_fn_signature():
         action_start_id=10,
         action_end_id=11,
         action_code_ids=list(range(20, 28)),
+        between_token_ids=[99],
         eos_token_id=2,
         code_seq_len=4,
     )

@@ -464,7 +464,9 @@ class VLATokenLightningModule(pl.LightningModule):
             raise RuntimeError("action_token_ids is required for constrained generation")
         prefix_fn = make_prefix_allowed_tokens_fn(token_ids)
 
-        max_new = token_ids.code_seq_len + 3  # <ACTION> + codes + </ACTION>
+        # Constrained generations must include any separator tokens (e.g., spaces) that
+        # are present in the supervised target format. Use a conservative budget.
+        max_new = int(token_ids.code_seq_len) * 8 + 16
         generated = self.vla_model.generate(
             **prompt_inputs,
             max_new_tokens=max_new,

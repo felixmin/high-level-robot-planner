@@ -2,7 +2,7 @@
 Constrained decoding helpers for action-token generation.
 
 We constrain the VLM to generate:
-  <ACTION> <ACT_*> x code_seq_len </ACTION> <eos>
+  <ACTION> [sep] <ACT_*> ([sep] <ACT_*>) x code_seq_len [sep] </ACTION> <eos>
 
 This is used during validation/inference to avoid the model producing free-form text.
 """
@@ -18,6 +18,10 @@ class ActionTokenIds:
     action_start_id: int
     action_end_id: int
     action_code_ids: List[int]
+    # Token ids that may appear between action tokens (e.g. whitespace).
+    # These must be included if the training targets contain separators, otherwise
+    # constrained decoding will force a different tokenization than what was trained.
+    between_token_ids: List[int]
     eos_token_id: int
     code_seq_len: int
 
@@ -43,12 +47,15 @@ class ActionTokenIds:
         if self.action_end_id in suffix:
             return [self.eos_token_id]
 
-        num_codes = sum(1 for t in suffix if t in set(self.action_code_ids))
+        code_set = set(self.action_code_ids)
+        num_codes = sum(1 for t in suffix if t in code_set)
 
         if num_codes < self.code_seq_len:
-            return list(self.action_code_ids)
+            # Allow separators (e.g. spaces) because training targets include them.
+            return list(self.between_token_ids) + list(self.action_code_ids)
 
-        return [self.action_end_id]
+        # After the expected number of codes, allow optional separators before closing.
+        return list(self.between_token_ids) + [self.action_end_id]
 
 
 def make_prefix_allowed_tokens_fn(token_ids: ActionTokenIds):
