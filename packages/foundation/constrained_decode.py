@@ -37,6 +37,9 @@ class ActionTokenIds:
         if self.action_start_id not in generated_ids:
             return [self.action_start_id]
 
+        between_set = set(self.between_token_ids)
+        code_set = set(self.action_code_ids)
+
         # After starting: count codes after the last <ACTION>
         last_start = max(
             i for i, t in enumerate(generated_ids) if t == self.action_start_id
@@ -47,14 +50,21 @@ class ActionTokenIds:
         if self.action_end_id in suffix:
             return [self.eos_token_id]
 
-        code_set = set(self.action_code_ids)
         num_codes = sum(1 for t in suffix if t in code_set)
+        last_token = suffix[-1] if suffix else None
+        last_is_between = last_token in between_set if last_token is not None else False
 
         if num_codes < self.code_seq_len:
-            # Allow separators (e.g. spaces) because training targets include them.
+            # If we just emitted a separator, force a code next to avoid
+            # generating separators forever under greedy decoding.
+            if last_is_between:
+                return list(self.action_code_ids)
+            # Otherwise allow either a separator or a code.
             return list(self.between_token_ids) + list(self.action_code_ids)
 
         # After the expected number of codes, allow optional separators before closing.
+        if last_is_between:
+            return [self.action_end_id]
         return list(self.between_token_ids) + [self.action_end_id]
 
 

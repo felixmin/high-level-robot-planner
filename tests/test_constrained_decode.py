@@ -18,10 +18,14 @@ def test_constrained_decode_state_machine():
 
     # After <ACTION>: can emit any code token until length is satisfied
     assert ids.next_allowed_ids([101, 10]) == [99] + list(range(20, 28))
+    # After a separator, must emit a code (avoid infinite separators).
+    assert ids.next_allowed_ids([101, 10, 99]) == list(range(20, 28))
     assert ids.next_allowed_ids([101, 10, 99, 20, 99, 21]) == [99] + list(range(20, 28))
 
     # After 4 codes: must emit </ACTION>
     assert ids.next_allowed_ids([101, 10, 99, 20, 99, 21, 99, 22, 99, 23]) == [99, 11]
+    # After the separator before </ACTION>, force </ACTION>.
+    assert ids.next_allowed_ids([101, 10, 99, 20, 99, 21, 99, 22, 99, 23, 99]) == [11]
 
     # After </ACTION>: must emit EOS
     assert ids.next_allowed_ids([101, 10, 20, 21, 22, 23, 11]) == [2]
