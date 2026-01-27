@@ -37,14 +37,14 @@ import tempfile
 import time
 from pathlib import Path
 
+# Ensure `packages/` is importable when running on cluster login nodes.
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+sys.path.insert(0, str(PROJECT_ROOT / "packages"))
+
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from common.hydra_overrides import normalize_overrides
-
-
-# Project root (resolved at import time on login node)
-PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
 
 def parse_sweep_params(cfg) -> dict[str, list[str]]:
