@@ -155,6 +155,33 @@ def _select_diverse_indices(
     return chosen[:n]
 
 
+def _select_code_diverse_indices(*, gt_codes: list[Any], max_items: int) -> list[int]:
+    """
+    Prefer samples with distinct action-code sequences.
+
+    This helps debugging when the first batch contains many near-duplicate
+    instructions but different action codes.
+    """
+    if max_items <= 0:
+        return []
+    chosen: list[int] = []
+    seen: set[tuple[int, ...]] = set()
+    for i, row in enumerate(gt_codes):
+        if len(chosen) >= max_items:
+            break
+        if not isinstance(row, list):
+            continue
+        try:
+            key = tuple(int(x) for x in row)
+        except Exception:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        chosen.append(i)
+    return chosen
+
+
 def _save_grid_and_records(
     *,
     panels: list[Image.Image],
@@ -193,6 +220,7 @@ def _save_grid_and_records(
                     "gt_codes",
                     "pred_codes",
                     "prompt_padded_len",
+                    "prompt_true_len",
                     "prompt_text_with_specials",
                     "generated_suffix_text_with_specials",
                 ]
@@ -207,6 +235,7 @@ def _save_grid_and_records(
                             str(r.get("gt_codes")),
                             str(r.get("pred_codes")),
                             dbg.get("prompt_padded_len"),
+                            dbg.get("prompt_true_len"),
                             dbg.get("prompt_text_with_specials"),
                             dbg.get("generated_suffix_text_with_specials"),
                         ]
@@ -280,12 +309,21 @@ class VLASampleVisualizationCallback(Callback):
         if num <= 0:
             return
 
-        indices = _select_diverse_indices(
-            episode_id=episode_id,
-            frame_idx=frame_idx,
-            instructions=list(instructions),
-            max_items=num,
-        )
+        indices: list[int] = []
+        if isinstance(gt_codes, list) and gt_codes:
+            indices = _select_code_diverse_indices(gt_codes=gt_codes, max_items=num)
+        if len(indices) < num:
+            extra = _select_diverse_indices(
+                episode_id=episode_id,
+                frame_idx=frame_idx,
+                instructions=list(instructions),
+                max_items=num,
+            )
+            for i in extra:
+                if i not in indices:
+                    indices.append(i)
+                if len(indices) >= num:
+                    break
 
         freeform_texts: Optional[list[str]] = None
         if self.cfg.include_freeform_pred and hasattr(pl_module, "_predict_freeform_text"):

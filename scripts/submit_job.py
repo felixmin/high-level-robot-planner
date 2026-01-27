@@ -40,6 +40,8 @@ from pathlib import Path
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
+from common.hydra_overrides import normalize_overrides
+
 
 # Project root (resolved at import time on login node)
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
@@ -219,7 +221,7 @@ echo "========================================"
 
 
 def main():
-    overrides = sys.argv[1:]
+    overrides = normalize_overrides(sys.argv[1:])
 
     # Load config to show experiment info and get job name
     config_dir = str(PROJECT_ROOT / "config")
@@ -288,7 +290,7 @@ def main():
         base_env["TORCH_HOME"] = str(cache_dir / "torch")
 
         for i, sweep_overrides in enumerate(sweep_combinations):
-            combined_overrides = list(overrides) + sweep_overrides
+            combined_overrides = normalize_overrides(list(overrides) + sweep_overrides)
             override_str = " ".join(combined_overrides).strip()
 
             # For sweeps, each job gets its own runs_dir with sweep suffix
@@ -441,7 +443,7 @@ def main():
     for i, sweep_overrides in enumerate(sweep_combinations):
         # Combine base overrides with sweep overrides
         # Sweep overrides come last to take precedence
-        combined_overrides = list(overrides) + sweep_overrides
+        combined_overrides = normalize_overrides(list(overrides) + sweep_overrides)
 
         # For sweeps, each job gets its own runs_dir with sweep suffix
         if is_sweep:

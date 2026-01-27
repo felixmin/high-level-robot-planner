@@ -155,3 +155,7 @@ def test_predict_codes_slices_generated_suffix_after_padded_prompt():
         suffix = rec.get("generated_suffix_ids")
         assert isinstance(suffix, list) and suffix, "missing generated_suffix_ids in debug"
         assert suffix[0] == token_ids.action_start_id
+        assert rec.get("has_action_start") is True
+        assert rec.get("has_action_end") is True
+        assert rec.get("prompt_padded_len") is not None
+        assert rec.get("prompt_true_len") is not None

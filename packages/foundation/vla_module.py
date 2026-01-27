@@ -150,7 +150,7 @@ class VLATokenLightningModule(pl.LightningModule):
                 self.log("val/gen_num_codes_parsed_mean", mean_codes, prog_bar=False, sync_dist=True)
             # Stash a small sample for visualization callbacks (rank0 only will use it).
             try:
-                max_items = min(8, len(instructions), len(pred_codes))
+                max_items = min(64, len(instructions), len(pred_codes))
                 episode_id = batch.get("episode_id") if isinstance(batch, dict) else None
                 frame_idx = batch.get("frame_idx") if isinstance(batch, dict) else None
                 self._last_val_sample = {
@@ -288,10 +288,36 @@ class VLATokenLightningModule(pl.LightningModule):
         active = shift_labels != -100
         is_code = (shift_labels.unsqueeze(-1) == code_ids.view(1, 1, -1)).any(dim=-1) & active
 
-        code_tokens_per_sample = is_code.sum(dim=1).to(torch.float32)
-        expected = float(token_ids.code_seq_len)
         on_step = stage == "train"
         on_epoch = not on_step
+
+        # Sanity-check: action wrapper tokens should usually be supervised once each.
+        start_id = int(token_ids.action_start_id)
+        end_id = int(token_ids.action_end_id)
+        is_start = (shift_labels == start_id) & active
+        is_end = (shift_labels == end_id) & active
+        if shift_labels.shape[0] > 0:
+            start_frac = is_start.any(dim=1).to(torch.float32).mean()
+            end_frac = is_end.any(dim=1).to(torch.float32).mean()
+            self.log(
+                f"{stage}/label_has_action_start_frac",
+                start_frac,
+                on_step=on_step,
+                on_epoch=on_epoch,
+                sync_dist=True,
+                batch_size=int(shift_labels.shape[0]),
+            )
+            self.log(
+                f"{stage}/label_has_action_end_frac",
+                end_frac,
+                on_step=on_step,
+                on_epoch=on_epoch,
+                sync_dist=True,
+                batch_size=int(shift_labels.shape[0]),
+            )
+
+        code_tokens_per_sample = is_code.sum(dim=1).to(torch.float32)
+        expected = float(token_ids.code_seq_len)
         if shift_labels.shape[0] > 0:
             mismatch = (code_tokens_per_sample != expected).to(torch.float32).mean()
             self.log(
@@ -476,18 +502,26 @@ class VLATokenLightningModule(pl.LightningModule):
                         has_end = True
                         break
                     if tid in code_id_to_index:
-                        pred.append(code_id_to_index[tid])
-                        if len(pred) >= int(token_ids.code_seq_len):
-                            break
+                        if len(pred) < int(token_ids.code_seq_len):
+                            pred.append(code_id_to_index[tid])
             if len(pred) < token_ids.code_seq_len:
                 pred = pred + ([-1] * (token_ids.code_seq_len - len(pred)))
             results.append(pred)
+
+            prompt_true_len: int | None = None
+            attention_mask = prompt_inputs.get("attention_mask")
+            if isinstance(attention_mask, torch.Tensor) and attention_mask.ndim == 2:
+                try:
+                    prompt_true_len = int(attention_mask[i].sum().item())
+                except Exception:
+                    prompt_true_len = None
 
             dbg: dict[str, Any] = {
                 "has_action_start": start_pos >= 0,
                 "has_action_end": has_end,
                 "num_codes_parsed": int(sum(1 for x in pred if int(x) >= 0)),
                 "prompt_padded_len": int(prompt_len),
+                "prompt_true_len": int(prompt_true_len) if prompt_true_len is not None else None,
             }
             if decode is not None:
                 # Include padding in the prompt decode so it is visible.
@@ -508,7 +542,6 @@ class VLATokenLightningModule(pl.LightningModule):
                 prompt_ids = [int(x) for x in input_ids[i].tolist()]
                 dbg["prompt_input_ids"] = prompt_ids[:max_prompt_ids]
                 dbg["prompt_input_ids_truncated"] = len(prompt_ids) > max_prompt_ids
-                attention_mask = prompt_inputs.get("attention_mask")
                 if isinstance(attention_mask, torch.Tensor) and attention_mask.ndim == 2:
                     mask_ids = [int(x) for x in attention_mask[i].tolist()]
                     dbg["prompt_attention_mask"] = mask_ids[:max_mask_ids]
