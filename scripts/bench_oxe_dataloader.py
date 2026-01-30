@@ -25,6 +25,9 @@ import lightning.pytorch as pl
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
 
+from hydra.core.hydra_config import HydraConfig
+
+from common.cache_env import configure_cache_env, resolve_cache_dir
 from common.data_factory import create_datamodule
 from common.unified_logging import resolve_runs_dir, setup_unified_logging
 
@@ -37,18 +40,29 @@ def _percentile(values: list[float], q: float) -> float:
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
-    runs_dir = resolve_runs_dir(
-        logging_root_dir=cfg.logging.get("root_dir"),
-        logging_runs_dir=cfg.logging.get("runs_dir"),
-        workspace_root=workspace_root,
-        experiment_name=f"{OmegaConf.select(cfg, 'experiment.name')}_bench_oxe_dataloader",
-    )
+    runs_dir = None
+    try:
+        if HydraConfig.initialized():
+            runs_dir = Path(str(HydraConfig.get().runtime.output_dir))
+    except Exception:
+        runs_dir = None
+    if runs_dir is None:
+        runs_dir = resolve_runs_dir(
+            logging_root_dir=cfg.logging.get("root_dir"),
+            logging_runs_dir=cfg.logging.get("runs_dir"),
+            workspace_root=workspace_root,
+            experiment_name=f"{OmegaConf.select(cfg, 'experiment.name')}_bench_oxe_dataloader",
+        )
     logger, output_dir = setup_unified_logging(
         runs_dir=runs_dir,
         job_id=cfg.logging.get("job_id"),
         log_level=cfg.logging.get("level", "INFO"),
         logger_name="bench.oxe_dataloader",
     )
+
+    cache_dir = resolve_cache_dir(cfg=cfg, workspace_root=workspace_root)
+    if cache_dir is not None:
+        configure_cache_env(cache_dir=cache_dir, logger=logger)
 
     bench_cfg = cfg.get("benchmark") or {}
     warmup_steps = int(bench_cfg.get("warmup_steps", 20))

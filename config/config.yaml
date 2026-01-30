@@ -15,9 +15,12 @@ precision: "bf16-mixed"  # "32-true", "16-mixed", "bf16-mixed"
 # Hydra configuration (default; submit_job overrides these to keep snapshots inside the run dir)
 hydra:
   run:
-    dir: runs/output/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    # Keep Hydra's `.hydra/` snapshots inside the same run directory as our unified logging.
+    # If `logging.runs_dir` is set, use it; otherwise fall back to:
+    #   <logging.root_dir or workspace>/runs/<timestamp>_<experiment.name>
+    dir: ${oc.select:logging.runs_dir, ${oc.select:logging.root_dir,.}/runs/${now:%Y-%m-%d_%H-%M-%S}_${experiment.name}}
   sweep:
-    dir: runs/output/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: ${oc.select:logging.root_dir,.}/runs/sweeps/${now:%Y-%m-%d_%H-%M-%S}_${experiment.name}
     subdir: ${hydra.job.num}
 
 # Logging configuration
@@ -38,6 +41,12 @@ logging:
   #   wandb/           - WandB files (includes print() capture)
   #   checkpoints/     - Model checkpoints
   #   .hydra/          - Hydra config snapshots (when hydra.run.dir is set to logging.runs_dir)
+
+# Paths / caching
+paths:
+  # Base directory for large caches (HF weights, torch hub, TFDS cache, etc.).
+  # If relative, resolved against `logging.root_dir` if set, else project root.
+  cache_dir: cache
 
 # Job submission defaults (used by scripts/submit_job.py)
 submit:

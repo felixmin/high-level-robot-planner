@@ -12,11 +12,8 @@ __version__ = "0.1.0"
 
 from foundation.action_tokens import ActionTokenConfig
 from foundation.constrained_decode import ActionTokenIds
-from foundation.vla_module import VLATokenLightningModule, VLAOptimizerConfig
 
 __all__ = [
     "ActionTokenConfig",
     "ActionTokenIds",
-    "VLATokenLightningModule",
-    "VLAOptimizerConfig",
 ]

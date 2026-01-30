@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+pytest.importorskip("lightning")
 import lightning.pytorch as pl
 
 from foundation.callbacks import ThroughputLoggingCallback, ThroughputLoggingConfig
@@ -41,4 +44,3 @@ def test_throughput_callback_logs_steps_per_sec(monkeypatch):
     keys = [k for (k, _v, _kw) in module.logged]
     assert "perf/steps_per_sec" in keys
     assert "perf/samples_per_sec" in keys
-

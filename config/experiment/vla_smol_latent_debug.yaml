@@ -1,0 +1,21 @@
+# @package _global_
+
+# Stage 2: SmolVLM2 latent-head VLA, debug settings.
+
+defaults:
+  - /model@model: foundation_smol_latent
+  - /data@data: latent_labeled
+  - /training@training: vla_lightning_debug
+  - /cluster@cluster: local_dev
+  - optional /user_config: local
+
+experiment:
+  name: vla_smol_latent_debug
+  description: "Debug run: SmolVLM2 latent-head LAQ code prediction"
+
+submit:
+  script: 4_train_foundation
+
+logging:
+  tags: ["debug", "foundation", "smol", "latent"]
+  log_model: false

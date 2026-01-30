@@ -25,11 +25,11 @@ workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
 from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
+from common.cache_env import configure_cache_env, hf_download_help_message, resolve_cache_dir
 from common.data_factory import create_datamodule
 from common.logging import set_seed
 from common.unified_logging import resolve_runs_dir, setup_unified_logging, setup_wandb_with_unified_paths
 from foundation.action_tokens import ActionTokenConfig
-from foundation.constrained_decode import ActionTokenIds
 from foundation.callbacks import (
     ThroughputLoggingCallback,
     ThroughputLoggingConfig,
@@ -39,53 +39,14 @@ from foundation.callbacks import (
     VLASampleVisualizationCallback,
 )
 from foundation.image_adapters import oxe_first_frames_to_pil
+from foundation.backends.qwen3vl_chat_backend import (
+    Qwen3VLChatActionTokenBackend,
+    Qwen3VLChatBackendConfig,
+)
+from foundation.backends.smol_latent_head_backend import SmolLatentHeadBackend, SmolLatentHeadBackendConfig
 from foundation.online_laq import LAQTaskCodeProvider
-from foundation.qwen3vl_setup import prepare_action_token_training
 from foundation.vla_inputs import ChatConfig
-from foundation.vla_module import VLATokenLightningModule, VLAOptimizerConfig
-
-
-def infer_between_action_token_ids(
-    *, tokenizer: object, action_cfg: ActionTokenConfig, token_id_map: dict[str, int]
-) -> list[int]:
-    """
-    Infer token ids that appear between action tokens in the supervised targets.
-
-    `ActionTokenConfig.format_target()` inserts separators (currently spaces) between
-    special tokens. Constrained decoding must allow these tokens; otherwise it forces
-    a different tokenization than what was trained and can produce misleading
-    "collapsed" constrained generations even when freeform outputs look better.
-    """
-    encode = getattr(tokenizer, "encode", None)
-    if encode is None:
-        raise TypeError("tokenizer must implement encode(text, add_special_tokens=...)")
-
-    example = action_cfg.format_target([0] * int(action_cfg.code_seq_len))
-    ids = [int(x) for x in encode(example, add_special_tokens=False)]
-
-    special: set[int] = {
-        int(token_id_map[action_cfg.action_start]),
-        int(token_id_map[action_cfg.action_end]),
-    }
-    for i in range(int(action_cfg.codebook_size)):
-        special.add(int(token_id_map[action_cfg.token_fmt.format(i=i)]))
-
-    between = [tid for tid in ids if int(tid) not in special]
-    # De-duplicate while preserving order.
-    out: list[int] = []
-    seen: set[int] = set()
-    for tid in between:
-        if tid in seen:
-            continue
-        seen.add(tid)
-        out.append(int(tid))
-
-    if not out:
-        raise RuntimeError(
-            "Could not infer any between-action token ids from the target string. "
-            "This would make constrained decoding mismatch the supervised targets."
-        )
-    return out
+from foundation.vla_backend_module import VLATokenBackendLightningModule, VLAOptimizerConfig
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
@@ -95,12 +56,19 @@ def main(cfg: DictConfig):
         wandb.finish()
 
     # Setup unified logging
-    runs_dir = resolve_runs_dir(
-        logging_root_dir=cfg.logging.root_dir,
-        logging_runs_dir=cfg.logging.runs_dir,
-        workspace_root=workspace_root,
-        experiment_name=OmegaConf.select(cfg, "experiment.name"),
-    )
+    runs_dir = None
+    try:
+        if HydraConfig.initialized():
+            runs_dir = Path(str(HydraConfig.get().runtime.output_dir))
+    except Exception:
+        runs_dir = None
+    if runs_dir is None:
+        runs_dir = resolve_runs_dir(
+            logging_root_dir=cfg.logging.root_dir,
+            logging_runs_dir=cfg.logging.runs_dir,
+            workspace_root=workspace_root,
+            experiment_name=OmegaConf.select(cfg, "experiment.name"),
+        )
 
     logger, output_dir = setup_unified_logging(
         runs_dir=runs_dir,
@@ -108,6 +76,10 @@ def main(cfg: DictConfig):
         log_level=cfg.logging.level,
         logger_name="foundation.training",
     )
+
+    cache_dir = resolve_cache_dir(cfg=cfg, workspace_root=workspace_root)
+    if cache_dir is not None:
+        configure_cache_env(cache_dir=cache_dir, logger=logger)
 
     logger.info("=" * 80)
     logger.info("LAPA Stage 2: Foundation VLA Training (Action Tokens)")
@@ -240,16 +212,21 @@ def main(cfg: DictConfig):
     try:
         laq_task = load_laq_task_from_checkpoint(laq_ckpt)
     except Exception as exc:
+        help_msg = hf_download_help_message(exc=exc)
+        if help_msg:
+            logger.error(help_msg)
         raise RuntimeError(
             f"Failed to load LAQ checkpoint '{laq_ckpt}'. "
             "Provide a checkpoint trained with the current LAQ codebase."
         ) from exc
     laq_provider = LAQTaskCodeProvider(laq_task)
 
-    # VLA model: Qwen3-VL (Cosmos-Reason2 weights)
-    model_name = cfg.model.vla.model_name
-    from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
+    backend_type = OmegaConf.select(cfg, "model.backend")
+    if not backend_type:
+        raise ValueError("Set `model.backend` (e.g., 'qwen3vl_chat_tokens' or 'smol_latent_head').")
+    backend_type = str(backend_type)
 
+    model_name = cfg.model.vla.model_name
     torch_dtype = str(cfg.model.vla.torch_dtype).lower()
     dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
     if torch_dtype not in dtype_map:
@@ -259,91 +236,109 @@ def main(cfg: DictConfig):
         )
     dtype = dtype_map[torch_dtype]
 
-    vla_model = Qwen3VLForConditionalGeneration.from_pretrained(
-        model_name,
-        torch_dtype=dtype,
-        attn_implementation=cfg.model.vla.attn_implementation,
-    )
-    # HuggingFace models default to eval mode after from_pretrained(); set train mode explicitly
-    vla_model.train()
-    processor = Qwen3VLProcessor.from_pretrained(model_name)
-
     action_cfg = ActionTokenConfig(
         **OmegaConf.to_container(cfg.model.action_tokens, resolve=True)
     )
-    token_id_map = prepare_action_token_training(
-        model=vla_model, processor=processor, action_tokens=action_cfg
-    )
 
-    action_token_ids = ActionTokenIds(
-        action_start_id=token_id_map[action_cfg.action_start],
-        action_end_id=token_id_map[action_cfg.action_end],
-        action_code_ids=[
-            token_id_map[action_cfg.token_fmt.format(i=i)]
-            for i in range(action_cfg.codebook_size)
-        ],
-        between_token_ids=infer_between_action_token_ids(
-            tokenizer=processor.tokenizer, action_cfg=action_cfg, token_id_map=token_id_map
-        ),
-        eos_token_id=int(getattr(processor.tokenizer, "eos_token_id", 0)),
-        code_seq_len=action_cfg.code_seq_len,
-    )
+    action_token_ids = None
+    if backend_type == "qwen3vl_chat_tokens":
+        from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
 
-    # Sanity checks: action token ids must be distinct and must not map to UNK.
-    code_ids = list(action_token_ids.action_code_ids)
-    if len(set(code_ids)) != len(code_ids):
-        raise RuntimeError(
-            "Action code token ids are not unique. "
-            "This typically means the action tokens were not properly added to the tokenizer. "
-            f"code_ids={code_ids}"
+        vla_model = Qwen3VLForConditionalGeneration.from_pretrained(
+            model_name,
+            torch_dtype=dtype,
+            attn_implementation=cfg.model.vla.attn_implementation,
         )
-    between_ids = list(action_token_ids.between_token_ids)
-    if not between_ids:
-        raise RuntimeError(
-            "between_token_ids is empty. Constrained decoding must allow separator tokens "
-            "to match the supervised target format."
-        )
-    if any(int(t) in set(code_ids) for t in between_ids):
-        raise RuntimeError(
-            "One or more between_token_ids overlaps with an action code token id; "
-            "this will confuse constrained decoding. "
-            f"between_token_ids={between_ids} code_ids={code_ids}"
-        )
-    if action_token_ids.action_start_id in code_ids or action_token_ids.action_end_id in code_ids:
-        raise RuntimeError(
-            "Action wrapper token id overlaps with an action code token id. "
-            f"start_id={action_token_ids.action_start_id} end_id={action_token_ids.action_end_id} code_ids={code_ids}"
-        )
-    if action_token_ids.action_start_id in between_ids or action_token_ids.action_end_id in between_ids:
-        raise RuntimeError(
-            "between_token_ids overlaps with an action wrapper token id; "
-            f"start_id={action_token_ids.action_start_id} end_id={action_token_ids.action_end_id} between_token_ids={between_ids}"
-        )
-    unk_id = getattr(processor.tokenizer, "unk_token_id", None)
-    if unk_id is not None and unk_id in code_ids:
-        raise RuntimeError(
-            "One or more action code tokens mapped to unk_token_id; tokenization will be broken. "
-            f"unk_token_id={unk_id} code_ids={code_ids}"
-        )
-    pad_id = getattr(processor.tokenizer, "pad_token_id", None)
-    if pad_id is not None and int(pad_id) in code_ids:
-        raise RuntimeError(
-            "pad_token_id overlaps with an action code token id; this will break decoding/parsing. "
-            f"pad_token_id={int(pad_id)} code_ids={code_ids}"
-        )
+        vla_model.train()
+        processor = Qwen3VLProcessor.from_pretrained(model_name)
 
-    module = VLATokenLightningModule(
-        vla_model=vla_model,
-        processor=processor,
+        backend = Qwen3VLChatActionTokenBackend(
+            config=Qwen3VLChatBackendConfig(
+                model_name=str(model_name),
+                torch_dtype=dtype,
+                attn_implementation=cfg.model.vla.attn_implementation,
+                chat=ChatConfig(system_prompt=cfg.model.chat.system_prompt),
+                action_tokens=action_cfg,
+            ),
+            vla_model=vla_model,
+            processor=processor,
+            frames_to_images=oxe_first_frames_to_pil,
+        )
+        backend.setup(device=torch.device("cpu"))
+        action_token_ids = backend.action_token_ids
+
+        code_ids = list(action_token_ids.action_code_ids)
+        if len(set(code_ids)) != len(code_ids):
+            raise RuntimeError(
+                "Action code token ids are not unique. "
+                "This typically means the action tokens were not properly added to the tokenizer. "
+                f"code_ids={code_ids}"
+            )
+        between_ids = list(action_token_ids.between_token_ids)
+        if not between_ids:
+            raise RuntimeError(
+                "between_token_ids is empty. Constrained decoding must allow separator tokens "
+                "to match the supervised target format."
+            )
+        if any(int(t) in set(code_ids) for t in between_ids):
+            raise RuntimeError(
+                "One or more between_token_ids overlaps with an action code token id; "
+                "this will confuse constrained decoding. "
+                f"between_token_ids={between_ids} code_ids={code_ids}"
+            )
+        if action_token_ids.action_start_id in code_ids or action_token_ids.action_end_id in code_ids:
+            raise RuntimeError(
+                "Action wrapper token id overlaps with an action code token id. "
+                f"start_id={action_token_ids.action_start_id} end_id={action_token_ids.action_end_id} code_ids={code_ids}"
+            )
+        if action_token_ids.action_start_id in between_ids or action_token_ids.action_end_id in between_ids:
+            raise RuntimeError(
+                "between_token_ids overlaps with an action wrapper token id; "
+                f"start_id={action_token_ids.action_start_id} end_id={action_token_ids.action_end_id} between_token_ids={between_ids}"
+            )
+        unk_id = getattr(processor.tokenizer, "unk_token_id", None)
+        if unk_id is not None and unk_id in code_ids:
+            raise RuntimeError(
+                "One or more action code tokens mapped to unk_token_id; tokenization will be broken. "
+                f"unk_token_id={unk_id} code_ids={code_ids}"
+            )
+        pad_id = getattr(processor.tokenizer, "pad_token_id", None)
+        if pad_id is not None and int(pad_id) in code_ids:
+            raise RuntimeError(
+                "pad_token_id overlaps with an action code token id; this will break decoding/parsing. "
+                f"pad_token_id={int(pad_id)} code_ids={code_ids}"
+            )
+
+    elif backend_type == "smol_latent_head":
+        trust_remote_code = bool(OmegaConf.select(cfg, "model.vla.trust_remote_code") or False)
+        backend = SmolLatentHeadBackend(
+            config=SmolLatentHeadBackendConfig(
+                model_name=str(model_name),
+                torch_dtype=dtype,
+                trust_remote_code=trust_remote_code,
+                chat=ChatConfig(system_prompt=cfg.model.chat.system_prompt),
+                action_tokens=action_cfg,
+            ),
+            frames_to_images=oxe_first_frames_to_pil,
+        )
+        try:
+            backend.setup(device=torch.device("cpu"))
+        except Exception as exc:
+            help_msg = hf_download_help_message(exc=exc)
+            if help_msg:
+                logger.error(help_msg)
+            raise
+    else:
+        raise ValueError(f"Unknown model.backend={backend_type!r}")
+
+    module = VLATokenBackendLightningModule(
+        backend=backend,
         code_provider=laq_provider,
-        action_tokens=action_cfg,
-        chat=ChatConfig(system_prompt=cfg.model.chat.system_prompt),
         optimizer=VLAOptimizerConfig(
             lr=float(cfg.training.optimizer.lr),
             weight_decay=float(cfg.training.optimizer.weight_decay),
         ),
         action_token_ids=action_token_ids,
-        frames_to_images=oxe_first_frames_to_pil,
         train_teacher_forced_metrics_every_n_steps=(
             int(cfg.training.train_teacher_forced_metrics_every_n_steps)
             if cfg.training.train_teacher_forced_metrics_every_n_steps is not None

@@ -17,7 +17,18 @@ logging:
   #   - LRZ DSS: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/username
   root_dir: null
 
-# Cache directory for model downloads (HuggingFace, torch hub)
-# If not set, defaults to <logging.root_dir>/cache or <project_root>/cache
-submit:
-  cache_dir: null
+# Cache directory for large downloads (HF hub weights, torch hub, TFDS cache, etc.).
+# If relative, resolved against `logging.root_dir` if set, else project root.
+paths:
+  cache_dir: cache
+
+# Optional: point the TF OXE adapter at a local Open X-Embodiment mirror (falls back to GCS when missing).
+# Common LRZ paths:
+#   - /dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment
+#   - /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/<your-subdir>/open-x-embodiment
+data:
+  adapter:
+    tf:
+      tfds_read:
+        source: auto        # gcs|local|auto
+        local_root: null    # e.g. /dss/.../datasets/open-x-embodiment

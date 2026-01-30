@@ -30,6 +30,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Ca
 
 from common.data_factory import create_datamodule
 from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
+from common.cache_env import configure_cache_env, resolve_cache_dir
 from foundation.callbacks import ThroughputLoggingCallback, ThroughputLoggingConfig
 from common.logging import set_seed, count_parameters
 from common.unified_logging import resolve_runs_dir, setup_unified_logging, setup_wandb_with_unified_paths
@@ -58,12 +59,19 @@ def main(cfg: DictConfig):
         wandb.finish()
 
     # Setup unified logging
-    runs_dir = resolve_runs_dir(
-        logging_root_dir=cfg.logging.get("root_dir"),
-        logging_runs_dir=cfg.logging.get("runs_dir"),
-        workspace_root=workspace_root,
-        experiment_name=OmegaConf.select(cfg, "experiment.name"),
-    )
+    runs_dir = None
+    try:
+        if HydraConfig.initialized():
+            runs_dir = Path(str(HydraConfig.get().runtime.output_dir))
+    except Exception:
+        runs_dir = None
+    if runs_dir is None:
+        runs_dir = resolve_runs_dir(
+            logging_root_dir=cfg.logging.get("root_dir"),
+            logging_runs_dir=cfg.logging.get("runs_dir"),
+            workspace_root=workspace_root,
+            experiment_name=OmegaConf.select(cfg, "experiment.name"),
+        )
 
     logger, output_dir = setup_unified_logging(
         runs_dir=runs_dir,
@@ -71,6 +79,10 @@ def main(cfg: DictConfig):
         log_level=cfg.logging.get("level", "INFO"),
         logger_name="laq.training",
     )
+
+    cache_dir = resolve_cache_dir(cfg=cfg, workspace_root=workspace_root)
+    if cache_dir is not None:
+        configure_cache_env(cache_dir=cache_dir, logger=logger)
 
     logger.info("=" * 80)
     logger.info("LAPA Stage 1: LAQ Training")

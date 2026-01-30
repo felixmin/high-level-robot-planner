@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import lightning.pytorch as pl
+import torch
 from lightning.pytorch.callbacks import Callback
 from PIL import Image, ImageDraw, ImageFont
 
@@ -276,13 +277,7 @@ class VLASampleVisualizationCallback(Callback):
             return
 
         action_tokens = getattr(pl_module, "action_tokens", None)
-        token_ids = getattr(pl_module, "action_token_ids", None)
-        if action_tokens is None or token_ids is None:
-            return
-
-        # Only visualize if the model can generate.
-        vla_model = getattr(pl_module, "vla_model", None)
-        if vla_model is None or not hasattr(vla_model, "generate"):
+        if action_tokens is None:
             return
 
         sample = getattr(pl_module, "_last_val_sample", None)
@@ -327,17 +322,21 @@ class VLASampleVisualizationCallback(Callback):
 
         freeform_texts: Optional[list[str]] = None
         if self.cfg.include_freeform_pred and hasattr(pl_module, "_predict_freeform_text"):
-            try:
-                frames_sel = frames[indices]
-                instr_sel = [str(instructions[i]) for i in indices]
-                freeform_texts = pl_module._predict_freeform_text(  # type: ignore[attr-defined]
-                    frames=frames_sel,
-                    instructions=instr_sel,
-                    max_new_tokens=int(self.cfg.freeform_max_new_tokens),
-                )
-            except Exception:
-                logger.debug("val sample viz: freeform generation failed", exc_info=True)
+            vla_model = getattr(pl_module, "vla_model", None)
+            if vla_model is None or not hasattr(vla_model, "generate"):
                 freeform_texts = None
+            else:
+                try:
+                    frames_sel = frames[indices]
+                    instr_sel = [str(instructions[i]) for i in indices]
+                    freeform_texts = pl_module._predict_freeform_text(  # type: ignore[attr-defined]
+                        frames=frames_sel,
+                        instructions=instr_sel,
+                        max_new_tokens=int(self.cfg.freeform_max_new_tokens),
+                    )
+                except Exception:
+                    logger.debug("val sample viz: freeform generation failed", exc_info=True)
+                    freeform_texts = None
 
         out_dir = Path(str(trainer.default_root_dir)) / "visualizations"
         step = int(getattr(trainer, "global_step", 0))
@@ -506,13 +505,15 @@ class VLATrainSampleVisualizationCallback(Callback):
             return
 
         action_tokens = getattr(pl_module, "action_tokens", None)
-        token_ids = getattr(pl_module, "action_token_ids", None)
-        if action_tokens is None or token_ids is None:
+        if action_tokens is None:
+            logger.debug("train sample viz: missing pl_module.action_tokens")
+            return
+        backend = getattr(pl_module, "backend", None)
+        if backend is None or not hasattr(backend, "latent_from_batch"):
+            logger.debug("train sample viz: missing pl_module.backend.latent_from_batch")
             return
 
-        vla_model = getattr(pl_module, "vla_model", None)
-        if vla_model is None or not hasattr(vla_model, "generate"):
-            return
+        logger.debug("train sample viz: begin step=%d batch_idx=%d", step, int(batch_idx))
 
         try:
             from foundation.online_laq import extract_oxe_language, oxe_frames_to_laq_video
@@ -578,29 +579,40 @@ class VLATrainSampleVisualizationCallback(Callback):
         pred_codes_sel: list[list[int]]
         gen_debug: Optional[list[dict[str, Any]]] = None
         try:
-            if hasattr(pl_module, "_predict_codes_with_debug"):
-                pred_codes_sel, gen_debug = pl_module._predict_codes_with_debug(  # type: ignore[attr-defined]
-                    frames=frames_sel, instructions=instr_sel
-                )
-            else:
-                pred_codes_sel = pl_module._predict_codes(  # type: ignore[attr-defined]
-                    frames=frames_sel, instructions=instr_sel
-                )
+            from foundation.backends.interfaces import BackendMode, FoundationBatch
+
+            latent = backend.latent_from_batch(
+                FoundationBatch(frames=frames_sel, instructions=instr_sel),
+                mode=BackendMode.CODES,
+            )
+            tokens = latent.tokens
+            if tokens is None and isinstance(latent.logits, torch.Tensor):
+                tokens = latent.logits.argmax(dim=-1)
+            if not isinstance(tokens, torch.Tensor):
+                logger.debug("train sample viz: backend returned no discrete tokens")
+                return
+            pred_codes_sel = tokens.detach().cpu().tolist()
+            meta = latent.meta if isinstance(latent.meta, dict) else {}
+            gen_debug = meta.get("parse_debug") if isinstance(meta.get("parse_debug"), list) else None
         except Exception:
-            logger.debug("train sample viz: constrained generation failed", exc_info=True)
+            logger.debug("train sample viz: code prediction failed", exc_info=True)
             return
 
         freeform_texts: Optional[list[str]] = None
         if self.cfg.include_freeform_pred and hasattr(pl_module, "_predict_freeform_text"):
-            try:
-                freeform_texts = pl_module._predict_freeform_text(  # type: ignore[attr-defined]
-                    frames=frames_sel,
-                    instructions=instr_sel,
-                    max_new_tokens=int(self.cfg.freeform_max_new_tokens),
-                )
-            except Exception:
-                logger.debug("train sample viz: freeform generation failed", exc_info=True)
+            vla_model = getattr(pl_module, "vla_model", None)
+            if vla_model is None or not hasattr(vla_model, "generate"):
                 freeform_texts = None
+            else:
+                try:
+                    freeform_texts = pl_module._predict_freeform_text(  # type: ignore[attr-defined]
+                        frames=frames_sel,
+                        instructions=instr_sel,
+                        max_new_tokens=int(self.cfg.freeform_max_new_tokens),
+                    )
+                except Exception:
+                    logger.debug("train sample viz: freeform generation failed", exc_info=True)
+                    freeform_texts = None
 
         out_dir = Path(str(trainer.default_root_dir)) / "visualizations"
 

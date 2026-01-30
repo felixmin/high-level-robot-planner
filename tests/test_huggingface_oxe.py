@@ -8,6 +8,11 @@ Run with: pytest tests/test_huggingface_oxe.py -v
 """
 
 import pytest
+
+# HF OXE backend relied on a HF dataset repo with a loading script; `datasets` no longer supports this.
+# We use TFDS OXE (`data.backend=oxe_tf`) for all training and benchmarking.
+pytest.skip("HF OXE backend is deprecated; use TFDS OXE (oxe_tf).", allow_module_level=True)
+
 import torch
 from torch.utils.data import DataLoader
 

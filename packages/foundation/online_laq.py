@@ -18,29 +18,29 @@ def oxe_frames_to_laq_video(frames: torch.Tensor) -> torch.Tensor:
     Convert OXE batch frames to LAQ input layout.
 
     Expected OXE layout (from `common.data.oxe_collate_fn`):
-      - frames: [B, 2, H, W, 3] uint8
+      - frames: [B, T, H, W, 3] uint8 (T can be 2 for frame pairs; future LAQ may use T>2)
 
     LAQ expects:
-      - video: [B, 3, 2, H, W] float32 in [0, 1]
+      - video: [B, 3, T, H, W] float32 in [0, 1]
     """
 
     if frames.ndim != 5:
         raise ValueError(f"Expected 5D frames tensor, got shape {tuple(frames.shape)}")
 
-    # Accept either [B, 2, H, W, 3] or [B, 2, 3, H, W] or [B, 3, 2, H, W].
+    # Accept either [B, T, H, W, 3] or [B, T, 3, H, W] or [B, 3, T, H, W].
     if frames.shape[-1] == 3:
-        # [B, 2, H, W, 3] -> [B, 2, 3, H, W]
+        # [B, T, H, W, 3] -> [B, T, 3, H, W]
         video = frames.permute(0, 1, 4, 2, 3)
-        # [B, 2, 3, H, W] -> [B, 3, 2, H, W]
+        # [B, T, 3, H, W] -> [B, 3, T, H, W]
         video = video.permute(0, 2, 1, 3, 4)
     elif frames.shape[2] == 3:
-        # [B, 2, 3, H, W] -> [B, 3, 2, H, W]
+        # [B, T, 3, H, W] -> [B, 3, T, H, W]
         video = frames.permute(0, 2, 1, 3, 4)
-    elif frames.shape[1] == 3 and frames.shape[2] == 2:
+    elif frames.shape[1] == 3:
         video = frames
     else:
         raise ValueError(
-            "Unrecognized frames layout; expected last dim=3 (BHWC), or shape[2]=3, or shape[1]=3 & shape[2]=2. "
+            "Unrecognized frames layout; expected last dim=3 (BHWC), or shape[2]=3 (BTCHW), or shape[1]=3 (BCTHW). "
             f"Got {tuple(frames.shape)}"
         )
 

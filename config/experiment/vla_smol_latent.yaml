@@ -1,0 +1,23 @@
+# @package _global_
+
+# Stage 2: SmolVLM2 latent-head VLA (non-debug default experiment).
+#
+# Use CLI overrides for quick sanity runs, e.g.:
+#   python scripts/4_train_foundation.py experiment=vla_smol_latent training.max_steps=300 training.validation.check_interval=50
+
+defaults:
+  - /model@model: foundation_smol_latent
+  - /data@data: laq_oxe_all
+  - /training@training: vla_lightning
+  - /cluster@cluster: local_dev
+  - optional /user_config: local
+
+experiment:
+  name: vla_smol_latent
+  description: "SmolVLM2 latent-head LAQ code prediction (Stage 2)"
+
+submit:
+  script: 4_train_foundation
+
+logging:
+  tags: ["foundation", "smol", "latent"]

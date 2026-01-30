@@ -5,6 +5,8 @@
 
 name: vla_cosmos2_tokens
 
+backend: qwen3vl_chat_tokens
+
 vla:
   model_name: nvidia/Cosmos-Reason2-2B
   torch_dtype: bf16  # bf16, fp16, fp32
@@ -22,4 +24,3 @@ action_tokens:
 
 chat:
   system_prompt: "You are a robot policy. Reply only with action tokens."
-

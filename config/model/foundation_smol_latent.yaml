@@ -1,0 +1,24 @@
+# Stage 2 (Foundation) latent-head VLA using SmolVLM2 backbone.
+
+name: vla_smol_latent
+
+backend: smol_latent_head
+
+vla:
+  model_name: HuggingFaceTB/SmolVLM2-500M-Video-Instruct
+  torch_dtype: bf16  # bf16, fp16, fp32
+  trust_remote_code: true
+
+laq:
+  checkpoint: ""  # required at runtime (Stage 1 LAQ checkpoint)
+
+action_tokens:
+  codebook_size: 8
+  code_seq_len: 4
+  action_start: "<ACTION>"
+  action_end: "</ACTION>"
+  token_fmt: "<ACT_{i}>"
+
+chat:
+  system_prompt: "You are a robot policy."
+
