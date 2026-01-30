@@ -6,8 +6,8 @@
 #   python scripts/4_train_foundation.py experiment=vla_smol_latent training.max_steps=300 training.validation.check_interval=50
 
 defaults:
-  - /model@model: foundation_smol_latent
-  - /data@data: laq_oxe_all
+  - /model@model: foundation_smol_latent_cluster
+  - /data@data: laq_oxe_all_high_ram
   - /training@training: vla_lightning
   - /cluster@cluster: local_dev
   - optional /user_config: local
