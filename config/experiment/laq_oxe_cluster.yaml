@@ -8,7 +8,7 @@
 
 defaults:
   - /model@model: laq
-  - /data@data: laq_oxe_all
+  - /data@data: laq_oxe_all_low_ram
   - /training@training: laq_optimizer
   - /cluster@cluster: mcml_h100
   - optional /user_config: local
