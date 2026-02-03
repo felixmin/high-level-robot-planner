@@ -60,6 +60,7 @@ tf:
   # Multi-dataset mixing behaviour.
   mixing:
     mix_block_length: 1              # 1 = per-sample mixing
+    selector_run_length: 1
     parallelism_mode: full         # divide|sqrt|full
     strategy: sample                 # sample|choose|python
     per_dataset_private_threadpool_size: 16

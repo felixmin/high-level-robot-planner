@@ -75,3 +75,6 @@ benchmark:
   # dataset can pay a large one-time startup cost.
   prime_each_dataset_samples: 0
   prime_materialize: false
+  # Python-prefetch mixer experiment (scripts/bench_oxe_python_prefetch_mixer.py)
+  python_prefetch_queue_size: 1
+  python_prefetch_min_ready_datasets: 4

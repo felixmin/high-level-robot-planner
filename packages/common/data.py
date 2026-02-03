@@ -1071,7 +1071,7 @@ class OXEDataModule(pl.LightningDataModule):
         mix_block_length = int(tf_mix["mix_block_length"])
         parallelism_mode = str(tf_mix["parallelism_mode"])
         mixing_strategy = str(tf_mix["strategy"])
-        mix_selector_run_length = int(tf_mix.get("selector_run_length", 1))
+        mix_selector_run_length = int(tf_mix["selector_run_length"])
         per_dataset_private_threadpool_size = int(tf_mix["per_dataset_private_threadpool_size"])
 
         if len(self.datasets) == 1:

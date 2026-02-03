@@ -1,15 +1,24 @@
 # Dataset Additions Log
 
-## Current State (2026-02-02)
+## Current State (2026-02-03)
 - Expanded OXE TF streaming with additional datasets that exist in the LRZ cluster mirror and on `gs://gresearch/robotics/`:
-  `aloha_mobile`, `droid`, `berkeley_autolab_ur5`, `jaco_play`, `kuka`, `taco_play`, `roboturk`.
+  `aloha_mobile`, `droid`, `berkeley_autolab_ur5`, `jaco_play`, `kuka`, `taco_play`, `roboturk`,
+  plus a larger set used for multi-dataset scaling experiments:
+  `bc_z`, `berkeley_cable_routing`, `columbia_cairlab_pusht_real`, `mimic_play`,
+  `berkeley_fanuc_manipulation`, `dobbe`, `uiuc_d3field`,
+  `ucsd_kitchen_dataset_converted_externally_to_rlds`, `ucsd_pick_and_place_dataset_converted_externally_to_rlds`,
+  `furniture_bench_dataset_converted_externally_to_rlds`, `maniskill_dataset_converted_externally_to_rlds`,
+  `robo_set`, `stanford_hydra_dataset_converted_externally_to_rlds`, `stanford_robocook_converted_externally_to_rlds`,
+  `spoc`, `tidybot`, `toto`, `viola`, `vima_converted_externally_to_rlds`, `utaustin_mutex`, `fmb`.
 - Added a matching multi-dataset preset: `config/data/laq_oxe_cluster_mirror_extended.yaml` (smoke test: `config/data/laq_oxe_cluster_mirror_extended_smoke.yaml`).
 - Added a training experiment config using the full extended dataset set: `config/experiment/laq_oxe_cluster_mirror_extended_val_3.yaml`.
 - Roboturk metadata streaming is stable again (no segfault) via a scan-free per-episode pairing path for state-less datasets.
-- OXE TF streaming remains CPU-only (TensorFlow GPUs are disabled in the adapter); prefer running benchmarks/training on CPU right now.
+- Added a 30+ dataset preset for scaling: `config/data/laq_oxe_cluster_mirror_large_gcs_choose32.yaml`.
 - Throughput investigation for local GCS streaming points to cross-dataset switching + cold-start stalls as the primary slowdown mechanism; see log entries below and `scripts/bench_oxe_dataloader_detailed.py`.
 - For local GCS streaming runs, use `data=laq_oxe_cluster_mirror_extended_gcs_fast` (adapter preset: `config/data/adapter/oxe_tf_gcs_fast.yaml`).
-  - Current recommended defaults in that adapter: `parallelism_mode=sqrt`, `mix_block_length=128`, `final_stream_buffer=8` (batch_size=128).
+  - Current recommended defaults in that adapter: `parallelism_mode=sqrt`, `mix_block_length=128`, `final_stream_buffer=16` (batch_size=128).
+- For 30+ datasets, prefer `data=laq_oxe_cluster_mirror_large_gcs_choose32` (adapter preset: `config/data/adapter/oxe_tf_gcs_large_choose32.yaml`).
+  - Key knobs: `prefetch.per_dataset_stream_buffer=0` and `mixing.selector_run_length>=32` to avoid long-tail stalls.
 
 ## Log
 - 2026-02-02: Removed an earlier attempt to add more `language_table_*_oracle_sim` datasets (not desired for this expansion).
@@ -34,3 +43,19 @@
 - 2026-02-03: Multi-dataset (11 datasets) large-batch GCS streaming is *near target* in TF-only benchmarking with priming:
   - `batch_size=128`, `parallelism_mode=sqrt`, `mix_block_length=128`, `final_stream_buffer=8`, `return_metadata=false`, TF mode (no materialize): mean batch time ~0.502s ⇒ ~1.99 batches/s ⇒ ~255 samples/s.
   - Remaining issue: rare long-tail stalls (single batches up to ~12s) still reduce mean; next steps focus on reducing these tail events (or moving them fully into an explicit startup warmup).
+- 2026-02-03: Increasing post-mix buffering improved mean throughput and crossed the 2 batches/s target in TF-only mode:
+  - `final_stream_buffer=16` (same setup otherwise): mean batch time ~0.488s ⇒ ~2.05 batches/s ⇒ ~263 samples/s (tail stalls still exist).
+- 2026-02-03: Added a more detailed write-up of throughput experiments + config knobs: `docs/oxe_throughput_experiments.md`.
+- 2026-02-03: Tried adding a “startup warm blocks per dataset” mixing knob; it triggered a tf.data shape error (`expected [128,...] but got []`) and was removed.
+- 2026-02-03: Attempted tf.data per-edge latency stats via `tf.data.experimental.StatsAggregator`; the TensorFlow build in `hlrp` did not expose this API, so the feature was removed (we rely on per-batch timing + metadata attribution instead).
+- 2026-02-03: Fixed TF GPU initialization warnings in OXE TFDS builder init by routing TF import through `_import_tensorflow_cpu_only()` (so TF doesn’t see GPUs even if TFDS imports TF early).
+- 2026-02-03: Added nested key-path support for observation/action/instruction extraction in the OXE adapter (`packages/common/adapters/oxe.py`) so datasets like `mimic_play` can use image keys like `image/front_image_1`.
+- 2026-02-03: Added a helper for quick schema inspection: `scripts/inspect_oxe_dataset_sample.py` (prints candidate image keypaths from a TFDS builder dir).
+- 2026-02-03: Added 21 more cluster-mirror datasets to `OXE_DATASETS` (image keys verified by sampling one episode on GCS) and a 32-dataset list config: `config/data/dataset/oxe_cluster_mirror_large.yaml`.
+- 2026-02-03: Found a major scaling pitfall: buffering *blocks per dataset* does not scale to 30+ datasets (it causes huge long-tail stalls).
+  - 32 datasets, `mix_block_length=128`, `per_dataset_stream_buffer=1`, `selector_run_length=4`: `runs/2026-02-03_03-35-22_laq_hf_local` → mean 4.11s ⇒ ~0.24 batches/s (~31 samples/s), p99 ~37.6s, max ~49.3s.
+- 2026-02-03: Found a practical fix: disable per-dataset block prefetch and amortize switches with longer `selector_run_length`.
+  - 32 datasets, `per_dataset_stream_buffer=0`, `selector_run_length=32`: `runs/2026-02-03_03-45-58_laq_hf_local` → mean 0.286s ⇒ ~3.49 batches/s (~447 samples/s), p99 ~6.6s.
+  - 32 datasets, `per_dataset_stream_buffer=0`, `selector_run_length=64`: `runs/2026-02-03_03-41-12_laq_hf_local` → mean 0.185s ⇒ ~5.41 batches/s (~693 samples/s), p99 ~3.5s.
+- 2026-02-03: Confirmed that shorter run-lengths can re-introduce long-tail stalls even with per-dataset block prefetch disabled:
+  - 32 datasets, `per_dataset_stream_buffer=0`, `selector_run_length=16`: `runs/2026-02-03_03-43-06_laq_hf_local` → mean 1.28s ⇒ ~0.78 batches/s (~100 samples/s), p99 ~25.1s.

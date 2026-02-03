@@ -52,6 +52,7 @@ tf:
 
   mixing:
     mix_block_length: 1
+    selector_run_length: 1
     parallelism_mode: divide
     strategy: sample
     per_dataset_private_threadpool_size: 0

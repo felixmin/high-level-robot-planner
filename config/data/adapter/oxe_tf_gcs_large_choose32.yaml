@@ -1,0 +1,19 @@
+# @package data.adapter
+
+# GCS streaming adapter tuned for *30+ datasets*:
+# - Avoid per-dataset block prefetch (too expensive at high dataset count).
+# - Use `choose_from_datasets` with a longer selector run-length to amortize
+#   the occasional "cold switch" stall over many batches.
+
+defaults:
+  - oxe_tf_gcs_fast_large
+  - _self_
+
+tf:
+  prefetch:
+    per_dataset_stream_buffer: 0
+
+  mixing:
+    strategy: choose
+    selector_run_length: 32
+

@@ -34,7 +34,7 @@ tf:
     # Note: with `mix_block_length>1`, this buffers *blocks* (not individual samples).
     per_dataset_stream_buffer: 1
     # Keep some post-mix buffering (batched).
-    final_stream_buffer: 8
+    final_stream_buffer: 16
 
   mixing:
     # Sample blocks to amortize dataset switching overhead.

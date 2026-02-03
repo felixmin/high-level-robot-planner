@@ -350,6 +350,154 @@ OXE_DATASETS = {
         avg_episode_length=90,
         allow_missing_state=True,
     ),
+    # --- More datasets from the LRZ cluster mirror (image-only training path) ---
+    "bc_z": OXEDatasetConfig(
+        name="bc_z",
+        gcs_path="gs://gresearch/robotics/bc_z/0.1.0",
+        image_key="image",
+        image_shape=(171, 213, 3),
+        avg_episode_length=30,
+    ),
+    "berkeley_cable_routing": OXEDatasetConfig(
+        name="berkeley_cable_routing",
+        gcs_path="gs://gresearch/robotics/berkeley_cable_routing/0.1.0",
+        image_key="image",
+        image_shape=(128, 128, 3),
+        avg_episode_length=30,
+    ),
+    "columbia_cairlab_pusht_real": OXEDatasetConfig(
+        name="columbia_cairlab_pusht_real",
+        gcs_path="gs://gresearch/robotics/columbia_cairlab_pusht_real/0.1.0",
+        image_key="image",
+        image_shape=(240, 320, 3),
+        avg_episode_length=30,
+    ),
+    "mimic_play": OXEDatasetConfig(
+        name="mimic_play",
+        gcs_path="gs://gresearch/robotics/mimic_play/0.0.1",
+        image_key="image/front_image_1",
+        image_shape=(120, 120, 3),
+        avg_episode_length=200,
+    ),
+    "berkeley_fanuc_manipulation": OXEDatasetConfig(
+        name="berkeley_fanuc_manipulation",
+        gcs_path="gs://gresearch/robotics/berkeley_fanuc_manipulation/0.1.0",
+        image_key="image",
+        image_shape=(224, 224, 3),
+        avg_episode_length=60,
+    ),
+    "dobbe": OXEDatasetConfig(
+        name="dobbe",
+        gcs_path="gs://gresearch/robotics/dobbe/0.0.1",
+        image_key="wrist_image",
+        image_shape=(256, 256, 3),
+        avg_episode_length=60,
+    ),
+    "uiuc_d3field": OXEDatasetConfig(
+        name="uiuc_d3field",
+        gcs_path="gs://gresearch/robotics/uiuc_d3field/0.1.0",
+        image_key="image_1",
+        image_shape=(360, 640, 3),
+        avg_episode_length=60,
+    ),
+    "ucsd_kitchen_dataset_converted_externally_to_rlds": OXEDatasetConfig(
+        name="ucsd_kitchen_dataset_converted_externally_to_rlds",
+        gcs_path="gs://gresearch/robotics/ucsd_kitchen_dataset_converted_externally_to_rlds/0.1.0",
+        image_key="image",
+        image_shape=(480, 640, 3),
+        avg_episode_length=60,
+    ),
+    "ucsd_pick_and_place_dataset_converted_externally_to_rlds": OXEDatasetConfig(
+        name="ucsd_pick_and_place_dataset_converted_externally_to_rlds",
+        gcs_path="gs://gresearch/robotics/ucsd_pick_and_place_dataset_converted_externally_to_rlds/0.1.0",
+        image_key="image",
+        image_shape=(224, 224, 3),
+        avg_episode_length=60,
+    ),
+    "furniture_bench_dataset_converted_externally_to_rlds": OXEDatasetConfig(
+        name="furniture_bench_dataset_converted_externally_to_rlds",
+        gcs_path="gs://gresearch/robotics/furniture_bench_dataset_converted_externally_to_rlds/0.1.0",
+        image_key="image",
+        image_shape=(224, 224, 3),
+        avg_episode_length=60,
+    ),
+    "maniskill_dataset_converted_externally_to_rlds": OXEDatasetConfig(
+        name="maniskill_dataset_converted_externally_to_rlds",
+        gcs_path="gs://gresearch/robotics/maniskill_dataset_converted_externally_to_rlds/0.1.0",
+        image_key="image",
+        image_shape=(256, 256, 3),
+        avg_episode_length=60,
+    ),
+    "robo_set": OXEDatasetConfig(
+        name="robo_set",
+        gcs_path="gs://gresearch/robotics/robo_set/0.0.1",
+        image_key="image_left",
+        image_shape=(240, 424, 3),
+        avg_episode_length=60,
+    ),
+    "stanford_hydra_dataset_converted_externally_to_rlds": OXEDatasetConfig(
+        name="stanford_hydra_dataset_converted_externally_to_rlds",
+        gcs_path="gs://gresearch/robotics/stanford_hydra_dataset_converted_externally_to_rlds/0.1.0",
+        image_key="image",
+        image_shape=(240, 320, 3),
+        avg_episode_length=60,
+    ),
+    "stanford_robocook_converted_externally_to_rlds": OXEDatasetConfig(
+        name="stanford_robocook_converted_externally_to_rlds",
+        gcs_path="gs://gresearch/robotics/stanford_robocook_converted_externally_to_rlds/0.1.0",
+        image_key="image_1",
+        image_shape=(256, 256, 3),
+        avg_episode_length=60,
+    ),
+    "spoc": OXEDatasetConfig(
+        name="spoc",
+        gcs_path="gs://gresearch/robotics/spoc/0.0.1",
+        image_key="image",
+        image_shape=(224, 384, 3),
+        avg_episode_length=60,
+    ),
+    "tidybot": OXEDatasetConfig(
+        name="tidybot",
+        gcs_path="gs://gresearch/robotics/tidybot/0.0.1",
+        image_key="image",
+        image_shape=(360, 640, 3),
+        avg_episode_length=60,
+    ),
+    "toto": OXEDatasetConfig(
+        name="toto",
+        gcs_path="gs://gresearch/robotics/toto/0.1.0",
+        image_key="image",
+        image_shape=(480, 640, 3),
+        avg_episode_length=60,
+    ),
+    "viola": OXEDatasetConfig(
+        name="viola",
+        gcs_path="gs://gresearch/robotics/viola/0.1.0",
+        image_key="agentview_rgb",
+        image_shape=(224, 224, 3),
+        avg_episode_length=60,
+    ),
+    "vima_converted_externally_to_rlds": OXEDatasetConfig(
+        name="vima_converted_externally_to_rlds",
+        gcs_path="gs://gresearch/robotics/vima_converted_externally_to_rlds/0.0.1",
+        image_key="image",
+        image_shape=(128, 256, 3),
+        avg_episode_length=60,
+    ),
+    "utaustin_mutex": OXEDatasetConfig(
+        name="utaustin_mutex",
+        gcs_path="gs://gresearch/robotics/utaustin_mutex/0.1.0",
+        image_key="image",
+        image_shape=(128, 128, 3),
+        avg_episode_length=60,
+    ),
+    "fmb": OXEDatasetConfig(
+        name="fmb",
+        gcs_path="gs://gresearch/robotics/fmb/0.0.1",
+        image_key="image_side_1",
+        image_shape=(256, 256, 3),
+        avg_episode_length=60,
+    ),
 }
 
 
@@ -542,8 +690,6 @@ class OXEFramePairDataset(IterableDataset):
         self._pipeline_iterator = None
         # Idempotency flag for cleanup
         self._cleaned_up = False
-        # Optional tf.data stats aggregator for profiling (enabled via env var).
-        self._tf_stats_aggregator = None
 
     def _compute_pair_frame_indices(self, offset: int) -> list[int]:
         """
@@ -628,12 +774,9 @@ class OXEFramePairDataset(IterableDataset):
         if self._builder is not None:
             return
 
-        # Import TF only when needed
-        import tensorflow as tf
+        # Import TF only when needed (CPU-only, avoid TF GPU init/JIT).
+        tf = _import_tensorflow_cpu_only()
         import tensorflow_datasets as tfds
-
-        # Disable GPU for tf.data (we only use CPU for data loading)
-        tf.config.set_visible_devices([], "GPU")
 
         builder_dir = _resolve_tfds_builder_dir(
             gcs_builder_dir=self.config.gcs_path,
@@ -828,6 +971,26 @@ class OXEFramePairDataset(IterableDataset):
             else 0
         )
 
+        def _get_keypath(container: dict, keypath: str):
+            """
+            Resolve `keypath` from a nested dict structure.
+
+            Important: some OXE TFDS datasets use literal keys that contain `/`
+            (e.g., `clip_function_input/base_pose_tool_reached`). Prefer a direct
+            lookup first, and only treat `/` as a nesting delimiter if the full
+            key is not present.
+            """
+            if not keypath:
+                raise ValueError("keypath must be a non-empty string")
+            if keypath in container:
+                return container[keypath]
+            if "/" not in keypath:
+                return container[keypath]
+            cur = container
+            for part in keypath.split("/"):
+                cur = cur[part]
+            return cur
+
         def _pad_or_truncate_1d(vec: tf.Tensor, target_dim: int) -> tf.Tensor:
             vec = tf.convert_to_tensor(vec)
             vec = vec[:target_dim]
@@ -893,7 +1056,7 @@ class OXEFramePairDataset(IterableDataset):
 
             if not return_metadata:
                 frames_ds = steps_ds.map(
-                    lambda s: s["observation"][image_key],
+                    lambda s: _get_keypath(s["observation"], image_key),
                     num_parallel_calls=pipeline_transform_parallelism,
                 )
 
@@ -1003,9 +1166,9 @@ class OXEFramePairDataset(IterableDataset):
 
             def _extract_language(step):
                 if instruction_in_step:
-                    instr = step[instruction_key]
+                    instr = _get_keypath(step, instruction_key)
                 else:
-                    instr = step["observation"][instruction_key]
+                    instr = _get_keypath(step["observation"], instruction_key)
                 # String tensor (Bridge/RT-1) vs encoded ints (language_table)
                 if instr.dtype != tf.string:
                     instr = tf.strings.unicode_encode(tf.cast(instr, tf.int32), "UTF-8")
@@ -1015,7 +1178,7 @@ class OXEFramePairDataset(IterableDataset):
                 if action_is_dict:
                     if not action_key:
                         raise ValueError("Config error: action_is_dict=True requires action_key")
-                    a = step["action"][action_key]
+                    a = _get_keypath(step["action"], action_key)
                 else:
                     a = step["action"]
                 a = tf.cast(tf.reshape(a, [-1])[:action_dim], tf.float32)
@@ -1032,7 +1195,7 @@ class OXEFramePairDataset(IterableDataset):
                     raise ValueError(
                         f"Config error: state_key is None for dataset={dataset_name}"
                     )
-                s = step["observation"][state_key]
+                s = _get_keypath(step["observation"], state_key)
                 s = tf.cast(tf.reshape(s, [-1])[:state_dim], tf.float32)
                 return tf.ensure_shape(s, [state_dim])
 
@@ -1041,7 +1204,7 @@ class OXEFramePairDataset(IterableDataset):
             # without building sliding windows of full image tensors (which can be very slow
             # and memory-heavy for larger offsets).
             def _step_to_features(step):
-                frame = step["observation"][image_key]
+                frame = _get_keypath(step["observation"], image_key)
                 action = _extract_action(step)
                 state = _extract_state(step)
                 language = _extract_language(step)
@@ -1058,7 +1221,7 @@ class OXEFramePairDataset(IterableDataset):
                     )
 
                 frames_ds = steps_ds.map(
-                    lambda s: s["observation"][image_key],
+                    lambda s: _get_keypath(s["observation"], image_key),
                     num_parallel_calls=pipeline_transform_parallelism,
                 )
                 frames_ds = frames_ds.batch(8).map(
@@ -1421,30 +1584,9 @@ class OXEFramePairDataset(IterableDataset):
         if self.private_threadpool_size > 0:
             options.threading.private_threadpool_size = self.private_threadpool_size
 
-        # Optional tf.data stats collection for debugging performance regressions.
-        # Enable with: `HLRP_OXE_TF_DATA_STATS=1`.
-        if str(os.environ.get("HLRP_OXE_TF_DATA_STATS", "")).lower() in {"1", "true", "yes"}:
-            try:
-                aggregator = tf.data.experimental.StatsAggregator()
-                options.experimental_stats.aggregator = aggregator
-                options.experimental_stats.latency_all_edges = True
-                options.experimental_stats.prefix = f"oxe/{dataset_name}/"
-                self._tf_stats_aggregator = aggregator
-            except Exception as e:
-                logger.warning(f"Failed to enable tf.data stats for {dataset_name}: {e}")
         tf_ds = tf_ds.with_options(options)
 
         return tf_ds
-
-    def tf_data_stats_summary(self) -> Optional[str]:
-        """Return tf.data stats summary if enabled via `HLRP_OXE_TF_DATA_STATS=1`."""
-        agg = getattr(self, "_tf_stats_aggregator", None)
-        if agg is None:
-            return None
-        try:
-            return str(agg.get_summary())
-        except Exception as e:
-            return f"<failed to get tf.data stats summary: {e}>"
 
     def _get_or_create_pipeline(self):
         """Get existing pipeline or create new one (lazy, persistent)."""
@@ -1795,8 +1937,6 @@ class MultiOXEFramePairDataset(IterableDataset):
         self._weights = None
         self._persistent_pipeline = None
         self._pipeline_iterator = None
-        # Optional tf.data stats aggregator for profiling (enabled via env var).
-        self._tf_stats_aggregator = None
 
     def _init_datasets(self):
         """Initialize individual datasets lazily."""
@@ -2027,7 +2167,7 @@ class MultiOXEFramePairDataset(IterableDataset):
             # Reduce cross-dataset switching by repeating each selector choice for a
             # fixed run length. This keeps memory constant (unlike increasing
             # `mix_block_length`) while reducing "cold switch" stalls on GCS.
-            selector_run = int(getattr(self, "mix_selector_run_length", 1))
+            selector_run = int(self.mix_selector_run_length)
             if selector_run > 1:
                 selector_ds = selector_ds.flat_map(
                     lambda idx: tf.data.Dataset.from_tensors(idx).repeat(selector_run)
@@ -2057,15 +2197,6 @@ class MultiOXEFramePairDataset(IterableDataset):
         options.experimental_deterministic = False
         options.experimental_slack = True
 
-        if str(os.environ.get("HLRP_OXE_TF_DATA_STATS", "")).lower() in {"1", "true", "yes"}:
-            try:
-                aggregator = tf.data.experimental.StatsAggregator()
-                options.experimental_stats.aggregator = aggregator
-                options.experimental_stats.latency_all_edges = True
-                options.experimental_stats.prefix = "oxe/mixed/"
-                self._tf_stats_aggregator = aggregator
-            except Exception as e:
-                logger.warning(f"Failed to enable tf.data stats for mixed pipeline: {e}")
         mixed = mixed.with_options(options)
 
         if self.is_train:
@@ -2087,16 +2218,6 @@ class MultiOXEFramePairDataset(IterableDataset):
             mixed = mixed.prefetch(prefetch_buffer)
 
         return mixed
-
-    def tf_data_stats_summary(self) -> Optional[str]:
-        """Return tf.data stats summary if enabled via `HLRP_OXE_TF_DATA_STATS=1`."""
-        agg = getattr(self, "_tf_stats_aggregator", None)
-        if agg is None:
-            return None
-        try:
-            return str(agg.get_summary())
-        except Exception as e:
-            return f"<failed to get tf.data stats summary: {e}>"
 
     def _get_or_create_pipeline(self):
         if self._persistent_pipeline is None:

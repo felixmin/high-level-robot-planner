@@ -1,0 +1,14 @@
+# @package data
+
+# TF OXE preset: 30+ dataset list (cluster mirror aligned) + the
+# `oxe_tf_gcs_fast` adapter for local training directly from GCS.
+
+defaults:
+  - dataset: oxe_cluster_mirror_large
+  - adapter: oxe_tf_gcs_fast
+  - loader: oxe_streaming
+  - preprocess: pair_256
+  - _self_
+
+backend: oxe_tf
+

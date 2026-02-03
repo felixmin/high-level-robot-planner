@@ -1,0 +1,238 @@
+# @package data.dataset
+
+# OXE dataset list aligned with what exists in the LRZ cluster mirror and on
+# `gs://gresearch/robotics/...`.
+#
+# This is a "30+ datasets" preset for stressing multi-dataset mixing + throughput.
+# It is intended for `data.preprocess.return_metadata=false` (image-pair training).
+#
+# Note: `approx_num_pairs` for newly added datasets is intentionally approximate.
+
+oxe:
+  datasets:
+    # Existing 11 (kept)
+    - name: language_table
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 10
+      weight: 0.03
+      approx_num_pairs: 11934000
+
+    - name: bridge
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1031130
+
+    - name: rt1
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 3
+      weight: 0.03
+      approx_num_pairs: 2113650
+
+    - name: robonet
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 10
+      weight: 0.03
+      approx_num_pairs: 1494000
+
+    - name: aloha_mobile
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 458620
+
+    - name: droid
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 35680434
+
+    - name: berkeley_autolab_ur5
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 78907
+
+    - name: jaco_play
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 65359
+
+    - name: kuka
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 5881305
+
+    - name: taco_play
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 197762
+
+    - name: roboturk
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 148708
+
+    # Added datasets (21)
+    - name: bc_z
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: berkeley_cable_routing
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: columbia_cairlab_pusht_real
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: mimic_play
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: berkeley_fanuc_manipulation
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: dobbe
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: uiuc_d3field
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: ucsd_kitchen_dataset_converted_externally_to_rlds
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: ucsd_pick_and_place_dataset_converted_externally_to_rlds
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: furniture_bench_dataset_converted_externally_to_rlds
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: maniskill_dataset_converted_externally_to_rlds
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: robo_set
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: stanford_hydra_dataset_converted_externally_to_rlds
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: stanford_robocook_converted_externally_to_rlds
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: spoc
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: tidybot
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: toto
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: viola
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: vima_converted_externally_to_rlds
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: utaustin_mutex
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+
+    - name: fmb
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.03
+      approx_num_pairs: 1000000
+

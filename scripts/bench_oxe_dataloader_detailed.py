@@ -13,7 +13,7 @@ It reports:
 - slowest batches with dataset composition
 
 Optionally, enable tf.data per-op stats:
-  HLRP_OXE_TF_DATA_STATS=1 conda run -n hlrp python scripts/bench_oxe_dataloader_detailed.py ...
+  (removed; the TF build in this repo did not expose `tf.data.experimental.StatsAggregator`)
 
 Example:
   CUDA_VISIBLE_DEVICES="" conda run -n hlrp python scripts/bench_oxe_dataloader_detailed.py \\
@@ -58,6 +58,7 @@ class BatchInfo:
     is_warmup: bool
     dominant_dataset: Optional[str]
     dataset_counts: Dict[str, int]
+    dominant_gap_batches: Optional[int]
 
 
 def _normalize_dataset_names(val: Any) -> list[str]:
@@ -246,6 +247,9 @@ def main(cfg: DictConfig) -> None:
     switch_times: list[float] = []
     stay_times: list[float] = []
     prev_dom: Optional[str] = None
+    last_seen: dict[str, int] = {}
+    first_time_times: list[float] = []
+    gap_times: list[tuple[int, float]] = []
 
     slowest: list[BatchInfo] = []
     slowest_k = int(bench_cfg.get("detailed_top_k", 10))
@@ -289,6 +293,7 @@ def main(cfg: DictConfig) -> None:
 
         dominant: Optional[str] = None
         counts: Dict[str, int] = {}
+        dom_gap: Optional[int] = None
 
         if return_metadata:
             if detailed_mode == "tf":
@@ -320,6 +325,15 @@ def main(cfg: DictConfig) -> None:
                     if name not in first_seen:
                         first_seen[name] = idx
 
+        if (dominant is not None) and (not is_warmup):
+            prev_idx = last_seen.get(dominant)
+            if prev_idx is None:
+                first_time_times.append(dt)
+            else:
+                dom_gap = int(idx - prev_idx)
+                gap_times.append((dom_gap, dt))
+            last_seen[dominant] = idx
+
         is_warmup = idx < warmup_steps
         info = BatchInfo(
             idx=idx,
@@ -329,6 +343,7 @@ def main(cfg: DictConfig) -> None:
             is_warmup=is_warmup,
             dominant_dataset=dominant,
             dataset_counts=counts,
+            dominant_gap_batches=dom_gap,
         )
         batch_infos.append(info)
 
@@ -360,6 +375,8 @@ def main(cfg: DictConfig) -> None:
     mean_s = float(np.mean(np.asarray(measured_dts, dtype=np.float64))) if measured_dts else float("nan")
     p50_s = _percentile(measured_dts, 50.0)
     p90_s = _percentile(measured_dts, 90.0)
+    p99_s = _percentile(measured_dts, 99.0)
+    max_s = float(np.max(np.asarray(measured_dts, dtype=np.float64))) if measured_dts else float("nan")
 
     bs = int(cfg.data.loader.batch_size)
     samples_per_sec = (float(bs) * float(len(measured_dts))) / float(sum(measured_dts)) if measured_dts else float("nan")
@@ -369,6 +386,8 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"  - mean batch time: {mean_s:.4f}s")
     logger.info(f"  - p50 batch time:  {p50_s:.4f}s")
     logger.info(f"  - p90 batch time:  {p90_s:.4f}s")
+    logger.info(f"  - p99 batch time:  {p99_s:.4f}s")
+    logger.info(f"  - max batch time:  {max_s:.4f}s")
     if detailed_mode == "tf":
         logger.info(
             f"  - mean fetch:      {float(np.mean(measured_fetch_dts)) if measured_fetch_dts else float('nan'):.4f}s"
@@ -398,6 +417,28 @@ def main(cfg: DictConfig) -> None:
                 f"  - stay batches:   n={len(stay_times)} mean={float(np.mean(stay_times)):.4f}s p90={_percentile(stay_times,90.0):.4f}s"
             )
 
+    if first_time_times or gap_times:
+        logger.info("Gap analysis (dominant dataset, measured batches only)")
+        if first_time_times:
+            logger.info(
+                f"  - first time seen: n={len(first_time_times)} mean={float(np.mean(first_time_times)):.4f}s p90={_percentile(first_time_times,90.0):.4f}s"
+            )
+        if gap_times:
+            gaps = [g for g, _dt in gap_times]
+            dts = [dt for _g, dt in gap_times]
+            logger.info(
+                f"  - non-first gaps:  n={len(gap_times)} mean_gap={float(np.mean(gaps)):.1f} p90_gap={_percentile(gaps,90.0):.1f} mean_dt={float(np.mean(dts)):.4f}s p90_dt={_percentile(dts,90.0):.4f}s"
+            )
+            # Show whether large gaps correlate with stalls.
+            for lo, hi in [(1, 4), (5, 32), (33, 256), (257, 1_000_000_000)]:
+                bucket = [dt for g, dt in gap_times if lo <= g <= hi]
+                if not bucket:
+                    continue
+                label = f"{lo}-{hi}" if hi < 1_000_000_000 else f"{lo}+"
+                logger.info(
+                    f"  - gap {label} batches: n={len(bucket)} mean={float(np.mean(bucket)):.4f}s p90={_percentile(bucket,90.0):.4f}s"
+                )
+
     if slowest:
         logger.info(f"Top {len(slowest)} slowest batches")
         for b in slowest:
@@ -407,7 +448,7 @@ def main(cfg: DictConfig) -> None:
                 )
             else:
                 logger.info(
-                    f"  - idx={b.idx} dt={b.dt_s:.4f}s warmup={b.is_warmup} dom={b.dominant_dataset} counts={b.dataset_counts}"
+                    f"  - idx={b.idx} dt={b.dt_s:.4f}s warmup={b.is_warmup} dom={b.dominant_dataset} gap={b.dominant_gap_batches} counts={b.dataset_counts}"
                 )
 
     # Persist raw batch times for offline analysis.
@@ -424,32 +465,15 @@ def main(cfg: DictConfig) -> None:
                         "is_warmup": b.is_warmup,
                         "dominant_dataset": b.dominant_dataset,
                         "dataset_counts": b.dataset_counts,
+                        "dominant_gap_batches": b.dominant_gap_batches,
                     }
                 )
                 + "\n"
             )
     logger.info(f"✓ Wrote {len(batch_infos)} batch records: {out_jsonl}")
 
-    # If tf.data stats are enabled, attempt to dump summaries.
-    try:
-        tf_stats_path = Path(output_dir) / "tf_data_stats.txt"
-        summaries: list[str] = []
-        train_ds = getattr(datamodule, "train_dataset", None)
-        if train_ds is not None and hasattr(train_ds, "tf_data_stats_summary"):
-            s = train_ds.tf_data_stats_summary()
-            if s:
-                summaries.append("=== mixed ===\n" + s)
-        # Multi dataset: include per-dataset summaries if available.
-        for child in getattr(train_ds, "_datasets", []) or []:
-            if hasattr(child, "tf_data_stats_summary"):
-                s = child.tf_data_stats_summary()
-                if s:
-                    summaries.append(f"=== {getattr(child, 'config', None).name if getattr(child,'config',None) else 'dataset'} ===\n{s}")
-        if summaries:
-            tf_stats_path.write_text("\n\n".join(summaries), encoding="utf-8")
-            logger.info(f"✓ Wrote tf.data stats: {tf_stats_path}")
-    except Exception as e:
-        logger.warning(f"Failed to write tf.data stats summaries: {e}")
+    # NOTE: tf.data per-edge stats were removed because the TF version used here does not
+    # expose the needed `tf.data.experimental.StatsAggregator` API.
 
 
 if __name__ == "__main__":
