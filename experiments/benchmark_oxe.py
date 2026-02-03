@@ -114,9 +114,12 @@ def benchmark_pytorch_throughput(config: dict, batch_size: int = 32):
             image_size=config["image_size"],
             return_metadata=bool(config.get("return_metadata", True)),
             is_train=True,
+            output_batch_size=batch_size,
             persistent_iterator=bool(config.get("persistent_iterator", True)),
             samples_per_episode=int(config.get("samples_per_episode", 0)),
             seed=config.get("sampling_seed"),
+            debug_use_synthetic_data=bool(config.get("debug_use_synthetic_data", False)),
+            debug_synthetic_num_samples=int(config.get("debug_synthetic_num_samples", 1000)),
             pipeline_episode_concurrency_total=int(config.get("pipeline_episode_concurrency", 1)),
             pipeline_transform_parallelism=int(config.get("pipeline_transform_parallelism", 1)),
             pipeline_interleave_parallelism=int(config.get("pipeline_interleave_parallelism", 1)),
@@ -124,6 +127,9 @@ def benchmark_pytorch_throughput(config: dict, batch_size: int = 32):
             parallelism_mode=str(config.get("multi_dataset_parallelism_mode", "divide")),
             per_dataset_stream_prefetch_buffer=int(config.get("per_dataset_stream_prefetch_buffer", 0)),
             mixing_strategy=str(config.get("multi_dataset_mixing_strategy", "sample")),
+            python_prefetch_queue_size=int(config.get("python_prefetch_queue_size", 2)),
+            python_prefetch_min_ready_datasets=int(config.get("python_prefetch_min_ready_datasets", 1)),
+            python_prefetch_wait_timeout_s=float(config.get("python_prefetch_wait_timeout_s", 600)),
             per_dataset_private_threadpool_size=int(
                 config.get("per_dataset_private_threadpool_size", 0)
             ),
@@ -131,6 +137,15 @@ def benchmark_pytorch_throughput(config: dict, batch_size: int = 32):
             tfds_read_block_length=int(config.get("tfds_read_block_length", 1)),
             tfds_read_decode_parallelism=int(config.get("tfds_read_decode_parallelism", -1)),
             tfds_read_interleave_parallelism=int(config.get("tfds_read_interleave_parallelism", -1)),
+            mix_selector_run_length=int(config.get("mix_selector_run_length", 1)),
+            tfds_read_skip_steps_decoding=bool(config.get("tfds_read_skip_steps_decoding", False)),
+            emit_encoded_pairs=bool(config.get("emit_encoded_pairs", False)),
+            post_mix_decode_resize=bool(config.get("post_mix_decode_resize", False)),
+            pair_frames_mode=str(config.get("pair_frames_mode", "endpoints")),
+            pair_frames_stride=int(config.get("pair_frames_stride", 1)),
+            pair_frames_n=int(config.get("pair_frames_n", 2)),
+            tfds_source=str(config.get("tfds_source", "gcs")),
+            tfds_local_root=config.get("tfds_local_root"),
         )
     else:
         # Single dataset (legacy/single config)

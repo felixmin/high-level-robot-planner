@@ -115,6 +115,8 @@ def _best_effort_materialize(obj: Any, leaf_budget: int = 32) -> None:
         except Exception:
             return
 
+    _walk(obj)
+
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
@@ -162,6 +164,8 @@ def main(cfg: DictConfig) -> None:
     datamodule = create_datamodule(cfg.data)
     datamodule.setup()
 
+    total = warmup_steps + steps
+
     # Optional: prime each child dataset once so the measured run reflects steady-state
     # throughput rather than "first-seen dataset" cold-start stalls.
     #
@@ -206,6 +210,10 @@ def main(cfg: DictConfig) -> None:
         else:
             logger.info("Priming requested but no child datasets found; skipping.")
 
+    if total <= 0:
+        logger.info("Benchmark warmup_steps+steps == 0; exiting after setup/priming.")
+        return
+
     dl = datamodule.train_dataloader()
 
     dataset_names = [d.name for d in cfg.data.dataset.oxe.datasets]
@@ -224,8 +232,6 @@ def main(cfg: DictConfig) -> None:
         logger.info(
             f"  - prime_each_dataset_samples: {prime_each_dataset_samples} (materialize={prime_materialize})"
         )
-
-    total = warmup_steps + steps
 
     # Two measurement modes:
     # - torch: time `next(iter(torch_dataloader))` (includes TF pipeline + TF->PyTorch conversion)
@@ -260,6 +266,7 @@ def main(cfg: DictConfig) -> None:
     measured_materialize_dts: list[float] = []
 
     for idx in range(total):
+        is_warmup = idx < warmup_steps
         t0 = time.perf_counter()
         if detailed_mode == "tf":
             batch = next(tf_iter)  # type: ignore[arg-type]
@@ -277,9 +284,9 @@ def main(cfg: DictConfig) -> None:
                             "TF mode with return_metadata=true expects elements as (pair_tf, meta_tf)"
                         )
                     pair_tf, _meta_tf = batch
-                    _ = pair_tf.numpy()
+                    _best_effort_materialize(pair_tf)
                 else:
-                    _ = batch.numpy()  # type: ignore[union-attr]
+                    _best_effort_materialize(batch)
             except Exception:
                 # Best-effort materialization. If this fails, keep going to still surface
                 # iterator stalls (fetch_dt).
@@ -333,8 +340,6 @@ def main(cfg: DictConfig) -> None:
                 dom_gap = int(idx - prev_idx)
                 gap_times.append((dom_gap, dt))
             last_seen[dominant] = idx
-
-        is_warmup = idx < warmup_steps
         info = BatchInfo(
             idx=idx,
             dt_s=dt,

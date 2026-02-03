@@ -46,6 +46,9 @@ tf:
     selector_run_length: 1
     # `choose_from_datasets` tends to be more predictable than weighted sampling in some settings.
     strategy: choose
+    python_prefetch_queue_size: 2
+    python_prefetch_min_ready_datasets: 1
+    python_prefetch_wait_timeout_s: 600
     # Avoid spawning N_datasets * M_threads private pools (can degrade CPU throughput).
     per_dataset_private_threadpool_size: 0
     # IMPORTANT: scale per-dataset parallelism down as dataset count grows

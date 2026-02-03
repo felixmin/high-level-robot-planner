@@ -1041,7 +1041,7 @@ class OXEDataModule(pl.LightningDataModule):
         tf_sampling = tf_cfg["sampling"]
         tf_iter = tf_cfg["iterator"]
         tf_debug = tf_cfg["debug"]
-        tf_pair_frames = tf_cfg.get("pair_frames", {}) or {}
+        tf_pair_frames = tf_cfg["pair_frames"]
 
         final_stream_prefetch_buffer = int(tf_prefetch["final_stream_buffer"])
         per_dataset_stream_prefetch_buffer = int(tf_prefetch["per_dataset_stream_buffer"])
@@ -1053,26 +1053,32 @@ class OXEDataModule(pl.LightningDataModule):
         cache_first_train_batch = bool(tf_iter.get("cache_first_train_batch", False))
         debug_use_synthetic_data = bool(tf_debug["use_synthetic_data"])
         debug_synthetic_num_samples = int(tf_debug["synthetic_num_samples"])
-        pair_frames_mode = str(tf_pair_frames.get("mode", "endpoints"))
-        pair_frames_stride = int(tf_pair_frames.get("stride", 1))
-        pair_frames_n = int(tf_pair_frames.get("n", 2))
+        pair_frames_mode = str(tf_pair_frames["mode"])
+        pair_frames_stride = int(tf_pair_frames["stride"])
+        pair_frames_n = int(tf_pair_frames["n"])
 
         tfds_read_cycle_length = int(tf_read["cycle_length"])
         tfds_read_block_length = int(tf_read["block_length"])
         tfds_read_decode_parallelism = int(tf_read["decode_parallelism"])
         tfds_read_interleave_parallelism = int(tf_read["interleave_parallelism"])
-        tfds_source = str(tf_read.get("source", "gcs"))
-        tfds_local_root = tf_read.get("local_root")
+        tfds_read_skip_steps_decoding = bool(tf_read["skip_steps_decoding"])
+        tfds_source = str(tf_read["source"])
+        tfds_local_root = tf_read["local_root"]
 
         pipeline_episode_concurrency = int(tf_pipe["episode_concurrency"])
         pipeline_transform_parallelism = int(tf_pipe["transform_parallelism"])
         pipeline_interleave_parallelism = int(tf_pipe["interleave_parallelism"])
+        emit_encoded_pairs = bool(tf_pipe["emit_encoded_pairs"])
+        post_mix_decode_resize = bool(tf_pipe["post_mix_decode_resize"])
 
         mix_block_length = int(tf_mix["mix_block_length"])
         parallelism_mode = str(tf_mix["parallelism_mode"])
         mixing_strategy = str(tf_mix["strategy"])
         mix_selector_run_length = int(tf_mix["selector_run_length"])
         per_dataset_private_threadpool_size = int(tf_mix["per_dataset_private_threadpool_size"])
+        python_prefetch_queue_size = int(tf_mix["python_prefetch_queue_size"])
+        python_prefetch_min_ready_datasets = int(tf_mix["python_prefetch_min_ready_datasets"])
+        python_prefetch_wait_timeout_s = float(tf_mix["python_prefetch_wait_timeout_s"])
 
         if len(self.datasets) == 1:
             cfg = self.datasets[0]
@@ -1101,6 +1107,8 @@ class OXEDataModule(pl.LightningDataModule):
                 tfds_read_block_length=tfds_read_block_length,
                 tfds_read_decode_parallelism=tfds_read_decode_parallelism,
                 tfds_read_interleave_parallelism=tfds_read_interleave_parallelism,
+                tfds_read_skip_steps_decoding=tfds_read_skip_steps_decoding,
+                emit_encoded_pairs=emit_encoded_pairs,
                 pipeline_episode_concurrency=pipeline_episode_concurrency,
                 pipeline_transform_parallelism=pipeline_transform_parallelism,
                 pipeline_interleave_parallelism=pipeline_interleave_parallelism,
@@ -1135,6 +1143,8 @@ class OXEDataModule(pl.LightningDataModule):
                 tfds_read_block_length=tfds_read_block_length,
                 tfds_read_decode_parallelism=tfds_read_decode_parallelism,
                 tfds_read_interleave_parallelism=tfds_read_interleave_parallelism,
+                tfds_read_skip_steps_decoding=tfds_read_skip_steps_decoding,
+                emit_encoded_pairs=post_mix_decode_resize,
                 pipeline_episode_concurrency=pipeline_episode_concurrency,
                 pipeline_transform_parallelism=pipeline_transform_parallelism,
                 pipeline_interleave_parallelism=pipeline_interleave_parallelism,
@@ -1170,11 +1180,17 @@ class OXEDataModule(pl.LightningDataModule):
                 parallelism_mode=parallelism_mode,
                 per_dataset_stream_prefetch_buffer=per_dataset_stream_prefetch_buffer,
                 mixing_strategy=mixing_strategy,
+                python_prefetch_queue_size=python_prefetch_queue_size,
+                python_prefetch_min_ready_datasets=python_prefetch_min_ready_datasets,
+                python_prefetch_wait_timeout_s=python_prefetch_wait_timeout_s,
                 per_dataset_private_threadpool_size=per_dataset_private_threadpool_size,
                 tfds_read_cycle_length=tfds_read_cycle_length,
                 tfds_read_block_length=tfds_read_block_length,
                 tfds_read_decode_parallelism=tfds_read_decode_parallelism,
                 tfds_read_interleave_parallelism=tfds_read_interleave_parallelism,
+                tfds_read_skip_steps_decoding=tfds_read_skip_steps_decoding,
+                emit_encoded_pairs=emit_encoded_pairs,
+                post_mix_decode_resize=post_mix_decode_resize,
                 pair_frames_mode=pair_frames_mode,
                 pair_frames_stride=pair_frames_stride,
                 pair_frames_n=pair_frames_n,
@@ -1205,11 +1221,17 @@ class OXEDataModule(pl.LightningDataModule):
                 parallelism_mode=parallelism_mode,
                 per_dataset_stream_prefetch_buffer=per_dataset_stream_prefetch_buffer,
                 mixing_strategy=mixing_strategy,
+                python_prefetch_queue_size=python_prefetch_queue_size,
+                python_prefetch_min_ready_datasets=python_prefetch_min_ready_datasets,
+                python_prefetch_wait_timeout_s=python_prefetch_wait_timeout_s,
                 per_dataset_private_threadpool_size=per_dataset_private_threadpool_size,
                 tfds_read_cycle_length=tfds_read_cycle_length,
                 tfds_read_block_length=tfds_read_block_length,
                 tfds_read_decode_parallelism=tfds_read_decode_parallelism,
                 tfds_read_interleave_parallelism=tfds_read_interleave_parallelism,
+                tfds_read_skip_steps_decoding=tfds_read_skip_steps_decoding,
+                emit_encoded_pairs=emit_encoded_pairs,
+                post_mix_decode_resize=post_mix_decode_resize,
                 pair_frames_mode=pair_frames_mode,
                 pair_frames_stride=pair_frames_stride,
                 pair_frames_n=pair_frames_n,

@@ -1,0 +1,48 @@
+# @package data.adapter
+
+# High-throughput local training from GCS with many OXE datasets.
+#
+# Key ideas:
+# - Use TFDS `SkipDecoding()` so images are kept as encoded `tf.string` until needed.
+# - Use Python-level background prefetch (one worker per dataset) + non-blocking
+#   mixing to avoid "dataset switch" stalls when some datasets are temporarily cold.
+# - Decode+resize happens inside the python mixer (after mixing) when elements are `tf.string`.
+
+defaults:
+  - oxe_tf_low_ram
+  - _self_
+
+tf:
+  tfds_read:
+    source: gcs
+    skip_steps_decoding: true
+    cycle_length: 8
+    decode_parallelism: 4
+    interleave_parallelism: 4
+
+  pipeline:
+    emit_encoded_pairs: true
+    post_mix_decode_resize: false
+    episode_concurrency: 4
+    transform_parallelism: 8
+    interleave_parallelism: 4
+
+  train:
+    episode_queue_shuffle_buffer: 0
+    intra_episode_sample_shuffle_buffer: 0
+    global_stream_shuffle_buffer: 0
+
+  prefetch:
+    per_dataset_stream_buffer: 0
+    final_stream_buffer: 0
+
+  mixing:
+    strategy: python
+    mix_block_length: 8
+    selector_run_length: 1
+    parallelism_mode: sqrt
+    python_prefetch_queue_size: 2
+    python_prefetch_min_ready_datasets: 8
+    python_prefetch_wait_timeout_s: 1200
+    per_dataset_private_threadpool_size: 0
+

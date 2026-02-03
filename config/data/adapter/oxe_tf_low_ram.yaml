@@ -50,6 +50,10 @@ tf:
     # - auto: prefer local if present, else fall back to gcs
     source: auto           # gcs|local|auto
     local_root: /dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment
+    # If true, TFDS `steps` are returned as time-major tensors with encoded images
+    # (`tf.string`) instead of a Dataset of decoded steps. Used for Octo-like
+    # mix-before-decode experiments.
+    skip_steps_decoding: false
     cycle_length: 1
     block_length: 1
     decode_parallelism: 1           # -1 = tf.data.AUTOTUNE
@@ -60,6 +64,11 @@ tf:
     episode_concurrency: 1
     transform_parallelism: 1
     interleave_parallelism: 1
+    emit_encoded_pairs: false
+    # If true, and if `tfds_read.skip_steps_decoding=true`, decode+resize happens
+    # after dataset mixing (in MultiOXEFramePairDataset) instead of inside each
+    # per-dataset pipeline.
+    post_mix_decode_resize: false
 
   # Multi-dataset mixing behaviour.
   mixing:
@@ -67,4 +76,7 @@ tf:
     selector_run_length: 1           # repeat dataset choice N batches (reduces switch stalls)
     parallelism_mode: full           # divide|sqrt|full
     strategy: sample                 # sample|choose|python
+    python_prefetch_queue_size: 2
+    python_prefetch_min_ready_datasets: 1
+    python_prefetch_wait_timeout_s: 600
     per_dataset_private_threadpool_size: 16

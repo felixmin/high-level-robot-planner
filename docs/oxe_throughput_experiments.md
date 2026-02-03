@@ -145,13 +145,125 @@ Start from:
 - `mixing.selector_run_length=32` (increase to 64 if you want more throughput and can tolerate longer per-dataset streaks)
 - `prefetch.per_dataset_stream_buffer=0`
 
+### Alternative (preferred for composite batches): python “keep-hot” mixing
+Use:
+- `data=laq_oxe_cluster_mirror_large_gcs_python_hot` (adapter: `config/data/adapter/oxe_tf_gcs_python_hot.yaml`)
+
+Start from:
+- `data.adapter.tf.mixing.strategy=python`
+- `data.adapter.tf.mixing.mix_block_length=8` (works for `batch_size=64` and `batch_size=128`; for bs=128, `mix_block_length=16` was slightly better in our short runs)
+- `data.adapter.tf.mixing.python_prefetch_min_ready_datasets=8`
+
+This produces **composite batches** (multiple datasets within a batch) while staying fast in steady-state.
+
+## Why “just shuffle more” is hard (decoded images are too big)
+Attempting to use a large post-mix shuffle buffer on the *decoded* (uint8) stream is prohibitively expensive
+and can OOM on local training-from-GCS:
+
+- Run dir: `runs/2026-02-03_11-18-34_laq_hf_local`
+- Override: `data.adapter.tf.train.global_stream_shuffle_buffer=2048`
+- Observation: TF spent minutes filling the shuffle buffer and the process was killed while still far below 2048.
+
+This motivates an Octo-like ordering: shuffle/mix while samples are still lightweight (encoded bytes), and only
+decode/resize after mixing.
+
+## Octo-like experiments: mix before decode/resize (SkipDecoding on RLDS `steps`)
+Implementation (HLRP):
+- TFDS read option: `data.adapter.tf.tfds_read.skip_steps_decoding=true`
+- Post-mix decode: `data.adapter.tf.pipeline.post_mix_decode_resize=true`
+- Adapter preset: `config/data/adapter/oxe_tf_gcs_octo_like.yaml`
+- Data presets:
+  - Smoke: `data=laq_oxe_cluster_mirror_extended_smoke_gcs_octo_like`
+  - Full:  `data=laq_oxe_cluster_mirror_large_gcs_octo_like`
+
+Key idea: TFDS returns images as `tf.string` (encoded bytes) when skipping `steps` decoding. We then:
+1) form frame-pairs using the encoded strings (cheap),
+2) mix/shuffle the encoded pairs (much cheaper than shuffling uint8 images),
+3) decode+resize after mixing.
+
+### E8 (smoke): 7 datasets, encoded shuffle buffer 1024, decode/resize after mix
+- Run dir: `runs/2026-02-03_11-31-55_laq_hf_local`
+- Data: `data=laq_oxe_cluster_mirror_extended_smoke_gcs_octo_like`
+- Note: first warmup batch took ~65s due to initial TFDS init + filling `global_stream_shuffle_buffer=1024`.
+  After the shuffle buffer filled, `next()` was near-instant for the short measured window (prefetch stayed full).
+
+TODO: run longer horizons + torch-mode to confirm steady-state end-to-end throughput (and whether p99 stalls
+return once prefetch drains).
+
+### E9 (full): 32 datasets, diagnosing “first batch” latency (per-dataset cold starts)
+Observation: for the 32-dataset mixture, the *first* element from many datasets is **multi-second** even when
+we disable global shuffle and keep parallelism low. This explains why per-sample mixing (`mix_block_length=1`)
+can take minutes to produce the first batch: a batch of 64 samples will touch ~28 distinct datasets in expectation.
+
+Method: prime each dataset once (fetch 1 element from each child pipeline; encoded pairs, no post-mix decode)
+- Run dir: `runs/2026-02-03_13-56-40_laq_hf_local`
+- Command shape:
+  - `benchmark.warmup_steps=0 benchmark.steps=0 benchmark.prime_each_dataset_samples=1`
+  - `data=laq_oxe_cluster_mirror_large_gcs_octo_like`
+  - `data.adapter.tf.train.global_stream_shuffle_buffer=0`
+  - `data.adapter.tf.tfds_read.cycle_length=1` (reduce per-dataset parallel reads)
+- Results (sample):
+  - `language_table`: ~9s
+  - `stanford_robocook_converted_externally_to_rlds`: ~20s
+  - `spoc`: ~12s
+  - worst observed in this run: `toto` ~36s, `fmb` ~22s
+
+Conclusion: we need either (a) **parallel priming / per-dataset background prefetch** to overlap these cold
+starts, and/or (b) a mixing scheme that does not require touching ~O(#datasets) distinct datasets per batch
+to make progress.
+
+### E10 (full): Python “keep-hot” mixer v0 (blocking on empty queues) is catastrophically slow
+This was the first integrated Python mixer implementation (`mixing.strategy=python`) which kept per-dataset
+background threads and a small per-dataset queue of *blocks* (`mix_block_length`).
+
+Run dir: `runs/2026-02-03_14-37-20_laq_hf_local`
+- Settings (shape):
+  - `data=laq_oxe_cluster_mirror_large_gcs_octo_like`
+  - `mixing.strategy=python`, `mix_block_length=8`, `batch_size=64`
+  - `pipeline.emit_encoded_pairs=true`, `pipeline.post_mix_decode_resize=false` (decode happens in python mixer)
+  - `python_prefetch_min_ready_datasets=8`, `python_prefetch_queue_size=2`
+- Result (measured only; warmup excluded): **mean 11.545s**, p50 0.236s, p99 55.016s ⇒ **0.087 batches/s** (5.5 samples/s)
+
+Diagnosis: the consumer sampled datasets by weight and did a blocking `Queue.get()`. When it selected a dataset
+whose queue was temporarily empty, it stalled for tens of seconds waiting for that dataset to produce its next block.
+
+### E11 (full): Python “keep-hot” mixer v1 (non-blocking selection) eliminates long-tail stalls
+Fix: when selecting the next dataset block, **do not block on an empty queue**. Instead, resample until a non-empty
+queue is found (fallback to a ready-subset selection if needed). This keeps mixing “as weighted as possible” while
+remaining non-blocking in the common case.
+
+#### E11a: `batch_size=64`, `mix_block_length=8` (composite batches, fast)
+Run dir: `runs/2026-02-03_14-52-26_laq_hf_local`
+- Result (measured): **mean 0.0916s**, p99 0.1156s ⇒ **10.914 batches/s** ⇒ **698.5 samples/s**
+- Mixing check: batches contain multiple datasets (example counts in a single batch):
+  - `{'mimic_play': 24, 'robo_set': 8, 'robonet': 8, 'bc_z': 8, ...}`
+- Note: warmup batch time is dominated by initial queue-fill to `min_ready=8` (~50s). After that, throughput is stable.
+
+#### E11b: `batch_size=128`, `mix_block_length=16` (composite batches, meets target)
+Run dir: `runs/2026-02-03_14-54-15_laq_hf_local`
+- Result (measured): **mean 0.3443s**, p99 0.4786s ⇒ **2.904 batches/s** ⇒ **371.7 samples/s**
+- This comfortably exceeds the original target (≥2 batches/s at bs=128) while still producing composite batches.
+
+### E12: `samples_per_episode=1` is still very slow (episode-level I/O dominates)
+We historically saw this mode as slow; the python “keep-hot” mixer does **not** fix it because the bottleneck is
+within each dataset pipeline: each output sample requires advancing to a new episode (and thus reading/parsing a new
+episode record), so per-episode overhead and wasted episode payload dominates.
+
+Settings (both runs): `data=laq_oxe_cluster_mirror_large_gcs_python_hot`, `batch_size=64`, `mix_block_length=8`
+- Baseline (`samples_per_episode=0`, yield all pairs per episode):
+  - Run dir: `runs/2026-02-03_15-29-10_laq_hf_local`
+  - Result: mean **0.1221s**, p99 **0.2070s** ⇒ **8.192 batches/s** ⇒ **524.3 samples/s**
+- One-sample-per-episode (`samples_per_episode=1`):
+  - Run dir: `runs/2026-02-03_15-26-11_laq_hf_local`
+  - Result: mean **3.4303s**, p99 **7.1142s** ⇒ **0.292 batches/s** ⇒ **18.7 samples/s**
+
 ## Next experiments (planned)
-1) Validate end-to-end (PyTorch) throughput in `detailed_mode=torch` (TF→Torch conversion included).
-2) Reduce the remaining long-tail stalls without relying only on post-mix buffering:
-   - sweep `mixing.selector_run_length` for the chosen dataset count (it dominates switch frequency),
-   - only consider `per_dataset_stream_buffer>0` for *small* dataset counts; it scales poorly to 30+ datasets,
-   - if needed, add targeted timing around TFDS read/decode stages (the TF build here did not expose
-     `tf.data.experimental.StatsAggregator`, so “per-edge” stats are not currently available).
+We hit the throughput target with composite batches; remaining work is mostly ergonomics + scaling:
+1) Turn the “python keep-hot” approach into a clean training preset (Hydra config), so LAQ training can use it directly.
+2) Reduce startup cost (queue-fill / cold-start overlap) without hurting steady-state:
+   - tune `python_prefetch_min_ready_datasets` (mixing quality vs. startup latency),
+   - tune `mix_block_length` (more datasets per batch vs. prefetch/block assembly cost).
+3) Stress-test with >32 datasets (expected future: 30+ → 50+), and monitor memory (one TF pipeline per dataset worker).
 
 ## Notes on discarded ideas
 - A “startup warm blocks per dataset” approach was attempted (to force each dataset to produce a few blocks

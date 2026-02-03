@@ -346,11 +346,18 @@ class TestWeightingIntegration:
             parallelism_mode="divide",
             per_dataset_stream_prefetch_buffer=0,
             mixing_strategy="sample",
+            python_prefetch_queue_size=2,
+            python_prefetch_min_ready_datasets=1,
+            python_prefetch_wait_timeout_s=600,
             per_dataset_private_threadpool_size=0,
             tfds_read_cycle_length=1,
             tfds_read_block_length=1,
             tfds_read_decode_parallelism=-1,
             tfds_read_interleave_parallelism=-1,
+            mix_selector_run_length=1,
+            tfds_read_skip_steps_decoding=False,
+            emit_encoded_pairs=False,
+            post_mix_decode_resize=False,
         )
         ds._init_datasets()
 

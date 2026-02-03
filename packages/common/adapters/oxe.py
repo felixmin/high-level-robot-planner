@@ -609,11 +609,13 @@ class OXEFramePairDataset(IterableDataset):
         pipeline_transform_parallelism: int,
         pipeline_interleave_parallelism: int,
         private_threadpool_size: int,  # 0 = use shared global threadpool
+        tfds_read_skip_steps_decoding: bool,
         pair_frames_mode: str = "endpoints",
         pair_frames_stride: int = 1,
         pair_frames_n: int = 2,
         tfds_source: str = "gcs",
         tfds_local_root: Optional[str] = None,
+        emit_encoded_pairs: bool = False,
     ):
         super().__init__()
 
@@ -646,6 +648,8 @@ class OXEFramePairDataset(IterableDataset):
         self.tfds_read_block_length = tfds_read_block_length
         self.tfds_read_decode_parallelism = tfds_read_decode_parallelism
         self.tfds_read_interleave_parallelism = tfds_read_interleave_parallelism
+        self.tfds_read_skip_steps_decoding = bool(tfds_read_skip_steps_decoding)
+        self.emit_encoded_pairs = bool(emit_encoded_pairs)
         
         self.pipeline_episode_concurrency = pipeline_episode_concurrency
         self.pipeline_transform_parallelism = pipeline_transform_parallelism
@@ -919,7 +923,14 @@ class OXEFramePairDataset(IterableDataset):
             assert_cardinality=False,   # this ensures that the read length matches the metadata
                                         # len but if some files may be missing turn this to False
         )
-        ds = self._builder.as_dataset(split=self.split, read_config=read_config)
+        if self.tfds_read_skip_steps_decoding:
+            ds = self._builder.as_dataset(
+                split=self.split,
+                read_config=read_config,
+                decoders={"steps": tfds.decode.SkipDecoding()},
+            )
+        else:
+            ds = self._builder.as_dataset(split=self.split, read_config=read_config)
 
         # Shard episodes across DataLoader workers to avoid duplicates when num_workers > 0.
         worker_info = torch.utils.data.get_worker_info()
@@ -1055,10 +1066,171 @@ class OXEFramePairDataset(IterableDataset):
             )
 
             if not return_metadata:
-                frames_ds = steps_ds.map(
-                    lambda s: _get_keypath(s["observation"], image_key),
-                    num_parallel_calls=pipeline_transform_parallelism,
-                )
+                if self.tfds_read_skip_steps_decoding:
+                    # With TFDS `SkipDecoding()` on RLDS `steps`, TFDS returns time-major
+                    # tensors (often including RaggedTensors for non-image fields). For the
+                    # image-only path we slice only the image stream, avoiding any reliance
+                    # on the full step dict structure.
+                    frames_seq = _get_keypath(episode["steps"]["observation"], image_key)
+                    frames_ds = tf.data.Dataset.from_tensor_slices(frames_seq)
+
+                    if self.emit_encoded_pairs:
+                        # Prefer encoded bytes for Octo-like "mix-before-decode".
+                        #
+                        # Most OXE datasets yield `tf.string` (encoded images) under
+                        # TFDS SkipDecoding, but a few yield already-decoded `tf.uint8`.
+                        # To keep the mixed stream type consistent, encode uint8 frames
+                        # to jpeg bytes here.
+                        if frames_seq.dtype == tf.uint8:
+
+                            def _encode_uint8_frame(frame: tf.Tensor) -> tf.Tensor:
+                                frame = tf.convert_to_tensor(frame, dtype=tf.uint8)
+                                rank = tf.rank(frame)
+                                frame = tf.cond(
+                                    tf.equal(rank, 2),
+                                    lambda: tf.expand_dims(frame, axis=-1),
+                                    lambda: frame,
+                                )
+                                channels = tf.shape(frame)[-1]
+                                frame = tf.cond(
+                                    tf.greater(channels, 3),
+                                    lambda: frame[..., :3],
+                                    lambda: frame,
+                                )
+                                return tf.io.encode_jpeg(frame, quality=95)
+
+                            frames_ds = frames_ds.map(
+                                _encode_uint8_frame,
+                                num_parallel_calls=pipeline_transform_parallelism,
+                            )
+                        elif frames_seq.dtype != tf.string:
+                            raise TypeError(
+                                "emit_encoded_pairs requires image streams of dtype tf.string or tf.uint8 under "
+                                f"SkipDecoding(), but got dtype={frames_seq.dtype.name} for dataset={dataset_name}."
+                            )
+
+                        dummy_pair = tf.fill(
+                            [pair_num_frames], tf.constant("", tf.string)
+                        )
+
+                        # For the common endpoints case, avoid `Dataset.scan()` entirely.
+                        # This tends to compile faster (less graph complexity) and reduces
+                        # the "first sample" overhead when scaling to many datasets.
+                        if pair_frames_mode == "endpoints" and pair_num_frames == 2:
+                            pairs_ds = tf.data.Dataset.zip(
+                                (frames_ds, frames_ds.skip(offset))
+                            ).map(
+                                lambda a, b: tf.ensure_shape(tf.stack([a, b], axis=0), [2]),
+                                num_parallel_calls=pipeline_transform_parallelism,
+                            )
+                            if samples_per_episode > 0:
+                                if per_episode_sample_shuffle > 0:
+                                    pairs_ds = pairs_ds.shuffle(
+                                        per_episode_sample_shuffle, seed=self._tf_seed
+                                    )
+                                pairs_ds = pairs_ds.take(samples_per_episode)
+                            return pairs_ds
+
+                        # Fast path: yield a single sample per episode.
+                        if samples_per_episode == 1 and per_episode_sample_shuffle <= 0:
+                            frames_prefix = frames_ds.take(offset + 1).batch(
+                                offset + 1, drop_remainder=True
+                            )
+
+                            def _make_one_pair(frames):
+                                selected = tf.gather(frames, pair_frame_indices_tf, axis=0)
+                                return tf.ensure_shape(selected, [pair_num_frames])
+
+                            return frames_prefix.map(_make_one_pair, num_parallel_calls=1)
+
+                        def _init_state():
+                            frames_ta = tf.TensorArray(
+                                tf.string,
+                                size=offset,
+                                element_shape=(),
+                                clear_after_read=False,
+                            )
+                            step_idx = tf.constant(0, dtype=tf.int32)
+                            return frames_ta, step_idx
+
+                        if pair_frames_mode == "endpoints":
+
+                            def _scan_fn(state, frame):
+                                frames_ta, step_idx = state
+                                pos = tf.math.mod(step_idx, offset_tf)
+                                ready = tf.greater_equal(step_idx, offset_tf)
+
+                                def _emit():
+                                    start_frame = frames_ta.read(pos)
+                                    pair = tf.stack([start_frame, frame], axis=0)
+                                    return tf.ensure_shape(pair, [2])
+
+                                out_pair = tf.cond(ready, _emit, lambda: dummy_pair)
+                                frames_ta = frames_ta.write(pos, frame)
+                                return (frames_ta, step_idx + 1), out_pair
+
+                        else:
+
+                            def _scan_fn(state, frame):
+                                frames_ta, step_idx = state
+                                pos = tf.math.mod(step_idx, offset_tf)
+                                ready = tf.greater_equal(step_idx, offset_tf)
+
+                                def _emit():
+                                    ta_positions = tf.math.mod(
+                                        pos + pair_frame_prefix_indices_tf, offset_tf
+                                    )
+                                    prefix_frames = frames_ta.gather(ta_positions)
+                                    prefix_frames = tf.ensure_shape(
+                                        prefix_frames, [pair_num_frames - 1]
+                                    )
+                                    selected = tf.concat(
+                                        [prefix_frames, tf.expand_dims(frame, axis=0)], axis=0
+                                    )
+                                    return tf.ensure_shape(selected, [pair_num_frames])
+
+                                out_pair = tf.cond(ready, _emit, lambda: dummy_pair)
+                                frames_ta = frames_ta.write(pos, frame)
+                                return (frames_ta, step_idx + 1), out_pair
+
+                        pairs_ds = frames_ds.scan(_init_state(), _scan_fn).skip(offset)
+                        if samples_per_episode > 0:
+                            if per_episode_sample_shuffle > 0:
+                                pairs_ds = pairs_ds.shuffle(
+                                    per_episode_sample_shuffle, seed=self._tf_seed
+                                )
+                            pairs_ds = pairs_ds.take(samples_per_episode)
+                        return pairs_ds
+
+                    # Default skip-decoding behavior: decode bytes (if needed) to uint8
+                    # frames *inside the per-dataset pipeline* to ensure all datasets
+                    # produce a consistent dtype for mixing.
+                    if frames_seq.dtype == tf.string:
+
+                        def _decode_bytes(frame: tf.Tensor) -> tf.Tensor:
+                            frame = tf.convert_to_tensor(frame, dtype=tf.string)
+                            img = tf.io.decode_image(
+                                frame, channels=3, expand_animations=False, dtype=tf.uint8
+                            )
+                            return tf.ensure_shape(img, [None, None, 3])
+
+                        frames_ds = frames_ds.map(
+                            _decode_bytes, num_parallel_calls=pipeline_transform_parallelism
+                        )
+                    else:
+
+                        def _as_uint8(frame: tf.Tensor) -> tf.Tensor:
+                            frame = tf.cast(frame, tf.uint8)
+                            return tf.ensure_shape(frame, [None, None, 3])
+
+                        frames_ds = frames_ds.map(
+                            _as_uint8, num_parallel_calls=pipeline_transform_parallelism
+                        )
+                else:
+                    frames_ds = steps_ds.map(
+                        lambda s: _get_keypath(s["observation"], image_key),
+                        num_parallel_calls=pipeline_transform_parallelism,
+                    )
 
                 # Fast path: if we only take a single sample per episode and do not
                 # need per-episode sampling shuffle, avoid the scan + batch(8)/unbatch
@@ -1181,8 +1353,12 @@ class OXEFramePairDataset(IterableDataset):
                     a = _get_keypath(step["action"], action_key)
                 else:
                     a = step["action"]
-                a = tf.cast(tf.reshape(a, [-1])[:action_dim], tf.float32)
-                return tf.ensure_shape(a, [action_dim])
+                # Avoid Python slicing on tensors (`[:action_dim]`) inside tf.data graphs:
+                # autograph can lift `action_dim` into a Tensor, which then breaks slicing.
+                flat = tf.reshape(a, [-1])
+                flat = tf.slice(flat, [0], [action_dim])
+                flat = tf.cast(flat, tf.float32)
+                return tf.ensure_shape(flat, [action_dim])
 
             allow_missing_state = bool(getattr(self.config, "allow_missing_state", False))
 
@@ -1196,8 +1372,10 @@ class OXEFramePairDataset(IterableDataset):
                         f"Config error: state_key is None for dataset={dataset_name}"
                     )
                 s = _get_keypath(step["observation"], state_key)
-                s = tf.cast(tf.reshape(s, [-1])[:state_dim], tf.float32)
-                return tf.ensure_shape(s, [state_dim])
+                flat = tf.reshape(s, [-1])
+                flat = tf.slice(flat, [0], [state_dim])
+                flat = tf.cast(flat, tf.float32)
+                return tf.ensure_shape(flat, [state_dim])
 
             # Single-pass episode processing:
             # Use a ring buffer via `Dataset.scan()` to emit endpoint pairs [t, t+offset]
@@ -1581,6 +1759,7 @@ class OXEFramePairDataset(IterableDataset):
         options = tf.data.Options()
         options.experimental_deterministic = False
         options.experimental_slack = True
+        options.experimental_warm_start = True
         if self.private_threadpool_size > 0:
             options.threading.private_threadpool_size = self.private_threadpool_size
 
@@ -1856,15 +2035,21 @@ class MultiOXEFramePairDataset(IterableDataset):
         pipeline_transform_parallelism: int,
         pipeline_interleave_parallelism: int,
         mix_block_length: int,
-        mix_selector_run_length: int,
         parallelism_mode: str,
         per_dataset_stream_prefetch_buffer: int,
         mixing_strategy: str,
+        python_prefetch_queue_size: int,
+        python_prefetch_min_ready_datasets: int,
+        python_prefetch_wait_timeout_s: float,
         per_dataset_private_threadpool_size: int,  # 0 = use shared global threadpool
         tfds_read_cycle_length: int,
         tfds_read_block_length: int,
         tfds_read_decode_parallelism: int,
         tfds_read_interleave_parallelism: int,
+        mix_selector_run_length: int,
+        tfds_read_skip_steps_decoding: bool,
+        emit_encoded_pairs: bool,
+        post_mix_decode_resize: bool,
         pair_frames_mode: str = "endpoints",
         pair_frames_stride: int = 1,
         pair_frames_n: int = 2,
@@ -1913,17 +2098,34 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.mixing_strategy = str(mixing_strategy)
         if self.mixing_strategy not in {"sample", "choose", "python"}:
             raise ValueError("mixing_strategy must be one of: 'sample', 'choose', 'python'")
+        self.python_prefetch_queue_size = int(python_prefetch_queue_size)
+        self.python_prefetch_min_ready_datasets = int(python_prefetch_min_ready_datasets)
+        self.python_prefetch_wait_timeout_s = float(python_prefetch_wait_timeout_s)
         if self.mixing_strategy == "python":
-            raise ValueError(
-                "mixing_strategy='python' is not supported with batched OXE output. "
-                "Use `data.adapter.tf.mixing.strategy=sample|choose`."
-            )
+            if self.mix_block_length <= 0:
+                raise ValueError("mix_block_length must be >= 1 for python mixing")
+            if int(self.output_batch_size) % int(self.mix_block_length) != 0:
+                raise ValueError(
+                    "python mixing requires output_batch_size to be divisible by mix_block_length "
+                    f"(got output_batch_size={self.output_batch_size}, mix_block_length={self.mix_block_length})"
+                )
+            if self.python_prefetch_queue_size <= 0:
+                raise ValueError("python_prefetch_queue_size must be >= 1 when mixing_strategy='python'")
+            if self.python_prefetch_min_ready_datasets <= 0:
+                raise ValueError(
+                    "python_prefetch_min_ready_datasets must be >= 1 when mixing_strategy='python'"
+                )
+            if self.python_prefetch_wait_timeout_s <= 0:
+                raise ValueError("python_prefetch_wait_timeout_s must be > 0 when mixing_strategy='python'")
         self.per_dataset_private_threadpool_size = int(per_dataset_private_threadpool_size)
         
         self.tfds_read_cycle_length = tfds_read_cycle_length
         self.tfds_read_block_length = tfds_read_block_length
         self.tfds_read_decode_parallelism = tfds_read_decode_parallelism
         self.tfds_read_interleave_parallelism = tfds_read_interleave_parallelism
+        self.tfds_read_skip_steps_decoding = bool(tfds_read_skip_steps_decoding)
+        self.emit_encoded_pairs = bool(emit_encoded_pairs)
+        self.post_mix_decode_resize = bool(post_mix_decode_resize)
 
         self.tfds_source = str(tfds_source)
         self.tfds_local_root = tfds_local_root
@@ -2029,6 +2231,11 @@ class MultiOXEFramePairDataset(IterableDataset):
         mix_block_length = int(self.mix_block_length)
         use_block_prefetch = mix_block_length > 1 and len(kept) > 1
 
+        # Python mixing only supports lightweight metadata currently (dataset_name only),
+        # so we disable per-dataset metadata emission and re-attach minimal metadata in
+        # the python mixer when `return_metadata=true`.
+        per_dataset_return_metadata = bool(self.return_metadata and self.mixing_strategy != "python")
+
         prefetch_buffer_per_ds_samples = (
             0 if use_block_prefetch else int(self.per_dataset_stream_prefetch_buffer)
         )
@@ -2038,7 +2245,7 @@ class MultiOXEFramePairDataset(IterableDataset):
 
         output_action_dim = None
         output_state_dim = None
-        if self.return_metadata:
+        if per_dataset_return_metadata:
             max_action_dim = 0
             max_state_dim = 0
             for cfg, _w in kept:
@@ -2063,7 +2270,7 @@ class MultiOXEFramePairDataset(IterableDataset):
                 split=split,
                 offset=int(cfg["pair_offset_steps"]),
                 final_stream_prefetch_buffer=prefetch_buffer_per_ds_samples,
-                return_metadata=self.return_metadata,
+                return_metadata=per_dataset_return_metadata,
                 is_train=bool(self.is_train),
                 output_batch_size=None,  # batch after mixing (one place)
                 output_action_dim=output_action_dim,
@@ -2082,6 +2289,8 @@ class MultiOXEFramePairDataset(IterableDataset):
                 tfds_read_block_length=self.tfds_read_block_length,
                 tfds_read_decode_parallelism=self.tfds_read_decode_parallelism,
                 tfds_read_interleave_parallelism=self.tfds_read_interleave_parallelism,
+                tfds_read_skip_steps_decoding=self.tfds_read_skip_steps_decoding,
+                emit_encoded_pairs=self.emit_encoded_pairs,
                 pipeline_episode_concurrency=pipeline_episode_concurrency,
                 pipeline_transform_parallelism=pipeline_transform_parallelism,
                 pipeline_interleave_parallelism=pipeline_interleave_parallelism,
@@ -2196,6 +2405,7 @@ class MultiOXEFramePairDataset(IterableDataset):
         options = tf.data.Options()
         options.experimental_deterministic = False
         options.experimental_slack = True
+        options.experimental_warm_start = True
 
         mixed = mixed.with_options(options)
 
@@ -2208,8 +2418,56 @@ class MultiOXEFramePairDataset(IterableDataset):
                 else:
                     mixed = mixed.shuffle(self.global_stream_shuffle_buffer, seed=seed)
 
+        if self.post_mix_decode_resize:
+            if self.return_metadata:
+                raise ValueError(
+                    "post_mix_decode_resize is only supported with return_metadata=false for now."
+                )
+            if not self.tfds_read_skip_steps_decoding:
+                raise ValueError(
+                    "post_mix_decode_resize requires tfds_read_skip_steps_decoding=true."
+                )
+            if not self.emit_encoded_pairs:
+                raise ValueError(
+                    "post_mix_decode_resize requires pipeline.emit_encoded_pairs=true."
+                )
+
         if not direct_batch_mixing:
             mixed = mixed.batch(self.output_batch_size, drop_remainder=bool(self.is_train))
+
+        if self.post_mix_decode_resize:
+            image_size = int(self.image_size)
+
+            def _decode_resize_batch(pairs: tf.Tensor) -> tf.Tensor:
+                pairs = tf.convert_to_tensor(pairs, dtype=tf.string)
+                shape_prefix = tf.shape(pairs)  # rank-agnostic ([], [F], [B,F], ...)
+                flat = tf.reshape(pairs, [-1])
+
+                def _decode_one(s: tf.Tensor) -> tf.Tensor:
+                    s = tf.convert_to_tensor(s, dtype=tf.string)
+
+                    def _pad():
+                        return tf.zeros([image_size, image_size, 3], dtype=tf.uint8)
+
+                    def _decode():
+                        img = tf.io.decode_image(
+                            s, expand_animations=False, dtype=tf.uint8
+                        )
+                        img = tf.image.resize(img, [image_size, image_size])
+                        img = tf.cast(img, tf.uint8)
+                        return tf.ensure_shape(img, [image_size, image_size, 3])
+
+                    return tf.cond(tf.equal(tf.strings.length(s), 0), _pad, _decode)
+
+                flat_imgs = tf.map_fn(_decode_one, flat, fn_output_signature=tf.uint8)
+                out_shape = tf.concat(
+                    [shape_prefix, tf.constant([image_size, image_size, 3], dtype=tf.int32)],
+                    axis=0,
+                )
+                imgs = tf.reshape(flat_imgs, out_shape)
+                return imgs
+
+            mixed = mixed.map(_decode_resize_batch, num_parallel_calls=tf.data.AUTOTUNE)
 
         prefetch_buffer = int(self.final_stream_prefetch_buffer)
         if prefetch_buffer == -1:
@@ -2426,7 +2684,218 @@ class MultiOXEFramePairDataset(IterableDataset):
                     ).permute(3, 0, 1, 2)
                 except Exception:
                     pair_np = item.numpy()
-                    yield torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+                yield torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+
+    def _iter_python_prefetch_blocks(self, tf):
+        """
+        Python-level mixing with background per-dataset prefetch.
+
+        This keeps a small queue of *blocks* (size = `mix_block_length`) ready per dataset,
+        so that per-sample/per-block dataset switching does not block on cold GCS reads.
+        """
+
+        import time as _time
+        from queue import Empty, Queue
+        from threading import Event, Thread
+
+        self._init_datasets()
+
+        if self._datasets is None or self._weights is None:
+            raise RuntimeError("Datasets not initialized")
+
+        n = len(self._datasets)
+        if n <= 0:
+            raise RuntimeError("No datasets to sample from")
+
+        block_size = int(self.mix_block_length)
+        batch_size = int(self.output_batch_size)
+        blocks_per_batch = batch_size // block_size
+
+        queue_size = int(self.python_prefetch_queue_size)
+        min_ready = int(min(self.python_prefetch_min_ready_datasets, n))
+        timeout_s = float(self.python_prefetch_wait_timeout_s)
+
+        weights = np.asarray(self._weights, dtype=np.float64)
+        weights = weights / np.sum(weights)
+        rng = np.random.default_rng(int(self.seed) if self.seed is not None else None)
+
+        stop = Event()
+        first_error: list[BaseException] = []
+
+        queues: list[Queue] = [Queue(maxsize=queue_size) for _ in range(n)]
+        threads: list[Thread] = []
+
+        logger.info(
+            "python-prefetch mixing: starting %d workers (block_size=%d, queue_size=%d, min_ready=%d, timeout_s=%.1f)",
+            n,
+            block_size,
+            queue_size,
+            min_ready,
+            timeout_s,
+        )
+
+        def _worker(i: int) -> None:
+            try:
+                pipe = self._datasets[i]._get_or_create_pipeline()
+                pipe = pipe.batch(block_size, drop_remainder=True).prefetch(1)
+                it = iter(pipe)
+                while not stop.is_set():
+                    item = next(it)
+                    queues[i].put(item)
+            except BaseException as e:
+                first_error.append(e)
+                stop.set()
+
+        for i in range(n):
+            t = Thread(target=_worker, args=(i,), daemon=True)
+            t.start()
+            threads.append(t)
+
+        try:
+            start = _time.perf_counter()
+            last_log = start
+            while not stop.is_set():
+                ready = sum(1 for q in queues if q.qsize() > 0)
+                if ready >= min_ready:
+                    break
+                if (_time.perf_counter() - start) > timeout_s:
+                    raise TimeoutError(
+                        f"Timed out waiting for dataset queues to fill (ready={ready}/{n}, min_ready={min_ready})"
+                    )
+                now = _time.perf_counter()
+                if now - last_log >= 5.0:
+                    logger.info(
+                        "python-prefetch mixing: queue fill progress ready=%d/%d (elapsed=%.1fs)",
+                        ready,
+                        n,
+                        now - start,
+                    )
+                    last_log = now
+                _time.sleep(0.05)
+
+            logger.info(
+                "python-prefetch mixing: initial ready=%d/%d (elapsed=%.1fs)",
+                ready,
+                n,
+                _time.perf_counter() - start,
+            )
+
+            if stop.is_set() and first_error:
+                raise RuntimeError(f"Background prefetch failed: {first_error[0]!r}")
+
+            image_size = int(self.image_size)
+
+            def _get_block_nonblocking() -> tuple[int, Any]:
+                # Prefer non-blocking fetches from weighted random datasets.
+                # If a chosen dataset is temporarily empty, resample instead of stalling.
+                for _ in range(256):
+                    ds_idx = int(rng.choice(n, p=weights))
+                    try:
+                        return ds_idx, queues[ds_idx].get_nowait()
+                    except Empty:
+                        continue
+
+                # Fallback: if we're extremely unlucky or most queues are empty, pick
+                # from the currently ready subset.
+                wait_start = _time.perf_counter()
+                while not stop.is_set():
+                    ready = [i for i, q in enumerate(queues) if not q.empty()]
+                    if ready:
+                        sub_w = weights[ready]
+                        sub_w = sub_w / np.sum(sub_w)
+                        sub_i = int(rng.choice(len(ready), p=sub_w))
+                        ds_idx = int(ready[sub_i])
+                        try:
+                            return ds_idx, queues[ds_idx].get_nowait()
+                        except Empty:
+                            continue
+                    if (_time.perf_counter() - wait_start) > timeout_s:
+                        raise TimeoutError(
+                            f"Timed out waiting for any dataset queue to produce a block (n={n})"
+                        )
+                    _time.sleep(0.001)
+
+                raise RuntimeError("Background prefetch stopped unexpectedly")
+
+            @tf.autograph.experimental.do_not_convert
+            def _decode_one(s: Any) -> Any:
+                s = tf.convert_to_tensor(s, dtype=tf.string)
+
+                def _pad():
+                    return tf.zeros([image_size, image_size, 3], dtype=tf.uint8)
+
+                def _decode():
+                    img = tf.io.decode_image(s, expand_animations=False, dtype=tf.uint8)
+                    img = tf.image.resize(img, [image_size, image_size])
+                    img = tf.cast(img, tf.uint8)
+                    return tf.ensure_shape(img, [image_size, image_size, 3])
+
+                return tf.cond(tf.equal(tf.strings.length(s), 0), _pad, _decode)
+
+            def _decode_resize_pairs(pairs: Any) -> Any:
+                pairs = tf.convert_to_tensor(pairs, dtype=tf.string)
+                shape_prefix = tf.shape(pairs)
+                flat = tf.reshape(pairs, [-1])
+                flat_imgs = tf.map_fn(_decode_one, flat, fn_output_signature=tf.uint8)
+                out_shape = tf.concat(
+                    [shape_prefix, tf.constant([image_size, image_size, 3], dtype=tf.int32)],
+                    axis=0,
+                )
+                return tf.reshape(flat_imgs, out_shape)
+
+            def _tf_batch_to_torch(batch_tf: Any) -> torch.Tensor:
+                try:
+                    pt = torch.utils.dlpack.from_dlpack(
+                        tf.experimental.dlpack.to_dlpack(batch_tf)
+                    )
+                except Exception:
+                    pt = torch.from_numpy(batch_tf.numpy())
+                return pt.permute(0, 4, 1, 2, 3)
+
+            if self.is_train:
+                while not stop.is_set():
+                    blocks_tf: list[Any] = []
+                    block_dataset_names: list[str] = []
+                    for _ in range(blocks_per_batch):
+                        ds_idx, block = _get_block_nonblocking()
+                        blocks_tf.append(block)
+                        if self.return_metadata:
+                            cfg = getattr(self._datasets[ds_idx], "config", None)
+                            name = str(getattr(cfg, "name", ""))
+                            block_dataset_names.extend([name] * block_size)
+                    batch_tf = tf.concat(blocks_tf, axis=0)
+                    if getattr(batch_tf, "dtype", None) == tf.string:
+                        batch_tf = _decode_resize_pairs(batch_tf)
+                    batch_pt = _tf_batch_to_torch(batch_tf)
+                    if self.return_metadata:
+                        yield {"frames": batch_pt, "dataset_name": block_dataset_names}
+                    else:
+                        yield batch_pt
+            else:
+                for _ in range(len(self)):
+                    if stop.is_set():
+                        break
+                    blocks_tf: list[Any] = []
+                    block_dataset_names: list[str] = []
+                    for _ in range(blocks_per_batch):
+                        ds_idx, block = _get_block_nonblocking()
+                        blocks_tf.append(block)
+                        if self.return_metadata:
+                            cfg = getattr(self._datasets[ds_idx], "config", None)
+                            name = str(getattr(cfg, "name", ""))
+                            block_dataset_names.extend([name] * block_size)
+                    batch_tf = tf.concat(blocks_tf, axis=0)
+                    if getattr(batch_tf, "dtype", None) == tf.string:
+                        batch_tf = _decode_resize_pairs(batch_tf)
+                    batch_pt = _tf_batch_to_torch(batch_tf)
+                    if self.return_metadata:
+                        yield {"frames": batch_pt, "dataset_name": block_dataset_names}
+                    else:
+                        yield batch_pt
+        finally:
+            stop.set()
+            for t in threads:
+                t.join(timeout=1.0)
 
     def __del__(self):
         """Cleanup on deletion."""
@@ -2442,6 +2911,10 @@ class MultiOXEFramePairDataset(IterableDataset):
             if isinstance(val, bytes):
                 return val.decode("utf-8").rstrip("\x00")
             return str(val) if val else ""
+
+        if self.mixing_strategy == "python":
+            yield from self._iter_python_prefetch_blocks(tf)
+            return
 
         tf_iter = self._get_or_create_iterator()
 
