@@ -1,0 +1,99 @@
+# @package _global_
+
+# Continue training from 52.5k checkpoint with new LR schedule
+# - Loads model weights only (fresh optimizer/scheduler)
+# - Uses different seed to get different training samples
+# - Cosine decay from 1e-4 to 1e-6 over 50k steps
+
+defaults:
+  - /model@model: laq
+  - /data@data: laq_oxe_all_low_ram
+  - /training@training: laq_optimizer
+  - /cluster@cluster: local_dev
+  - optional /user_config: local
+
+experiment:
+  name: laq_continue_with_flow
+  description: "Continue LAQ from 85k with flow supervision and LR decay"
+
+# Different seed to get different training samples
+seed: 170000
+
+# Keep same model settings as original checkpoint
+model:
+  image_size: 256
+  use_dinov3_encoder: true
+  dinov3_model_name: "facebook/dinov3-vits16-pretrain-lvd1689m"
+  dinov3_pool_to_grid: 8
+  code_seq_len: 4
+  codebook_size: 8
+  use_dino_decoder: true
+  use_pixel_decoder: false
+  use_aux_decoder: true
+  # Disable codebook replacement - model is already well-trained
+  codebook_replace_schedule: []
+
+  # Flow supervision (matches original 52.5k checkpoint)
+  flow:
+    enabled: true
+    model: raft_small
+    loss_weight: 0.1
+    decoder_depth: 2
+    warmup_steps: 1000  # Shorter warmup since model already trained
+    teacher_num_flow_updates: 6
+    teacher_chunk_size: 64
+
+data:
+  loader:
+    batch_size: 64
+    num_workers: 0
+
+training:
+  # Load weights only (fresh optimizer/scheduler with new LR schedule)
+  # Using the 85k checkpoint from the no-flow run as starting point
+  load_weights_from: "/mnt/data/workspace/runs/hlrp/2026-02-02_01-10-58_laq_continue_52k/checkpoints/last.ckpt"
+
+  max_steps: 80000  # ~8.5 hours at 2.58 it/s
+  epochs: 1000
+
+  # New scheduler: cosine decay from 1e-4 to 1e-6 over 50k steps
+  scheduler:
+    type: cosine
+    warmup_steps: 500  # Short warmup since model is already trained
+    warmup_start_lr: 5.0e-5  # Start from half the peak
+    min_lr: 1.0e-6
+
+  validation:
+    check_interval: 2500
+    limit_batches: 200
+    max_cached_samples: 256
+    num_fixed_samples: 8
+    num_random_samples: 8
+
+    buckets:
+      language_table:
+        filters: {dataset_name: "language_table"}
+        max_samples: 64
+      bridge:
+        filters: {dataset_name: "bridge"}
+        max_samples: 64
+
+    strategies:
+      basic:
+        enabled: true
+        every_n_validations: 1
+        visualize_train: true
+        visualize_val: true
+      codebook_histogram:
+        enabled: true
+        every_n_validations: 2
+      sequence_histogram:
+        enabled: true
+        every_n_validations: 2
+        num_top_sequences: 30
+
+logging:
+  level: INFO
+  use_wandb: true
+  project: hlrp
+  tags: ["ablation", "continue", "laq"]

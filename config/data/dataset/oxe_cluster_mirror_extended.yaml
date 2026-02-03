@@ -1,0 +1,94 @@
+# @package data.dataset
+
+# OXE dataset list aligned with what exists in the LRZ cluster mirror
+# (`/dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment`) and also
+# available on `gs://gresearch/robotics/...`.
+#
+# Goal: expand beyond the current 4 datasets with additional *non-language_table*
+# datasets that have usable image + language + action (and usually state).
+#
+# Notes:
+# - We use TFDS slicing on `train` for train/val for consistency across datasets.
+# - We keep weights uniform (explicit) and rely on normalization in the mixer.
+
+oxe:
+  datasets:
+    # Existing 4 (kept for continuity)
+    - name: language_table
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 10
+      weight: 0.05
+      approx_num_pairs: 11934000
+
+    - name: bridge
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.05
+      approx_num_pairs: 1031130
+
+    - name: rt1
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 3
+      weight: 0.05
+      approx_num_pairs: 2113650
+
+    - name: robonet
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 10
+      weight: 0.05
+      approx_num_pairs: 1494000
+
+    # Added datasets (from cluster mirror)
+    - name: aloha_mobile
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.05
+      approx_num_pairs: 458620
+
+    - name: droid
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.05
+      approx_num_pairs: 35680434
+
+    - name: berkeley_autolab_ur5
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.05
+      approx_num_pairs: 78907
+
+    - name: jaco_play
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.05
+      approx_num_pairs: 65359
+
+    - name: kuka
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.05
+      approx_num_pairs: 5881305
+
+    - name: taco_play
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.05
+      approx_num_pairs: 197762
+
+    - name: roboturk
+      train_split: "train[:90%]"
+      val_split: "train[90%:]"
+      pair_offset_steps: 5
+      weight: 0.05
+      approx_num_pairs: 148708
+

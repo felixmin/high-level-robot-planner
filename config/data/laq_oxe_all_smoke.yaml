@@ -1,0 +1,13 @@
+# @package data
+
+# TF OXE preset: smoke test for the original 4-dataset mix.
+
+defaults:
+  - dataset: oxe_all_smoke
+  - adapter: oxe_tf_minimal
+  - loader: oxe_streaming
+  - preprocess: pair_256
+  - _self_
+
+backend: oxe_tf
+

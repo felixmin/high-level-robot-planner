@@ -1071,6 +1071,7 @@ class OXEDataModule(pl.LightningDataModule):
         mix_block_length = int(tf_mix["mix_block_length"])
         parallelism_mode = str(tf_mix["parallelism_mode"])
         mixing_strategy = str(tf_mix["strategy"])
+        mix_selector_run_length = int(tf_mix.get("selector_run_length", 1))
         per_dataset_private_threadpool_size = int(tf_mix["per_dataset_private_threadpool_size"])
 
         if len(self.datasets) == 1:
@@ -1165,6 +1166,7 @@ class OXEDataModule(pl.LightningDataModule):
                 pipeline_transform_parallelism=pipeline_transform_parallelism,
                 pipeline_interleave_parallelism=pipeline_interleave_parallelism,
                 mix_block_length=mix_block_length,
+                mix_selector_run_length=mix_selector_run_length,
                 parallelism_mode=parallelism_mode,
                 per_dataset_stream_prefetch_buffer=per_dataset_stream_prefetch_buffer,
                 mixing_strategy=mixing_strategy,
@@ -1199,6 +1201,7 @@ class OXEDataModule(pl.LightningDataModule):
                 pipeline_transform_parallelism=pipeline_transform_parallelism,
                 pipeline_interleave_parallelism=pipeline_interleave_parallelism,
                 mix_block_length=mix_block_length,
+                mix_selector_run_length=mix_selector_run_length,
                 parallelism_mode=parallelism_mode,
                 per_dataset_stream_prefetch_buffer=per_dataset_stream_prefetch_buffer,
                 mixing_strategy=mixing_strategy,

@@ -2,6 +2,19 @@
 
 Root path (remote): `/dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment`
 
+## In-Repo OXE Adapter Support (2026-02-02)
+
+The TF OXE streaming adapter (`packages/common/adapters/oxe.py`) has explicit key-mappings for:
+- `aloha_mobile` (image=`cam_high`, language=`step.language_instruction`, state=`observation.state`, action=`action` (16D))
+- `droid` (image=`exterior_image_1_left`, language=`step.language_instruction`, state=`observation.cartesian_position`, action=`action` (7D))
+- `berkeley_autolab_ur5` (image=`image`, language=`observation.natural_language_instruction`, state=`observation.robot_state`, action=`action.world_vector` (3D))
+- `jaco_play` (image=`image`, language=`observation.natural_language_instruction`, state=`observation.end_effector_cartesian_pos`, action=`action.world_vector` (3D))
+- `kuka` (image=`image`, language=`observation.natural_language_instruction`, state=`observation.clip_function_input/base_pose_tool_reached`, action=`action.world_vector` (3D))
+- `taco_play` (image=`rgb_static`, language=`observation.natural_language_instruction`, state=`observation.robot_obs`, action=`action.actions` (7D))
+- `roboturk` (image=`front_rgb`, language=`observation.natural_language_instruction`, **no state** → emits zeros, action=`action.world_vector` (3D))
+
+Note: For state-less datasets like `roboturk`, the adapter avoids the `tf.data.Dataset.scan()` pairing path (which was observed to segfault for Roboturk with metadata enabled) and instead forms pairs with `zip(frames, frames.skip(offset))` plus a windowed action sum.
+
 ## Using this mirror in this repo
 
 Set the TF OXE adapter to prefer the local mirror (and fall back to GCS when not present):

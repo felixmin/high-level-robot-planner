@@ -445,7 +445,24 @@ def main(cfg: DictConfig):
     logger.info("Starting Training")
     logger.info("=" * 80)
 
-    # Check for resume checkpoint
+    # Check for weight-only loading (new scheduler, fresh optimizer)
+    weights_path = training_config.get("load_weights_from", None)
+    if weights_path:
+        logger.info(f"✓ Loading model weights from: {weights_path}")
+        ckpt = torch.load(weights_path, map_location="cpu", weights_only=False)
+        # Load only model state_dict, not optimizer/scheduler
+        state_dict = ckpt.get("state_dict", ckpt)
+        # Filter to model weights only (remove 'model.' prefix if present from Lightning)
+        model_state = {k.replace("model.", "", 1) if k.startswith("model.") else k: v
+                       for k, v in state_dict.items() if not k.startswith(("optimizer", "lr_scheduler"))}
+        missing, unexpected = task.model.load_state_dict(model_state, strict=False)
+        if missing:
+            logger.warning(f"  - Missing keys: {missing[:5]}{'...' if len(missing) > 5 else ''}")
+        if unexpected:
+            logger.warning(f"  - Unexpected keys: {unexpected[:5]}{'...' if len(unexpected) > 5 else ''}")
+        logger.info(f"  - Loaded {len(model_state)} weight tensors (fresh optimizer/scheduler)")
+
+    # Check for full resume (restores optimizer/scheduler state)
     ckpt_path = training_config.get("resume_from_checkpoint", None)
     if ckpt_path:
         logger.info(f"✓ Resuming from checkpoint: {ckpt_path}")

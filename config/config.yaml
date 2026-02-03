@@ -16,9 +16,8 @@ precision: "bf16-mixed"  # "32-true", "16-mixed", "bf16-mixed"
 hydra:
   run:
     # Keep Hydra's `.hydra/` snapshots inside the same run directory as our unified logging.
-    # If `logging.runs_dir` is set, use it; otherwise fall back to:
-    #   <logging.root_dir or workspace>/runs/<timestamp>_<experiment.name>
-    dir: ${oc.select:logging.runs_dir, ${oc.select:logging.root_dir,.}/runs/${now:%Y-%m-%d_%H-%M-%S}_${experiment.name}}
+    # `logging.runs_dir` is always a string (computed by default) and can be overridden on the CLI.
+    dir: ${logging.runs_dir}
   sweep:
     dir: ${oc.select:logging.root_dir,.}/runs/sweeps/${now:%Y-%m-%d_%H-%M-%S}_${experiment.name}
     subdir: ${hydra.job.num}
@@ -27,8 +26,13 @@ hydra:
 logging:
   level: INFO                # Logging level (DEBUG, INFO, WARNING, ERROR)
   job_id: null               # Optional explicit run ID (used by submit_job local runs)
-  root_dir: null             # Optional base directory for all run artifacts
-  runs_dir: null             # Optional run directory (if null, scripts create a timestamped folder under <root_dir>/runs/)
+  # Base directory for all run artifacts (relative paths resolve against the repo CWD).
+  # Note: Hydra's `hydra.run.dir` expects a string; leaving this as `null` breaks
+  # interpolation in some OmegaConf versions.
+  root_dir: .
+  # Run directory for this invocation (used by Hydra + unified logging).
+  # Override on the CLI to write runs elsewhere.
+  runs_dir: ${logging.root_dir}/runs/${now:%Y-%m-%d_%H-%M-%S}_${experiment.name}
 
   # WandB integration
   use_wandb: true            # Enable Weights & Biases logging
@@ -66,3 +70,8 @@ benchmark:
   compute_sleep_s: 0.0
   tf_profile: false
   torch_profile: false
+  # Optional: prime each child dataset pipeline before benchmarking.
+  # This is useful for multi-dataset GCS streaming where the first element from a
+  # dataset can pay a large one-time startup cost.
+  prime_each_dataset_samples: 0
+  prime_materialize: false
