@@ -257,6 +257,56 @@ Settings (both runs): `data=laq_oxe_cluster_mirror_large_gcs_python_hot`, `batch
   - Run dir: `runs/2026-02-03_15-26-11_laq_hf_local`
   - Result: mean **3.4303s**, p99 **7.1142s** ⇒ **0.292 batches/s** ⇒ **18.7 samples/s**
 
+### E13: `samples_per_episode=1` baseline (longer horizon + metadata enabled)
+Settings: `data=laq_oxe_cluster_mirror_large_gcs_python_hot`, `batch_size=64`, `mix_block_length=8`,
+`samples_per_episode=1`, `return_metadata=true`, `warmup_steps=2`, `measured_steps=30`
+- Run dir: `runs/2026-02-03_17-29-33_laq_hf_local`
+- Result (measured): **mean 3.2938s**, p99 **10.7063s** ⇒ **0.304 batches/s** ⇒ **19.4 samples/s**
+- Note: tail stalls still present (max ~12s) even after the long-tail “switch stall” fix; these stalls now appear
+  to be driven by per-episode overhead (not by mixer blocking).
+
+### E14: improve `samples_per_episode=1` by reducing python block size
+Hypothesis: when `samples_per_episode=1`, each dataset worker must read **one episode per sample**. Smaller
+`mix_block_length` should reduce the “time-to-first-block” per dataset (fewer episodes per block), improving
+steady-state throughput.
+
+Settings: same as E13, but:
+- `data.adapter.tf.mixing.mix_block_length=4`
+- `data.adapter.tf.mixing.python_prefetch_queue_size=4`
+
+- Run dir: `runs/2026-02-03_17-34-53_laq_hf_local`
+- Result (measured): **mean 2.9819s**, p99 **8.1507s** ⇒ **0.335 batches/s** ⇒ **21.5 samples/s**
+
+### E15: episode prefetch does not help (and can hurt)
+Settings: E14 + `data.adapter.tf.prefetch.episode_queue_buffer=64` (≈2 prefetched episodes per dataset)
+- Run dir: `runs/2026-02-03_17-37-42_laq_hf_local`
+- Result (measured): **mean 3.3728s**, p99 **9.0295s** ⇒ **0.296 batches/s** ⇒ **19.0 samples/s**
+
+### E16: higher per-dataset read/episode concurrency hurts (startup + throughput)
+Settings: E14 + `data.adapter.tf.pipeline.episode_concurrency=16` and `data.adapter.tf.tfds_read.cycle_length=16`
+- Run dir: `runs/2026-02-03_17-40-43_laq_hf_local`
+- Observation: much slower “initial ready” (~111s vs ~59s)
+- Result (measured): **mean 3.4541s**, p99 **10.5383s** ⇒ **0.290 batches/s** ⇒ **18.5 samples/s**
+
+### E17: smaller blocks (2) are not better than 4
+Settings: E13 but `mix_block_length=2`, `python_prefetch_queue_size=8`
+- Run dir: `runs/2026-02-03_17-44-50_laq_hf_local`
+- Result (measured): **mean 3.2109s**, p99 **9.3983s** ⇒ **0.311 batches/s** ⇒ **19.9 samples/s**
+
+### E18: larger per-dataset queue (blocks) does not help
+Settings: E14 but `python_prefetch_queue_size=8`
+- Run dir: `runs/2026-02-03_17-47-49_laq_hf_local`
+- Result (measured): **mean 3.2158s**, p99 **6.7859s** ⇒ **0.311 batches/s** ⇒ **19.9 samples/s**
+
+## Current best config for `samples_per_episode=1` (so far)
+Best among the tried variants is E14:
+- `mix_block_length=4`, `python_prefetch_queue_size=4`
+- Achieves **~21.5 samples/s** at `batch_size=64` on the 32-dataset GCS mixture.
+
+This is still **far** below the “all pairs per episode” mode and far below the overall throughput targets. This
+supports the working theory that `samples_per_episode=1` is fundamentally limited by *per-episode* RLDS/TFDS read
+and parse overhead (which is amortized in the `samples_per_episode=0` / “all pairs” mode).
+
 ## Next experiments (planned)
 We hit the throughput target with composite batches; remaining work is mostly ergonomics + scaling:
 1) Turn the “python keep-hot” approach into a clean training preset (Hydra config), so LAQ training can use it directly.

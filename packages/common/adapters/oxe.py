@@ -1890,6 +1890,7 @@ class OXEFramePairDataset(IterableDataset):
         """Iterate over frame pairs."""
         # Get or create iterator (persistent by default to avoid shuffle buffer refill)
         tf_iter = self._get_or_create_iterator()
+        tf = None
 
         # Helper to decode TF string tensors efficiently
         def _decode_str(val) -> str:
@@ -1971,6 +1972,8 @@ class OXEFramePairDataset(IterableDataset):
                     "robot": robots,
                 }
             else:
+                if tf is None:
+                    tf = _import_tensorflow_cpu_only()
                 if self.output_batch_size is None:
                     try:
                         yield torch.utils.dlpack.from_dlpack(
