@@ -1,0 +1,21 @@
+# @package _global_
+
+# SmolVLA Processor Profiling Experiment
+# Usage: python scripts/submit_job.py experiment=profile_smolvla
+
+defaults:
+  - /cluster@cluster: mcml_h100
+
+experiment:
+  name: profile_smolvla
+  description: "Profile SmolVLA processor to identify bottlenecks"
+
+# Override submission settings for profiling
+submit:
+  script: test_processor_no_split
+
+# Short time limit for profiling
+cluster:
+  compute:
+    time_limit: "00:30:00"
+    gpus_per_node: 1

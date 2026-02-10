@@ -8,6 +8,10 @@ vla:
   model_name: HuggingFaceTB/SmolVLM2-500M-Video-Instruct
   torch_dtype: bf16  # bf16, fp16, fp32
   trust_remote_code: true
+  # GPU preprocessing optimization - LeRobot-style direct vision encoder call
+  # Bypasses HF processor entirely for ~17x speedup
+  use_gpu_preprocessing: true
+  image_size: [384, 384]  # SigLIP expected size
 
 laq:
   checkpoint: ""  # required at runtime (Stage 1 LAQ checkpoint)

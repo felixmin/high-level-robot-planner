@@ -311,6 +311,9 @@ def main(cfg: DictConfig):
 
     elif backend_type == "smol_latent_head":
         trust_remote_code = bool(OmegaConf.select(cfg, "model.vla.trust_remote_code") or False)
+        use_gpu_preprocessing = bool(OmegaConf.select(cfg, "model.vla.use_gpu_preprocessing") or False)
+        image_size_cfg = OmegaConf.select(cfg, "model.vla.image_size")
+        image_size = tuple(image_size_cfg) if image_size_cfg else (384, 384)
         backend = SmolLatentHeadBackend(
             config=SmolLatentHeadBackendConfig(
                 model_name=str(model_name),
@@ -318,6 +321,8 @@ def main(cfg: DictConfig):
                 trust_remote_code=trust_remote_code,
                 chat=ChatConfig(system_prompt=cfg.model.chat.system_prompt),
                 action_tokens=action_cfg,
+                use_gpu_preprocessing=use_gpu_preprocessing,
+                image_size=image_size,
             ),
             frames_to_images=oxe_first_frames_to_pil,
         )
