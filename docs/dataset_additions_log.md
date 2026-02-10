@@ -1,6 +1,6 @@
 # Dataset Additions Log
 
-## Current State (2026-02-03)
+## Current State (2026-02-10)
 - Expanded OXE TF streaming with additional datasets that exist in the LRZ cluster mirror and on `gs://gresearch/robotics/`:
   `aloha_mobile`, `droid`, `berkeley_autolab_ur5`, `jaco_play`, `kuka`, `taco_play`, `roboturk`,
   plus a larger set used for multi-dataset scaling experiments:
@@ -25,6 +25,19 @@
 - 2026-02-02: Added support + configs for 7 additional non-language-table OXE datasets (cluster mirror aligned).
 - 2026-02-02: Isolated a Roboturk crash: `roboturk` + `return_metadata=true` segfaulted when `samples_per_episode=0` (full scan path). The fast path (`samples_per_episode=1`) and the non-metadata path (`return_metadata=false`) worked. Root cause was inside the TF `Dataset.scan()` pipeline (reproducible even without PyTorch).
 - 2026-02-02: Fixed Roboturk metadata crash by bypassing `Dataset.scan()` for `state_dim<=0` datasets and using `Dataset.zip(frames, frames.skip(offset))` + windowed action reductions instead (Roboturk now works with `return_metadata=true` and `samples_per_episode=0`).
+- 2026-02-03: Fixed `return_metadata=true` for the python “keep-hot” mixer:
+  - Python mixing now propagates full metadata (episode_id/language/action/initial_state/dataset_name/robot) instead of only `dataset_name`.
+  - Updated the “image-only” placeholders in `OXE_DATASETS` for the 21 added cluster-mirror datasets with correct `instruction_key`, `instruction_in_step`, and action settings so metadata extraction doesn’t fail.
+  - Added a training-ready all-pairs + metadata preset: `config/data/laq_oxe_cluster_mirror_large_gcs_python_hot_allpairs_meta.yaml`.
+- 2026-02-10: Fixed remaining metadata path breakages found by 32-dataset priming:
+  - `kuka`: state stream in TFDS skip-decoding is string-backed in this setup; switched to `state_dim=0` (`state_key=None`) for metadata compatibility.
+  - `mimic_play`: `state` is a nested dict; switched to `state_key=state/ee_pose` with `state_dim=7`.
+  - Added a cluster-local one-sample preset: `config/data/laq_oxe_cluster_mirror_large_local_python_hot_samples1.yaml`.
+  - Added cluster trial runbook for samples1 mode: `docs/cluster_samples1_local_trial.md`.
+- 2026-02-10: Re-ran full 32-dataset metadata priming on CPU with the all-pairs metadata preset and confirmed clean setup across all datasets:
+  - Command: `conda run -n hlrp python scripts/bench_oxe_dataloader_detailed.py ... data=laq_oxe_cluster_mirror_large_gcs_python_hot_allpairs_meta benchmark.prime_each_dataset_samples=1 benchmark.prime_materialize=true benchmark.warmup_steps=0 benchmark.steps=0`.
+  - Run: `runs/2026-02-10_15-06-03_laq_oxe_local`.
+  - Result: all datasets primed (`kuka`, `mimic_play`, `fmb` included) and exited with `Benchmark warmup_steps+steps == 0; exiting after setup/priming.` (no `priming failed` lines).
 - 2026-02-02: CPU-only smoke throughput checks (GCS, metadata enabled, batch_size=2, `oxe_tf_minimal`, `tfds_read.source=gcs`). These numbers are noisy and include remote I/O variance, but adding datasets clearly reduces throughput:
   - 4-dataset smoke (`data=laq_oxe_all_smoke`, warmup=2, steps=10): mean=0.545s, p50=0.0004s, p90=2.650s, ~3.7 samples/s.
   - 7-dataset smoke (`data=laq_oxe_cluster_mirror_extended_smoke`, warmup=2, steps=10): mean=4.110s, p50=0.0014s, p90=12.486s, ~0.5 samples/s.

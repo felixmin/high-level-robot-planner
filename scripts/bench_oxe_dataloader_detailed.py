@@ -212,6 +212,10 @@ def main(cfg: DictConfig) -> None:
 
     if total <= 0:
         logger.info("Benchmark warmup_steps+steps == 0; exiting after setup/priming.")
+        try:
+            datamodule.teardown()
+        except Exception:
+            pass
         return
 
     dl = datamodule.train_dataloader()
@@ -479,6 +483,10 @@ def main(cfg: DictConfig) -> None:
 
     # NOTE: tf.data per-edge stats were removed because the TF version used here does not
     # expose the needed `tf.data.experimental.StatsAggregator` API.
+    try:
+        datamodule.teardown()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

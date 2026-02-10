@@ -1,0 +1,16 @@
+# @package data
+
+# TF OXE preset: 30+ dataset list + python "keep-hot" mixing for local GCS training,
+# returning full standardized metadata (action/state/language/etc.).
+#
+# This uses all samples per episode (`samples_per_episode=0`, inherited from `oxe_tf_low_ram`).
+
+defaults:
+  - dataset: oxe_cluster_mirror_large
+  - adapter: oxe_tf_gcs_python_hot
+  - loader: oxe_streaming
+  - preprocess: pair_256
+  - _self_
+
+backend: oxe_tf
+

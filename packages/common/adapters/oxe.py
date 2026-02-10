@@ -308,14 +308,15 @@ OXE_DATASETS = {
         image_key="image",
         instruction_key="natural_language_instruction",
         instruction_in_step=False,
-        state_key="clip_function_input/base_pose_tool_reached",
+        state_key=None,
         image_shape=(512, 640, 3),
         control_frequency_hz=10.0,  # unknown; not used in pipeline
         action_dim=3,
-        state_dim=7,
+        state_dim=0,
         action_key="world_vector",
         action_is_dict=True,
         avg_episode_length=15,
+        allow_missing_state=True,
     ),
     # TACO Play (teleop manipulation with multiple cameras)
     "taco_play": OXEDatasetConfig(
@@ -355,14 +356,31 @@ OXE_DATASETS = {
         name="bc_z",
         gcs_path="gs://gresearch/robotics/bc_z/0.1.0",
         image_key="image",
+        instruction_key="natural_language_instruction",
+        instruction_in_step=False,
+        # Use a simple, always-present numeric state for debugging/plots.
+        state_key="present/xyz",
+        state_dim=3,
         image_shape=(171, 213, 3),
+        # bc_z actions are a dict with several nested keys. Use xyz residuals
+        # (shape 30) as a reasonably-behaved numeric signal.
+        action_key="future/xyz_residual",
+        action_is_dict=True,
+        action_dim=30,
         avg_episode_length=30,
     ),
     "berkeley_cable_routing": OXEDatasetConfig(
         name="berkeley_cable_routing",
         gcs_path="gs://gresearch/robotics/berkeley_cable_routing/0.1.0",
         image_key="image",
+        instruction_key="natural_language_instruction",
+        instruction_in_step=False,
+        state_key="robot_state",
+        state_dim=2,
         image_shape=(128, 128, 3),
+        action_key="world_vector",
+        action_is_dict=True,
+        action_dim=3,
         avg_episode_length=30,
     ),
     "columbia_cairlab_pusht_real": OXEDatasetConfig(
@@ -370,6 +388,13 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/columbia_cairlab_pusht_real/0.1.0",
         image_key="image",
         image_shape=(240, 320, 3),
+        instruction_key="natural_language_instruction",
+        instruction_in_step=False,
+        state_key="robot_state",
+        state_dim=2,
+        action_key="world_vector",
+        action_is_dict=True,
+        action_dim=3,
         avg_episode_length=30,
     ),
     "mimic_play": OXEDatasetConfig(
@@ -377,6 +402,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/mimic_play/0.0.1",
         image_key="image/front_image_1",
         image_shape=(120, 120, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state/ee_pose",
+        state_dim=7,
+        action_dim=7,
         avg_episode_length=200,
     ),
     "berkeley_fanuc_manipulation": OXEDatasetConfig(
@@ -384,6 +414,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/berkeley_fanuc_manipulation/0.1.0",
         image_key="image",
         image_shape=(224, 224, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=6,
         avg_episode_length=60,
     ),
     "dobbe": OXEDatasetConfig(
@@ -391,6 +426,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/dobbe/0.0.1",
         image_key="wrist_image",
         image_shape=(256, 256, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=7,
         avg_episode_length=60,
     ),
     "uiuc_d3field": OXEDatasetConfig(
@@ -398,6 +438,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/uiuc_d3field/0.1.0",
         image_key="image_1",
         image_shape=(360, 640, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=3,
         avg_episode_length=60,
     ),
     "ucsd_kitchen_dataset_converted_externally_to_rlds": OXEDatasetConfig(
@@ -405,6 +450,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/ucsd_kitchen_dataset_converted_externally_to_rlds/0.1.0",
         image_key="image",
         image_shape=(480, 640, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=8,
         avg_episode_length=60,
     ),
     "ucsd_pick_and_place_dataset_converted_externally_to_rlds": OXEDatasetConfig(
@@ -412,6 +462,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/ucsd_pick_and_place_dataset_converted_externally_to_rlds/0.1.0",
         image_key="image",
         image_shape=(224, 224, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=4,
         avg_episode_length=60,
     ),
     "furniture_bench_dataset_converted_externally_to_rlds": OXEDatasetConfig(
@@ -419,6 +474,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/furniture_bench_dataset_converted_externally_to_rlds/0.1.0",
         image_key="image",
         image_shape=(224, 224, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=8,
         avg_episode_length=60,
     ),
     "maniskill_dataset_converted_externally_to_rlds": OXEDatasetConfig(
@@ -426,6 +486,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/maniskill_dataset_converted_externally_to_rlds/0.1.0",
         image_key="image",
         image_shape=(256, 256, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=7,
         avg_episode_length=60,
     ),
     "robo_set": OXEDatasetConfig(
@@ -433,6 +498,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/robo_set/0.0.1",
         image_key="image_left",
         image_shape=(240, 424, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=8,
         avg_episode_length=60,
     ),
     "stanford_hydra_dataset_converted_externally_to_rlds": OXEDatasetConfig(
@@ -440,6 +510,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/stanford_hydra_dataset_converted_externally_to_rlds/0.1.0",
         image_key="image",
         image_shape=(240, 320, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=7,
         avg_episode_length=60,
     ),
     "stanford_robocook_converted_externally_to_rlds": OXEDatasetConfig(
@@ -447,6 +522,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/stanford_robocook_converted_externally_to_rlds/0.1.0",
         image_key="image_1",
         image_shape=(256, 256, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=7,
         avg_episode_length=60,
     ),
     "spoc": OXEDatasetConfig(
@@ -454,6 +534,12 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/spoc/0.0.1",
         image_key="image",
         image_shape=(224, 384, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key=None,
+        state_dim=0,
+        allow_missing_state=True,
+        action_dim=9,
         avg_episode_length=60,
     ),
     "tidybot": OXEDatasetConfig(
@@ -461,6 +547,13 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/tidybot/0.0.1",
         image_key="image",
         image_shape=(360, 640, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        # tidybot has string actions; treat as "no action" for now (emit zeros).
+        action_dim=0,
+        state_key=None,
+        state_dim=0,
+        allow_missing_state=True,
         avg_episode_length=60,
     ),
     "toto": OXEDatasetConfig(
@@ -468,6 +561,13 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/toto/0.1.0",
         image_key="image",
         image_shape=(480, 640, 3),
+        instruction_key="natural_language_instruction",
+        instruction_in_step=False,
+        state_key="state",
+        state_dim=2,
+        action_key="world_vector",
+        action_is_dict=True,
+        action_dim=3,
         avg_episode_length=60,
     ),
     "viola": OXEDatasetConfig(
@@ -475,6 +575,14 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/viola/0.1.0",
         image_key="agentview_rgb",
         image_shape=(224, 224, 3),
+        instruction_key="natural_language_instruction",
+        instruction_in_step=False,
+        state_key=None,
+        state_dim=0,
+        allow_missing_state=True,
+        action_key="world_vector",
+        action_is_dict=True,
+        action_dim=3,
         avg_episode_length=60,
     ),
     "vima_converted_externally_to_rlds": OXEDatasetConfig(
@@ -482,6 +590,14 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/vima_converted_externally_to_rlds/0.0.1",
         image_key="image",
         image_shape=(128, 256, 3),
+        instruction_key="multimodal_instruction",
+        instruction_in_step=True,
+        state_key=None,
+        state_dim=0,
+        allow_missing_state=True,
+        action_key="pose0_position",
+        action_is_dict=True,
+        action_dim=3,
         avg_episode_length=60,
     ),
     "utaustin_mutex": OXEDatasetConfig(
@@ -489,6 +605,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/utaustin_mutex/0.1.0",
         image_key="image",
         image_shape=(128, 128, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state",
+        state_dim=2,
+        action_dim=7,
         avg_episode_length=60,
     ),
     "fmb": OXEDatasetConfig(
@@ -496,6 +617,11 @@ OXE_DATASETS = {
         gcs_path="gs://gresearch/robotics/fmb/0.0.1",
         image_key="image_side_1",
         image_shape=(256, 256, 3),
+        instruction_key="language_instruction",
+        instruction_in_step=True,
+        state_key="state_gripper_pose",
+        state_dim=2,
+        action_dim=7,
         avg_episode_length=60,
     ),
 }
@@ -1330,6 +1456,196 @@ class OXEFramePairDataset(IterableDataset):
                     pairs_ds = pairs_ds.take(samples_per_episode)
                 return pairs_ds
 
+            # If TFDS is configured with `SkipDecoding()` on RLDS `steps`, TFDS returns
+            # time-major tensors (nested dicts of Tensors/RaggedTensors) instead of a
+            # `tf.data.Dataset` of step dicts. The regular metadata path below assumes
+            # it can call `.map(...)` on `steps_ds`, so we special-case this setup.
+            #
+            # This is the common configuration for the python-hot GCS adapter, where
+            # we want to keep frames as encoded bytes (`tf.string`) until after mixing,
+            # while still returning standardized metadata (action/state/language/etc.).
+            if self.tfds_read_skip_steps_decoding:
+                if not self.emit_encoded_pairs:
+                    raise ValueError(
+                        "skip_steps_decoding=true with return_metadata=true currently requires "
+                        "emit_encoded_pairs=true (decode+resize happens after mixing)."
+                    )
+                if pair_frames_mode != "endpoints" or pair_num_frames != 2:
+                    raise NotImplementedError(
+                        "skip_steps_decoding+return_metadata currently supports only pair_frames.mode='endpoints' with n=2"
+                    )
+
+                steps_struct = episode["steps"]
+
+                if robot_key:
+                    robot_raw = episode["episode_metadata"][robot_key]
+                    robot_tf = (
+                        robot_raw
+                        if robot_raw.dtype == tf.string
+                        else tf.strings.as_string(robot_raw)
+                    )
+                else:
+                    robot_tf = tf.constant("", dtype=tf.string)
+
+                # Encoded frames (tf.string) for mix-before-decode.
+                frames_seq = _get_keypath(steps_struct["observation"], image_key)
+                frames_ds = tf.data.Dataset.from_tensor_slices(frames_seq)
+                if frames_seq.dtype == tf.uint8:
+
+                    def _encode_uint8_frame(frame: tf.Tensor) -> tf.Tensor:
+                        frame = tf.convert_to_tensor(frame, dtype=tf.uint8)
+                        rank = tf.rank(frame)
+                        frame = tf.cond(
+                            tf.equal(rank, 2),
+                            lambda: tf.expand_dims(frame, axis=-1),
+                            lambda: frame,
+                        )
+                        channels = tf.shape(frame)[-1]
+                        frame = tf.cond(
+                            tf.greater(channels, 3),
+                            lambda: frame[..., :3],
+                            lambda: frame,
+                        )
+                        return tf.io.encode_jpeg(frame, quality=95)
+
+                    frames_ds = frames_ds.map(
+                        _encode_uint8_frame,
+                        num_parallel_calls=pipeline_transform_parallelism,
+                    )
+                elif frames_seq.dtype != tf.string:
+                    raise TypeError(
+                        "emit_encoded_pairs requires image streams of dtype tf.string or tf.uint8 under "
+                        f"SkipDecoding(), but got dtype={frames_seq.dtype.name} for dataset={dataset_name}."
+                    )
+
+                pairs_ds = tf.data.Dataset.zip((frames_ds, frames_ds.skip(offset))).map(
+                    lambda a, b: tf.ensure_shape(tf.stack([a, b], axis=0), [2]),
+                    num_parallel_calls=pipeline_transform_parallelism,
+                )
+
+                # Actions (slice to action_dim, float32). Some datasets (e.g. tidybot)
+                # use string actions; treat as "no action" and emit zeros.
+                if action_dim <= 0:
+                    actions_ds = tf.data.Dataset.from_tensor_slices(
+                        tf.zeros((tf.shape(frames_seq)[0], 0), dtype=tf.float32)
+                    )
+                else:
+                    if action_is_dict:
+                        if not action_key:
+                            raise ValueError(
+                                "Config error: action_is_dict=True requires action_key"
+                            )
+                        action_seq = _get_keypath(steps_struct["action"], action_key)
+                    else:
+                        action_seq = steps_struct["action"]
+
+                    actions_ds = tf.data.Dataset.from_tensor_slices(action_seq)
+
+                    def _slice_action(a: tf.Tensor) -> tf.Tensor:
+                        if a.dtype == tf.string:
+                            return tf.zeros((action_dim,), dtype=tf.float32)
+                        flat = tf.reshape(a, [-1])
+                        flat = tf.cast(flat, tf.float32)
+                        return _pad_or_truncate_1d(flat, action_dim)
+
+                    actions_ds = actions_ds.map(
+                        _slice_action, num_parallel_calls=pipeline_transform_parallelism
+                    )
+
+                action_sums_ds = actions_ds.window(
+                    offset, shift=1, drop_remainder=True
+                ).flat_map(
+                    lambda w: w.batch(offset, drop_remainder=True).map(
+                        lambda a: tf.reduce_sum(a, axis=0),
+                        num_parallel_calls=1,
+                    )
+                )
+
+                # Initial state at t (slice to state_dim).
+                allow_missing_state = bool(
+                    getattr(self.config, "allow_missing_state", False)
+                )
+                if state_dim <= 0:
+                    states_ds = tf.data.Dataset.from_tensor_slices(
+                        tf.zeros((tf.shape(frames_seq)[0], 0), dtype=tf.float32)
+                    )
+                else:
+                    if state_key is None:
+                        if allow_missing_state:
+                            state_seq = tf.zeros(
+                                (tf.shape(frames_seq)[0], state_dim), dtype=tf.float32
+                            )
+                        else:
+                            raise ValueError(
+                                f"Config error: state_key is None for dataset={dataset_name}"
+                            )
+                    else:
+                        state_seq = _get_keypath(steps_struct["observation"], state_key)
+                    states_ds = tf.data.Dataset.from_tensor_slices(state_seq)
+
+                    def _slice_state(s: tf.Tensor) -> tf.Tensor:
+                        flat = tf.reshape(s, [-1])
+                        flat = tf.cast(flat, tf.float32)
+                        return _pad_or_truncate_1d(flat, state_dim)
+
+                    states_ds = states_ds.map(
+                        _slice_state, num_parallel_calls=pipeline_transform_parallelism
+                    )
+
+                # Language instruction at t.
+                if instruction_in_step:
+                    instr_seq = _get_keypath(steps_struct, instruction_key)
+                else:
+                    instr_seq = _get_keypath(steps_struct["observation"], instruction_key)
+                langs_ds = tf.data.Dataset.from_tensor_slices(instr_seq)
+
+                def _to_string(instr: tf.Tensor) -> tf.Tensor:
+                    if instr.dtype != tf.string:
+                        instr = tf.strings.unicode_encode(
+                            tf.cast(instr, tf.int32), "UTF-8"
+                        )
+                    return _strip_null_bytes(instr)
+
+                langs_ds = langs_ds.map(
+                    _to_string, num_parallel_calls=pipeline_transform_parallelism
+                )
+
+                frame_idxs_ds = tf.data.Dataset.range(2**31 - 1, output_type=tf.int32)
+
+                def _to_pair_and_meta(pair, cumulative_action, initial_state, language, frame_idx):
+                    if output_action_dim != action_dim:
+                        cumulative_action = _pad_or_truncate_1d(
+                            cumulative_action, output_action_dim
+                        )
+                    if output_state_dim != state_dim:
+                        initial_state = _pad_or_truncate_1d(
+                            initial_state, output_state_dim
+                        )
+                    meta = {
+                        "episode_id": episode_id_tf,
+                        "frame_idx": frame_idx,
+                        "offset": offset_tf,
+                        "language": language,
+                        "dataset_type": dataset_name_tf,
+                        "dataset_name": dataset_name_tf,
+                        "action": cumulative_action,
+                        "initial_state": initial_state,
+                        "robot": robot_tf,
+                    }
+                    return pair, meta
+
+                out_ds = tf.data.Dataset.zip(
+                    (pairs_ds, action_sums_ds, states_ds, langs_ds, frame_idxs_ds)
+                ).map(_to_pair_and_meta, num_parallel_calls=pipeline_transform_parallelism)
+
+                if samples_per_episode > 0:
+                    if per_episode_sample_shuffle > 0:
+                        out_ds = out_ds.shuffle(
+                            per_episode_sample_shuffle, seed=self._tf_seed
+                        )
+                    out_ds = out_ds.take(samples_per_episode)
+                return out_ds
+
             if robot_key:
                 robot_raw = episode["episode_metadata"][robot_key]
                 robot_tf = robot_raw if robot_raw.dtype == tf.string else tf.strings.as_string(robot_raw)
@@ -1347,18 +1663,24 @@ class OXEFramePairDataset(IterableDataset):
                 return _strip_null_bytes(instr)
 
             def _extract_action(step):
+                if action_dim <= 0:
+                    return tf.zeros((0,), dtype=tf.float32)
                 if action_is_dict:
                     if not action_key:
                         raise ValueError("Config error: action_is_dict=True requires action_key")
                     a = _get_keypath(step["action"], action_key)
                 else:
                     a = step["action"]
+                # Some datasets have non-numeric actions (e.g., tidybot uses a string
+                # action). Treat these as "no action" and emit zeros to keep the
+                # metadata path working across mixed datasets.
+                if a.dtype == tf.string:
+                    return tf.zeros((action_dim,), dtype=tf.float32)
                 # Avoid Python slicing on tensors (`[:action_dim]`) inside tf.data graphs:
                 # autograph can lift `action_dim` into a Tensor, which then breaks slicing.
                 flat = tf.reshape(a, [-1])
-                flat = tf.slice(flat, [0], [action_dim])
                 flat = tf.cast(flat, tf.float32)
-                return tf.ensure_shape(flat, [action_dim])
+                return _pad_or_truncate_1d(flat, action_dim)
 
             allow_missing_state = bool(getattr(self.config, "allow_missing_state", False))
 
@@ -1373,9 +1695,8 @@ class OXEFramePairDataset(IterableDataset):
                     )
                 s = _get_keypath(step["observation"], state_key)
                 flat = tf.reshape(s, [-1])
-                flat = tf.slice(flat, [0], [state_dim])
                 flat = tf.cast(flat, tf.float32)
-                return tf.ensure_shape(flat, [state_dim])
+                return _pad_or_truncate_1d(flat, state_dim)
 
             # Single-pass episode processing:
             # Use a ring buffer via `Dataset.scan()` to emit endpoint pairs [t, t+offset]
@@ -2234,14 +2555,11 @@ class MultiOXEFramePairDataset(IterableDataset):
         mix_block_length = int(self.mix_block_length)
         use_block_prefetch = mix_block_length > 1 and len(kept) > 1
 
-        # Python mixing only supports lightweight metadata currently (dataset_name only),
-        # so we disable per-dataset metadata emission and re-attach minimal metadata in
-        # the python mixer when `return_metadata=true`.
-        per_dataset_return_metadata = bool(self.return_metadata and self.mixing_strategy != "python")
+        # If enabled, each per-dataset pipeline emits standardized metadata
+        # (episode_id, language, action, initial_state, dataset_name, ...).
+        per_dataset_return_metadata = bool(self.return_metadata)
 
-        prefetch_buffer_per_ds_samples = (
-            0 if use_block_prefetch else int(self.per_dataset_stream_prefetch_buffer)
-        )
+        prefetch_buffer_per_ds_samples = 0 if use_block_prefetch else int(self.per_dataset_stream_prefetch_buffer)
         self._per_dataset_block_prefetch_buffer = (
             int(self.per_dataset_stream_prefetch_buffer) if use_block_prefetch else 0
         )
@@ -2857,44 +3175,132 @@ class MultiOXEFramePairDataset(IterableDataset):
 
             if self.is_train:
                 while not stop.is_set():
-                    blocks_tf: list[Any] = []
-                    block_dataset_names: list[str] = []
+                    blocks_pairs_tf: list[Any] = []
+                    blocks_meta_tf: list[dict[str, Any]] = []
                     for _ in range(blocks_per_batch):
                         ds_idx, block = _get_block_nonblocking()
-                        blocks_tf.append(block)
                         if self.return_metadata:
-                            cfg = getattr(self._datasets[ds_idx], "config", None)
-                            name = str(getattr(cfg, "name", ""))
-                            block_dataset_names.extend([name] * block_size)
-                    batch_tf = tf.concat(blocks_tf, axis=0)
-                    if getattr(batch_tf, "dtype", None) == tf.string:
-                        batch_tf = _decode_resize_pairs(batch_tf)
-                    batch_pt = _tf_batch_to_torch(batch_tf)
-                    if self.return_metadata:
-                        yield {"frames": batch_pt, "dataset_name": block_dataset_names}
-                    else:
+                            if not isinstance(block, (tuple, list)) or len(block) != 2:
+                                raise TypeError(
+                                    "python mixing with return_metadata=true expects blocks as (pairs, meta)"
+                                )
+                            pair_block_tf, meta_block_tf = block
+                            blocks_pairs_tf.append(pair_block_tf)
+                            blocks_meta_tf.append(meta_block_tf)
+                        else:
+                            blocks_pairs_tf.append(block)
+
+                    batch_pairs_tf = tf.concat(blocks_pairs_tf, axis=0)
+                    if getattr(batch_pairs_tf, "dtype", None) == tf.string:
+                        batch_pairs_tf = _decode_resize_pairs(batch_pairs_tf)
+                    batch_pt = _tf_batch_to_torch(batch_pairs_tf)
+
+                    if not self.return_metadata:
                         yield batch_pt
+                        continue
+
+                    merged_meta: dict[str, Any] = {}
+                    for k in blocks_meta_tf[0].keys():
+                        merged_meta[k] = tf.concat([m[k] for m in blocks_meta_tf], axis=0)
+
+                    def _decode_str(val) -> str:
+                        if isinstance(val, bytes):
+                            return val.decode("utf-8").rstrip("\x00")
+                        return str(val) if val else ""
+
+                    episode_ids = [_decode_str(x) for x in merged_meta["episode_id"].numpy()]
+                    frame_idxs = [int(x) for x in merged_meta["frame_idx"].numpy()]
+
+                    offsets = merged_meta["offset"].numpy()
+                    offset = int(offsets[0]) if len(offsets) else 0
+
+                    languages = [_decode_str(x) for x in merged_meta["language"].numpy()]
+                    dataset_types = [_decode_str(x) for x in merged_meta["dataset_type"].numpy()]
+                    dataset_names = [_decode_str(x) for x in merged_meta["dataset_name"].numpy()]
+                    robots = [_decode_str(x) for x in merged_meta["robot"].numpy()]
+
+                    actions_np = merged_meta["action"].numpy()
+                    initial_states_np = merged_meta["initial_state"].numpy()
+                    actions = [actions_np[i] for i in range(actions_np.shape[0])]
+                    initial_states = [initial_states_np[i] for i in range(initial_states_np.shape[0])]
+
+                    yield {
+                        "frames": batch_pt,
+                        "episode_id": episode_ids,
+                        "frame_idx": frame_idxs,
+                        "offset": offset,
+                        "language": languages,
+                        "dataset_type": dataset_types,
+                        "dataset_name": dataset_names,
+                        "action": actions,
+                        "initial_state": initial_states,
+                        "robot": robots,
+                    }
             else:
                 for _ in range(len(self)):
                     if stop.is_set():
                         break
-                    blocks_tf: list[Any] = []
-                    block_dataset_names: list[str] = []
+                    blocks_pairs_tf: list[Any] = []
+                    blocks_meta_tf: list[dict[str, Any]] = []
                     for _ in range(blocks_per_batch):
                         ds_idx, block = _get_block_nonblocking()
-                        blocks_tf.append(block)
                         if self.return_metadata:
-                            cfg = getattr(self._datasets[ds_idx], "config", None)
-                            name = str(getattr(cfg, "name", ""))
-                            block_dataset_names.extend([name] * block_size)
-                    batch_tf = tf.concat(blocks_tf, axis=0)
-                    if getattr(batch_tf, "dtype", None) == tf.string:
-                        batch_tf = _decode_resize_pairs(batch_tf)
-                    batch_pt = _tf_batch_to_torch(batch_tf)
-                    if self.return_metadata:
-                        yield {"frames": batch_pt, "dataset_name": block_dataset_names}
-                    else:
+                            if not isinstance(block, (tuple, list)) or len(block) != 2:
+                                raise TypeError(
+                                    "python mixing with return_metadata=true expects blocks as (pairs, meta)"
+                                )
+                            pair_block_tf, meta_block_tf = block
+                            blocks_pairs_tf.append(pair_block_tf)
+                            blocks_meta_tf.append(meta_block_tf)
+                        else:
+                            blocks_pairs_tf.append(block)
+
+                    batch_pairs_tf = tf.concat(blocks_pairs_tf, axis=0)
+                    if getattr(batch_pairs_tf, "dtype", None) == tf.string:
+                        batch_pairs_tf = _decode_resize_pairs(batch_pairs_tf)
+                    batch_pt = _tf_batch_to_torch(batch_pairs_tf)
+
+                    if not self.return_metadata:
                         yield batch_pt
+                        continue
+
+                    merged_meta: dict[str, Any] = {}
+                    for k in blocks_meta_tf[0].keys():
+                        merged_meta[k] = tf.concat([m[k] for m in blocks_meta_tf], axis=0)
+
+                    def _decode_str(val) -> str:
+                        if isinstance(val, bytes):
+                            return val.decode("utf-8").rstrip("\x00")
+                        return str(val) if val else ""
+
+                    episode_ids = [_decode_str(x) for x in merged_meta["episode_id"].numpy()]
+                    frame_idxs = [int(x) for x in merged_meta["frame_idx"].numpy()]
+
+                    offsets = merged_meta["offset"].numpy()
+                    offset = int(offsets[0]) if len(offsets) else 0
+
+                    languages = [_decode_str(x) for x in merged_meta["language"].numpy()]
+                    dataset_types = [_decode_str(x) for x in merged_meta["dataset_type"].numpy()]
+                    dataset_names = [_decode_str(x) for x in merged_meta["dataset_name"].numpy()]
+                    robots = [_decode_str(x) for x in merged_meta["robot"].numpy()]
+
+                    actions_np = merged_meta["action"].numpy()
+                    initial_states_np = merged_meta["initial_state"].numpy()
+                    actions = [actions_np[i] for i in range(actions_np.shape[0])]
+                    initial_states = [initial_states_np[i] for i in range(initial_states_np.shape[0])]
+
+                    yield {
+                        "frames": batch_pt,
+                        "episode_id": episode_ids,
+                        "frame_idx": frame_idxs,
+                        "offset": offset,
+                        "language": languages,
+                        "dataset_type": dataset_types,
+                        "dataset_name": dataset_names,
+                        "action": actions,
+                        "initial_state": initial_states,
+                        "robot": robots,
+                    }
         finally:
             stop.set()
             for t in threads:
