@@ -1,0 +1,48 @@
+# @package _global_
+
+# Dedicated benchmark experiment for OXE local-mirror throughput in
+# `samples_per_episode=1` mode.
+#
+# This avoids accidental overrides from training-focused experiment presets.
+
+defaults:
+  - /model@model: laq
+  - /data@data: laq_oxe_cluster_mirror_large_local_python_hot_samples1_no_aloha_mimic
+  - /training@training: laq_optimizer
+  - /cluster@cluster: lrz_cpu_only
+
+experiment:
+  name: laq_oxe_samples1_bench
+  description: "Benchmark OXE local-mirror throughput with samples_per_episode=1"
+
+submit:
+  # Submit the benchmark script, not training.
+  script: bench_oxe_dataloader_detailed
+
+logging:
+  use_wandb: false
+  tags: ["benchmark", "oxe", "samples1", "local-mirror"]
+
+benchmark:
+  warmup_steps: 4
+  steps: 40
+  prime_each_dataset_samples: 0
+  prime_materialize: false
+  detailed_mode: torch
+
+data:
+  loader:
+    batch_size: 64
+    num_workers: 0
+  preprocess:
+    return_metadata: true
+  adapter:
+    tf:
+      tfds_read:
+        source: local
+      sampling:
+        samples_per_episode: 1
+      mixing:
+        strategy: python
+        mix_block_length: 4
+        python_prefetch_queue_size: 4

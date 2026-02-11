@@ -38,11 +38,11 @@ tf:
 
   mixing:
     strategy: python
-    mix_block_length: 8
+    # Tuned default for cluster samples_per_episode=1 runs.
+    mix_block_length: 4
     selector_run_length: 1
     parallelism_mode: sqrt
-    python_prefetch_queue_size: 2
+    python_prefetch_queue_size: 4
     python_prefetch_min_ready_datasets: 8
     python_prefetch_wait_timeout_s: 1200
     per_dataset_private_threadpool_size: 0
-

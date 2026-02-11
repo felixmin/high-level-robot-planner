@@ -742,6 +742,7 @@ class OXEFramePairDataset(IterableDataset):
         tfds_source: str = "gcs",
         tfds_local_root: Optional[str] = None,
         emit_encoded_pairs: bool = False,
+        metadata_mode: str = "full",
     ):
         super().__init__()
 
@@ -782,6 +783,9 @@ class OXEFramePairDataset(IterableDataset):
         self.pipeline_interleave_parallelism = pipeline_interleave_parallelism
         
         self.return_metadata = return_metadata
+        self.metadata_mode = str(metadata_mode)
+        if self.metadata_mode not in {"full", "dataset_only"}:
+            raise ValueError("metadata_mode must be one of: 'full', 'dataset_only'")
         self.persistent_iterator = persistent_iterator
         self.samples_per_episode = samples_per_episode
         self.seed = seed
@@ -1078,7 +1082,9 @@ class OXEFramePairDataset(IterableDataset):
         state_key = self.config.state_key
         offset = int(self.offset)
         image_size = int(self.image_size)
-        return_metadata = bool(self.return_metadata)
+        # `dataset_only` mode keeps TF pipeline on image-only path and attaches
+        # lightweight metadata later in Python.
+        return_metadata = bool(self.return_metadata and self.metadata_mode == "full")
         dataset_name = self.config.name
         pair_frames_mode = str(self.pair_frames_mode)
         pair_frame_indices = self._compute_pair_frame_indices(offset)
@@ -2226,6 +2232,41 @@ class OXEFramePairDataset(IterableDataset):
 
         for item in tf_iter:
             if self.return_metadata:
+                if self.metadata_mode == "dataset_only":
+                    # Fast metadata mode: keep image-only TF pipeline and attach only
+                    # dataset identity in Python.
+                    if tf is None:
+                        tf = _import_tensorflow_cpu_only()
+                    if self.output_batch_size is None:
+                        try:
+                            pair_pt = torch.utils.dlpack.from_dlpack(
+                                tf.experimental.dlpack.to_dlpack(item)
+                            ).permute(3, 0, 1, 2)
+                        except Exception:
+                            pair_np = item.numpy()
+                            pair_pt = torch.from_numpy(pair_np).permute(3, 0, 1, 2)
+                        yield {
+                            "frames": pair_pt,
+                            "dataset_name": default_dataset_name,
+                            "dataset_type": default_dataset_name,
+                        }
+                    else:
+                        try:
+                            pair_pt = torch.utils.dlpack.from_dlpack(
+                                tf.experimental.dlpack.to_dlpack(item)
+                            ).permute(0, 4, 1, 2, 3)
+                        except Exception:
+                            pair_np = item.numpy()
+                            pair_pt = torch.from_numpy(pair_np).permute(0, 4, 1, 2, 3)
+                        batch_n = int(pair_pt.shape[0]) if pair_pt.ndim >= 1 else 0
+                        dataset_names = [default_dataset_name for _ in range(batch_n)]
+                        yield {
+                            "frames": pair_pt,
+                            "dataset_name": dataset_names,
+                            "dataset_type": dataset_names,
+                        }
+                    continue
+
                 pair_tf, meta_tf = item
                 if self.output_batch_size is None:
                     episode_id = _decode_str(meta_tf["episode_id"].numpy())
@@ -2277,8 +2318,8 @@ class OXEFramePairDataset(IterableDataset):
 
                 actions_np = meta_tf["action"].numpy()
                 initial_states_np = meta_tf["initial_state"].numpy()
-                actions = [actions_np[i] for i in range(actions_np.shape[0])]
-                initial_states = [initial_states_np[i] for i in range(initial_states_np.shape[0])]
+                actions = list(actions_np)
+                initial_states = list(initial_states_np)
 
                 yield {
                     "frames": pair_pt,
@@ -2379,6 +2420,7 @@ class MultiOXEFramePairDataset(IterableDataset):
         pair_frames_n: int = 2,
         tfds_source: str = "gcs",
         tfds_local_root: Optional[str] = None,
+        metadata_mode: str = "full",
     ):
         super().__init__()
 
@@ -2390,6 +2432,9 @@ class MultiOXEFramePairDataset(IterableDataset):
         if self.per_dataset_stream_prefetch_buffer < -1:
             raise ValueError("per_dataset_stream_prefetch_buffer must be >= -1")
         self.return_metadata = return_metadata
+        self.metadata_mode = str(metadata_mode)
+        if self.metadata_mode not in {"full", "dataset_only"}:
+            raise ValueError("metadata_mode must be one of: 'full', 'dataset_only'")
         self.is_train = is_train
         self.output_batch_size = int(output_batch_size)
         if self.output_batch_size <= 0:
@@ -2422,6 +2467,14 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.mixing_strategy = str(mixing_strategy)
         if self.mixing_strategy not in {"sample", "choose", "python"}:
             raise ValueError("mixing_strategy must be one of: 'sample', 'choose', 'python'")
+        if (
+            self.return_metadata
+            and self.metadata_mode == "dataset_only"
+            and self.mixing_strategy != "python"
+        ):
+            raise ValueError(
+                "metadata_mode='dataset_only' currently requires mixing_strategy='python' for multi-dataset OXE."
+            )
         self.python_prefetch_queue_size = int(python_prefetch_queue_size)
         self.python_prefetch_min_ready_datasets = int(python_prefetch_min_ready_datasets)
         self.python_prefetch_wait_timeout_s = float(python_prefetch_wait_timeout_s)
@@ -2557,7 +2610,9 @@ class MultiOXEFramePairDataset(IterableDataset):
 
         # If enabled, each per-dataset pipeline emits standardized metadata
         # (episode_id, language, action, initial_state, dataset_name, ...).
-        per_dataset_return_metadata = bool(self.return_metadata)
+        per_dataset_return_metadata = bool(
+            self.return_metadata and self.metadata_mode == "full"
+        )
 
         prefetch_buffer_per_ds_samples = 0 if use_block_prefetch else int(self.per_dataset_stream_prefetch_buffer)
         self._per_dataset_block_prefetch_buffer = (
@@ -3177,9 +3232,11 @@ class MultiOXEFramePairDataset(IterableDataset):
                 while not stop.is_set():
                     blocks_pairs_tf: list[Any] = []
                     blocks_meta_tf: list[dict[str, Any]] = []
+                    selected_ds_indices: list[int] = []
                     for _ in range(blocks_per_batch):
                         ds_idx, block = _get_block_nonblocking()
-                        if self.return_metadata:
+                        selected_ds_indices.append(ds_idx)
+                        if self.return_metadata and self.metadata_mode == "full":
                             if not isinstance(block, (tuple, list)) or len(block) != 2:
                                 raise TypeError(
                                     "python mixing with return_metadata=true expects blocks as (pairs, meta)"
@@ -3197,6 +3254,24 @@ class MultiOXEFramePairDataset(IterableDataset):
 
                     if not self.return_metadata:
                         yield batch_pt
+                        continue
+
+                    if self.metadata_mode == "dataset_only":
+                        dataset_names: list[str] = []
+                        for idx in selected_ds_indices:
+                            name = str(self.dataset_configs[idx]["name"])
+                            dataset_names.extend([name] * int(block_size))
+                        batch_n = int(batch_pt.shape[0]) if batch_pt.ndim >= 1 else 0
+                        if len(dataset_names) > batch_n:
+                            dataset_names = dataset_names[:batch_n]
+                        elif len(dataset_names) < batch_n:
+                            fill = dataset_names[-1] if dataset_names else "unknown"
+                            dataset_names.extend([fill] * (batch_n - len(dataset_names)))
+                        yield {
+                            "frames": batch_pt,
+                            "dataset_type": dataset_names,
+                            "dataset_name": dataset_names,
+                        }
                         continue
 
                     merged_meta: dict[str, Any] = {}
@@ -3221,8 +3296,8 @@ class MultiOXEFramePairDataset(IterableDataset):
 
                     actions_np = merged_meta["action"].numpy()
                     initial_states_np = merged_meta["initial_state"].numpy()
-                    actions = [actions_np[i] for i in range(actions_np.shape[0])]
-                    initial_states = [initial_states_np[i] for i in range(initial_states_np.shape[0])]
+                    actions = list(actions_np)
+                    initial_states = list(initial_states_np)
 
                     yield {
                         "frames": batch_pt,
@@ -3242,9 +3317,11 @@ class MultiOXEFramePairDataset(IterableDataset):
                         break
                     blocks_pairs_tf: list[Any] = []
                     blocks_meta_tf: list[dict[str, Any]] = []
+                    selected_ds_indices: list[int] = []
                     for _ in range(blocks_per_batch):
                         ds_idx, block = _get_block_nonblocking()
-                        if self.return_metadata:
+                        selected_ds_indices.append(ds_idx)
+                        if self.return_metadata and self.metadata_mode == "full":
                             if not isinstance(block, (tuple, list)) or len(block) != 2:
                                 raise TypeError(
                                     "python mixing with return_metadata=true expects blocks as (pairs, meta)"
@@ -3262,6 +3339,24 @@ class MultiOXEFramePairDataset(IterableDataset):
 
                     if not self.return_metadata:
                         yield batch_pt
+                        continue
+
+                    if self.metadata_mode == "dataset_only":
+                        dataset_names: list[str] = []
+                        for idx in selected_ds_indices:
+                            name = str(self.dataset_configs[idx]["name"])
+                            dataset_names.extend([name] * int(block_size))
+                        batch_n = int(batch_pt.shape[0]) if batch_pt.ndim >= 1 else 0
+                        if len(dataset_names) > batch_n:
+                            dataset_names = dataset_names[:batch_n]
+                        elif len(dataset_names) < batch_n:
+                            fill = dataset_names[-1] if dataset_names else "unknown"
+                            dataset_names.extend([fill] * (batch_n - len(dataset_names)))
+                        yield {
+                            "frames": batch_pt,
+                            "dataset_type": dataset_names,
+                            "dataset_name": dataset_names,
+                        }
                         continue
 
                     merged_meta: dict[str, Any] = {}
@@ -3286,8 +3381,8 @@ class MultiOXEFramePairDataset(IterableDataset):
 
                     actions_np = merged_meta["action"].numpy()
                     initial_states_np = merged_meta["initial_state"].numpy()
-                    actions = [actions_np[i] for i in range(actions_np.shape[0])]
-                    initial_states = [initial_states_np[i] for i in range(initial_states_np.shape[0])]
+                    actions = list(actions_np)
+                    initial_states = list(initial_states_np)
 
                     yield {
                         "frames": batch_pt,
@@ -3346,8 +3441,8 @@ class MultiOXEFramePairDataset(IterableDataset):
 
                 actions_np = meta_tf["action"].numpy()
                 initial_states_np = meta_tf["initial_state"].numpy()
-                actions = [actions_np[i] for i in range(actions_np.shape[0])]
-                initial_states = [initial_states_np[i] for i in range(initial_states_np.shape[0])]
+                actions = list(actions_np)
+                initial_states = list(initial_states_np)
 
                 yield {
                     "frames": pair_pt,

@@ -1,0 +1,25 @@
+# LRZ CPU-only single-job configuration
+#
+# LRZ AI Systems "CPU Nodes" partition:
+# - partition: lrz-cpu
+# - no GPUs
+
+name: lrz_cpu_only
+
+compute:
+  num_nodes: 1
+  gpus_per_node: 0
+  cpus_per_task: 16
+  mem_gb: 128
+  time_limit: "08:00:00"
+
+slurm:
+  enabled: true
+  partition: lrz-cpu
+  qos: cpu
+  account: null
+
+container:
+  # Default to a per-user container path on DSSHOME. Override via
+  # `cluster.container.image=/path/to/container.sqsh` if needed.
+  image: ${oc.env:HOME}/workspace/containers/lam.sqsh

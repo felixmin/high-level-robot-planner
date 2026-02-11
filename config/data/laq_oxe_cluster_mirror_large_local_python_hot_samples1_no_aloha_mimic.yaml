@@ -1,0 +1,23 @@
+# @package data
+
+# TF OXE preset: 30+ dataset list + python "keep-hot" mixing, tuned for
+# `samples_per_episode=1` and local TFDS mirror reads (cluster-side).
+
+defaults:
+  - dataset: oxe_cluster_mirror_large_no_aloha_mimic
+  - adapter: oxe_tf_gcs_python_hot
+  - loader: oxe_streaming
+  - preprocess: pair_256_no_meta
+  - _self_
+
+backend: oxe_tf
+
+adapter:
+  tf:
+    tfds_read:
+      source: local
+    sampling:
+      samples_per_episode: 1
+    mixing:
+      mix_block_length: 4
+      python_prefetch_queue_size: 4

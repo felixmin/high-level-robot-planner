@@ -125,6 +125,8 @@ def generate_sbatch_script(
         time_limit = time
     if time_limit is None:
         raise ValueError("Missing time limit (set time_limit or time)")
+    if gpus < 0:
+        raise ValueError("gpus must be >= 0")
 
     # Build the python command with overrides.
     # Quote each override so bash doesn't expand Hydra interpolations like `${now:...}`
@@ -161,12 +163,27 @@ else
 fi
 """
 
+    gres_line = f"#SBATCH --gres=gpu:{gpus}" if gpus > 0 else ""
+    nccl_block = ""
+    if gpus > 0:
+        nccl_block = """export NCCL_SOCKET_IFNAME=ib0
+export NCCL_DEBUG=WARN
+"""
+
+    gpu_info_block = ""
+    if gpus > 0:
+        gpu_info_block = """# Show GPU info
+nvidia-smi
+"""
+    else:
+        gpu_info_block = 'echo "CPU-only job (no GPUs requested)"\n'
+
     script_content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH --partition={partition}
 {f"#SBATCH --qos={qos}" if qos else ""}
 {f"#SBATCH --account={account}" if account else ""}
-#SBATCH --gres=gpu:{gpus}
+{gres_line}
 #SBATCH --cpus-per-task={cpus}
 #SBATCH --mem={mem}
 #SBATCH --time={time_limit}
@@ -188,8 +205,7 @@ echo "========================================"
 
 # Environment setup
 export PYTHONPATH={PROJECT_ROOT}/packages:${{PYTHONPATH:-}}
-export NCCL_SOCKET_IFNAME=ib0
-export NCCL_DEBUG=WARN
+{nccl_block}
 
 	# Persist caches on the mounted filesystem (avoid downloading models every job).
 	# Important: do not override HF_HOME here, otherwise Hugging Face auth (token) may no longer be
@@ -205,8 +221,7 @@ export NCCL_DEBUG=WARN
 
 	{hf_auth_block}
 
-# Show GPU info
-nvidia-smi
+{gpu_info_block}
 
 {tfds_root_block}
 
@@ -330,7 +345,10 @@ def main():
     partition = OmegaConf.select(cfg, "cluster.slurm.partition") or "mcml-hgx-h100-94x4"
     qos = OmegaConf.select(cfg, "cluster.slurm.qos")
     account = OmegaConf.select(cfg, "cluster.slurm.account")
-    gpus = int(OmegaConf.select(cfg, "cluster.compute.gpus_per_node") or 1)
+    gpus_value = OmegaConf.select(cfg, "cluster.compute.gpus_per_node")
+    gpus = 1 if gpus_value is None else int(gpus_value)
+    if gpus < 0:
+        raise SystemExit("cluster.compute.gpus_per_node must be >= 0")
     cpus = int(OmegaConf.select(cfg, "cluster.compute.cpus_per_task") or 8)
     time_limit = OmegaConf.select(cfg, "cluster.compute.time_limit") or "24:00:00"
 
@@ -429,7 +447,10 @@ def main():
         print(f"  QoS: {qos}")
     if account:
         print(f"  Account: {account}")
-    print(f"  GPUs: {gpus}")
+    if gpus == 0:
+        print("  GPUs: 0 (CPU-only)")
+    else:
+        print(f"  GPUs: {gpus}")
     print(f"  Time: {time_limit}")
     print(f"  Memory: {mem}")
     print(f"  CPUs: {cpus}")

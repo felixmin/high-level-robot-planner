@@ -4,6 +4,12 @@
 # These parameters are ONLY used by the TF backend (not by training/model code).
 
 tf:
+  # Metadata emission mode when preprocess.return_metadata=true.
+  # - full: include action/state/language/robot/episode fields (current behavior)
+  # - dataset_only: emit only dataset_name/dataset_type in Python mixer fast path
+  metadata:
+    mode: full               # full|dataset_only
+
   # Frame selection within each [t, t+offset] training sample.
   # Default "endpoints" preserves the current 2-frame output.
   pair_frames:
