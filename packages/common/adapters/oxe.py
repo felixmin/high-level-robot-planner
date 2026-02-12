@@ -3097,6 +3097,7 @@ class MultiOXEFramePairDataset(IterableDataset):
 
         stop = Event()
         first_error: list[BaseException] = []
+        dataset_exhausted: list[bool] = [False for _ in range(n)]
 
         queues: list[Queue] = [Queue(maxsize=queue_size) for _ in range(n)]
         threads: list[Thread] = []
@@ -3118,6 +3119,10 @@ class MultiOXEFramePairDataset(IterableDataset):
                 while not stop.is_set():
                     item = next(it)
                     queues[i].put(item)
+            except StopIteration:
+                # Finite split exhausted for this dataset (common during val/sanity checks).
+                # Do not fail the whole mixer; mark this worker as done.
+                dataset_exhausted[i] = True
             except BaseException as e:
                 first_error.append(e)
                 stop.set()
@@ -3132,11 +3137,18 @@ class MultiOXEFramePairDataset(IterableDataset):
             last_log = start
             while not stop.is_set():
                 ready = sum(1 for q in queues if q.qsize() > 0)
-                if ready >= min_ready:
+                active = sum(0 if exhausted else 1 for exhausted in dataset_exhausted)
+                min_ready_eff = min(min_ready, active)
+                if ready >= min_ready_eff:
                     break
+                if active == 0 and ready == 0:
+                    # All dataset workers exhausted before yielding any ready blocks.
+                    logger.warning("python-prefetch mixing: all dataset workers exhausted with no ready blocks")
+                    return
                 if (_time.perf_counter() - start) > timeout_s:
                     raise TimeoutError(
-                        f"Timed out waiting for dataset queues to fill (ready={ready}/{n}, min_ready={min_ready})"
+                        "Timed out waiting for dataset queues to fill "
+                        f"(ready={ready}/{n}, active={active}, min_ready={min_ready_eff})"
                     )
                 now = _time.perf_counter()
                 if now - last_log >= 5.0:
@@ -3164,8 +3176,21 @@ class MultiOXEFramePairDataset(IterableDataset):
             def _get_block_nonblocking() -> tuple[int, Any]:
                 # Prefer non-blocking fetches from weighted random datasets.
                 # If a chosen dataset is temporarily empty, resample instead of stalling.
+                active_idx = np.asarray(
+                    [i for i, exhausted in enumerate(dataset_exhausted) if not exhausted],
+                    dtype=np.int64,
+                )
+                if active_idx.size == 0:
+                    ready_idx = [i for i, q in enumerate(queues) if not q.empty()]
+                    if not ready_idx:
+                        raise StopIteration
                 for _ in range(256):
-                    ds_idx = int(rng.choice(n, p=weights))
+                    if active_idx.size > 0:
+                        active_w = weights[active_idx]
+                        active_w = active_w / np.sum(active_w)
+                        ds_idx = int(rng.choice(active_idx, p=active_w))
+                    else:
+                        ds_idx = int(rng.choice(n, p=weights))
                     try:
                         return ds_idx, queues[ds_idx].get_nowait()
                     except Empty:
@@ -3186,6 +3211,8 @@ class MultiOXEFramePairDataset(IterableDataset):
                         except Empty:
                             continue
                     if (_time.perf_counter() - wait_start) > timeout_s:
+                        if all(dataset_exhausted) and all(q.empty() for q in queues):
+                            raise StopIteration
                         raise TimeoutError(
                             f"Timed out waiting for any dataset queue to produce a block (n={n})"
                         )
@@ -3234,7 +3261,10 @@ class MultiOXEFramePairDataset(IterableDataset):
                     blocks_meta_tf: list[dict[str, Any]] = []
                     selected_ds_indices: list[int] = []
                     for _ in range(blocks_per_batch):
-                        ds_idx, block = _get_block_nonblocking()
+                        try:
+                            ds_idx, block = _get_block_nonblocking()
+                        except StopIteration:
+                            return
                         selected_ds_indices.append(ds_idx)
                         if self.return_metadata and self.metadata_mode == "full":
                             if not isinstance(block, (tuple, list)) or len(block) != 2:
@@ -3319,7 +3349,10 @@ class MultiOXEFramePairDataset(IterableDataset):
                     blocks_meta_tf: list[dict[str, Any]] = []
                     selected_ds_indices: list[int] = []
                     for _ in range(blocks_per_batch):
-                        ds_idx, block = _get_block_nonblocking()
+                        try:
+                            ds_idx, block = _get_block_nonblocking()
+                        except StopIteration:
+                            return
                         selected_ds_indices.append(ds_idx)
                         if self.return_metadata and self.metadata_mode == "full":
                             if not isinstance(block, (tuple, list)) or len(block) != 2:

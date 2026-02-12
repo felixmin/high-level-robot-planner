@@ -32,3 +32,10 @@ data:
       tfds_read:
         source: auto        # gcs|local|auto
         local_root: null    # e.g. /dss/.../datasets/open-x-embodiment
+
+# Optional: override cluster container image per user.
+# Most experiments include this file as optional `/user_config: local`,
+# so this value cleanly overrides `cluster.container.image`.
+cluster:
+  container:
+    image: null            # e.g. /dss/.../enroot/lam.sqsh

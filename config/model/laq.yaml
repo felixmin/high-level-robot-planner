@@ -35,9 +35,9 @@ use_pixel_decoder: false # Predict next frame's pixels with gradients to encoder
 flow:
   enabled: true
   model: raft_small    # "raft_small" or "raft_large"
-  loss_weight: 0.1     # Weight for flow loss in total loss
+  loss_weight: 1.0     # Weight for flow loss in total loss
   decoder_depth: 2     # Transformer depth for flow decoder
-  warmup_steps: 10000
+  warmup_steps: 0
   teacher_num_flow_updates: 6
   teacher_chunk_size: 64
 

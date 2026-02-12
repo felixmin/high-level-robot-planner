@@ -393,6 +393,16 @@ def main():
         laq_ckpt_path = Path(str(laq_ckpt))
         if laq_ckpt_path.is_absolute():
             extra_mounts.append(laq_ckpt_path.parent)
+    resume_ckpt = OmegaConf.select(cfg, "training.resume_from_checkpoint")
+    if resume_ckpt:
+        resume_ckpt_path = Path(str(resume_ckpt))
+        if resume_ckpt_path.is_absolute():
+            extra_mounts.append(resume_ckpt_path.parent)
+    weights_ckpt = OmegaConf.select(cfg, "training.load_weights_from")
+    if weights_ckpt:
+        weights_ckpt_path = Path(str(weights_ckpt))
+        if weights_ckpt_path.is_absolute():
+            extra_mounts.append(weights_ckpt_path.parent)
 
     # Local OXE TFDS mirrors must be mounted explicitly for Enroot containers.
     # When absent, OXE will fall back to GCS (for source=auto) but will not be able

@@ -1,0 +1,21 @@
+# @package data
+
+# OXE cluster preset for all-pairs sampling on the local mirror.
+# "all" here means all currently usable datasets in the cluster preset
+# (known-broken datasets are excluded in the dataset config).
+
+defaults:
+  - dataset: oxe_cluster_mirror_large_no_aloha_mimic
+  - adapter: oxe_tf_cluster_fast
+  - loader: oxe_streaming
+  - preprocess: pair_256
+  - _self_
+
+backend: oxe_tf
+
+adapter:
+  tf:
+    metadata:
+      mode: full
+    sampling:
+      samples_per_episode: 0

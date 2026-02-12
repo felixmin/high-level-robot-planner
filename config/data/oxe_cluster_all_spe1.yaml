@@ -1,12 +1,12 @@
 # @package data
 
-# OXE cluster preset for one-sample-per-episode throughput on the local mirror.
+# OXE cluster preset for one-sample-per-episode on the local mirror.
 # "all" here means all currently usable datasets in the cluster preset
 # (known-broken datasets are excluded in the dataset config).
 
 defaults:
   - dataset: oxe_cluster_mirror_large_no_aloha_mimic
-  - adapter: oxe_tf_gcs_python_hot
+  - adapter: oxe_tf_cluster_fast
   - loader: oxe_streaming
   - preprocess: pair_256
   - _self_
@@ -17,7 +17,5 @@ adapter:
   tf:
     metadata:
       mode: full
-    tfds_read:
-      source: local
     sampling:
       samples_per_episode: 1

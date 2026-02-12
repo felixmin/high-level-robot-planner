@@ -10,6 +10,7 @@ defaults:
   - /model@model: laq
   - /data@data: laq_oxe_all_low_ram
   - /training@training: laq_optimizer
+  - /training/validation@training.validation: laq_cluster_rich
   - /cluster@cluster: mcml_h100
   - optional /user_config: local
 
@@ -20,79 +21,21 @@ experiment:
 
 model:
   flow:
-    model: raft_small    # "raft_small" or "raft_large"
-    loss_weight: 0.1     # Weight for flow loss in total loss
-    decoder_depth: 8     # Transformer depth for flow decoder
+    model: raft_large    # "raft_small" or "raft_large"
+    loss_weight: 1.0     # Weight for flow loss in total loss
     warmup_steps: 10000
+    decoder_depth: 2
+  codebook_replace_schedule: []
 
 data:
   loader:
-    batch_size: 32
-    num_workers: 0
-
-  adapter:
-    tf:
-      train:
-        episode_queue_shuffle_buffer: 0
-        intra_episode_sample_shuffle_buffer: 0
-        global_stream_shuffle_buffer: 0
-      val:
-        episode_queue_shuffle_buffer: 0
-        intra_episode_sample_shuffle_buffer: 0
-        global_stream_shuffle_buffer: 0
-      tfds_read:
-        source: auto
-        local_root: /dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment
-        cycle_length: 1
-      pipeline:
-        episode_concurrency: 1
-        transform_parallelism: 1
-        interleave_parallelism: 1
-      mixing:
-        mix_block_length: 1
-        parallelism_mode: divide
-        strategy: sample
-        per_dataset_private_threadpool_size: 64
-      prefetch:
-        episode_queue_buffer: 0
-        per_dataset_stream_buffer: 0
-        final_stream_buffer: 1
-
-      iterator:
-        persistent: true
-      sampling:
-        samples_per_episode: 0
-        seed: 0
-
-  preprocess:
-    return_metadata: false
+    batch_size: 64
 
 training:
-  optimizer:
-    lr: 1.0e-4
-  progress_bar:
-    enabled: true
-    refresh_rate: 10
-    leave: false
-  model_summary:
-    enabled: true
-  scheduler:
-    type: none
   profiler:
     enabled: true
     type: advanced
     filename: fit-profile
-  throughput:
-    enabled: true
-  dataset_usage_logger:
-    enabled: false
-  validation:
-    check_interval: 1000
-    limit_batches: 500
-    max_cached_samples: 0
-    num_fixed_samples: 0
-    num_random_samples: 0
-    buckets: null
 
 logging:
   level: INFO

@@ -319,3 +319,25 @@ We hit the throughput target with composite batches; remaining work is mostly er
 - A “startup warm blocks per dataset” approach was attempted (to force each dataset to produce a few blocks
   before normal mixing), but it triggered a tf.data shape error at iterator creation for batched output
   (`expected [128,...] but got []`). It was removed to keep the pipeline stable.
+
+## 2026-02-12: Cluster LAQ throughput reference (`5479511`)
+Run:
+- `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/runs/2026-02-12_12-06-26_laq_oxe_cluster/5479511.out`
+
+Setup summary:
+- `experiment=laq_oxe_cluster`
+- small 4-dataset mix (`language_table`, `bridge`, `rt1`, `robonet`)
+- `samples_per_episode=0` (all pairs mode), `batch_size=32`
+- local TFDS mirror (`data.adapter.tf.tfds_read.source=local`)
+- `cpus_per_task=32`
+- flow disabled (`model.flow.enabled=false`)
+- full validation suite active (no validation throttling overrides)
+
+Observed training throughput:
+- ~`3.04 it/s` at `200/517899`
+- ~`3.33 it/s` at `300/517899`
+- ~`3.54 it/s` at `500/517899`
+
+Outcome:
+- job finished successfully (`Thu Feb 12 12:22:57 CET 2026`)
+- this run is a valid high-throughput reference for the small 4-dataset regime, not for the full 29-dataset setup

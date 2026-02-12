@@ -1,0 +1,51 @@
+# @package data.adapter
+
+# Canonical adapter for OXE training on cluster-local TFDS mirrors.
+#
+# This is the single recommended "fast" cluster path used by:
+# - data=oxe_cluster_all_spe0
+# - data=oxe_cluster_all_spe1
+#
+# Design:
+# - local mirror only (avoid accidental GCS mode on cluster)
+# - python mixer with controlled block/queue settings
+# - low-memory defaults to keep startup/prefetch predictable across 29 datasets
+
+defaults:
+  - oxe_tf_low_ram
+  - _self_
+
+tf:
+  tfds_read:
+    source: local
+    local_root: /dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment
+    skip_steps_decoding: true
+    cycle_length: 8
+    decode_parallelism: 4
+    interleave_parallelism: 4
+
+  pipeline:
+    emit_encoded_pairs: true
+    post_mix_decode_resize: false
+    episode_concurrency: 4
+    transform_parallelism: 8
+    interleave_parallelism: 4
+
+  train:
+    episode_queue_shuffle_buffer: 0
+    intra_episode_sample_shuffle_buffer: 0
+    global_stream_shuffle_buffer: 0
+
+  prefetch:
+    per_dataset_stream_buffer: 0
+    final_stream_buffer: 0
+
+  mixing:
+    strategy: python
+    mix_block_length: 4
+    selector_run_length: 1
+    parallelism_mode: sqrt
+    python_prefetch_queue_size: 4
+    python_prefetch_min_ready_datasets: 8
+    python_prefetch_wait_timeout_s: 1200
+    per_dataset_private_threadpool_size: 0

@@ -73,7 +73,7 @@ validation:
 
   # Limit validation batches to save time (0.1 = 10% of val set, or int for exact batches)
   # Set to 1.0 to run full validation.
-  limit_batches: 1.0
+  limit_batches: 500
 
   # Limit validation batches to save time (0.1 = 10% of val set, or int for exact batches)
   # With 6300 val frame pairs, 0.1 = ~630 pairs = ~160 batches at batch_size 4

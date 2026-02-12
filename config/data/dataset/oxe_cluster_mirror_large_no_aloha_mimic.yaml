@@ -8,6 +8,9 @@
 #
 # Note: `approx_num_pairs` for newly added datasets is intentionally approximate.
 
+
+# in this "no_aloha_mimic" 3 datasets were removed because they are broken on the cluster
+
 oxe:
   datasets:
     # Existing 11 (kept)
