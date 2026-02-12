@@ -52,7 +52,7 @@ Quick reference to all documentation in this project.
 
 - **[oxe_bridge_memory.md](oxe_bridge_memory.md)** - Bridge dataset memory analysis
 - **[lapa_comparison.md](lapa_comparison.md)** - LAPA project comparison
-- **[validation_refactor_plan.md](validation_refactor_plan.md)** - Validation system design notes
+- **[hlrp_action_expert.md](hlrp_action_expert.md)** - Action expert architecture notes (PI vs SmolVLA vs diffusion)
 
 ---
 
