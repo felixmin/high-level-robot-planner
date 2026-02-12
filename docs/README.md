@@ -1,74 +1,27 @@
 # Documentation Index
 
-Quick reference to all documentation in this project.
+This index is intentionally short and points to the current active docs.
 
-## Core Documentation
+## Start here
 
-- **[../CLAUDE.md](../CLAUDE.md)** - Main project documentation for Claude Code
-  - Project architecture, training stages, configuration system
-  - Common workflows, dependencies, implementation notes
+1. `../CLAUDE.md` - project overview and architecture.
+2. `LEROBOT_INTEGRATION_PLAN.md` - single source of truth for LeRobot integration work.
 
-## Infrastructure & Cluster
+## Foundation model docs
 
-- **[job_submission.md](job_submission.md)** - Job submission to LRZ cluster (⭐ Start here)
-  - Single job and sweep submission with `submit_job.py`
-  - CLI options, container config, monitoring
-  - Design decisions and alternative approaches
+- `foundation_model/stage2_cosmos2_tokens.md` - implemented Stage-2 design and behavior.
+- `hlrp_action_expert.md` - action-expert design notes and options.
 
-- **[lrz_workflow.md](lrz_workflow.md)** - LRZ cluster setup and monitoring
-  - Account setup, SSH config, storage quotas
-  - Manual sbatch submission (legacy)
+## Training and infra
 
-## Training Guides
+- `job_submission.md` - LRZ job submission workflow.
+- `general/lrz_workflow.md` - LRZ setup/ops notes.
+- `normal_training_guide.md` - local and cluster training reference.
+- `profiling.md` - profiling and throughput debugging.
 
-- **[normal_training_guide.md](normal_training_guide.md)** - LAQ training reference
-  - Multi-dataset configuration and filtering
-  - Common commands and configuration examples
-  - Troubleshooting guide
+## Data docs
 
-- **[profiling.md](profiling.md)** - Performance profiling
-  - SimpleProfiler, AdvancedProfiler, PyTorchProfiler usage
-  - Diagnosing slow training, common bottlenecks
-
-## Data & Validation Systems
-
-- **[validation_system.md](validation_system.md)** - Validation architecture
-  - Bucket-strategy binding system
-  - Validation strategies and metadata requirements
-
-- **[dataset_adapter_plan.md](dataset_adapter_plan.md)** - Multi-dataset adapters
-  - Unified adapter system for YouTube, BridgeV2 datasets
-  - Configuration examples and metadata fields
-
-- **[dataset_metadata.md](dataset_metadata.md)** - Dataset metadata reference
-  - Metadata structure per dataset type
-  - Filtering examples and access patterns
-
-- **[oxe_datasets.md](oxe_datasets.md)** - OXE dataset integration
-  - Open X-Embodiment dataset streaming
-  - TensorFlow Datasets configuration
-
-## Reference Documents
-
-- **[oxe_bridge_memory.md](oxe_bridge_memory.md)** - Bridge dataset memory analysis
-- **[lapa_comparison.md](lapa_comparison.md)** - LAPA project comparison
-- **[hlrp_action_expert.md](hlrp_action_expert.md)** - Action expert architecture notes (PI vs SmolVLA vs diffusion)
-
----
-
-## Quick Links
-
-**Getting started:**
-1. Read [../CLAUDE.md](../CLAUDE.md) for project overview
-2. Submit jobs: [job_submission.md](job_submission.md)
-3. Train locally: [normal_training_guide.md](normal_training_guide.md)
-
-**Cluster submission:**
-- [job_submission.md](job_submission.md) - Single jobs and sweeps
-
-**Performance issues:**
-- [profiling.md](profiling.md)
-
-**Data loading:**
-- [dataset_adapter_plan.md](dataset_adapter_plan.md) - Local datasets
-- [oxe_datasets.md](oxe_datasets.md) - OXE streaming
+- `data/oxe_datasets.md` - OXE dataset integration details.
+- `data/dataset_adapter_plan.md` - adapter behavior and schema notes.
+- `data/dataset_metadata.md` - metadata fields and filtering reference.
+- `validation_system.md` - validation architecture and buckets.

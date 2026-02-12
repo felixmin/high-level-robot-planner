@@ -3,8 +3,8 @@
 # Canonical adapter for OXE training on cluster-local TFDS mirrors.
 #
 # This is the single recommended "fast" cluster path used by:
-# - data=oxe_cluster_all_spe0
-# - data=oxe_cluster_all_spe1
+# - data=oxe_cluster_spe0
+# - data=oxe_cluster_spe1
 #
 # Design:
 # - local mirror only (avoid accidental GCS mode on cluster)
