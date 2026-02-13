@@ -1,7 +1,7 @@
 # MCML H100 Single Node Configuration
 # Single node on MCML H100 partition
 
-name: mcml_h100
+name: mcml_x100
 
 compute:
   num_nodes: 1
@@ -10,7 +10,7 @@ compute:
 
 slurm:
   enabled: true
-  partition: mcml-hgx-h100-94x4
+  partition: mcml-hgx-h100-94x4,mcml-hgx-a100-80x4
   qos: mcml
   account: null  # Set if needed
 

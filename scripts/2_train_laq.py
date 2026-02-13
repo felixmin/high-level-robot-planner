@@ -26,6 +26,7 @@ import torch
 import wandb
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Callback, TQDMProgressBar
+from lightning.fabric.plugins.io.torch_io import TorchCheckpointIO
 
 
 from common.data_factory import create_datamodule
@@ -40,6 +41,13 @@ from laq import (
     ValidationStrategyCallback,
     create_validation_strategies,
 )
+
+
+class TrustedFullCheckpointIO(TorchCheckpointIO):
+    """Compatibility for trusted Lightning checkpoints under PyTorch>=2.6."""
+
+    def load_checkpoint(self, path, map_location=None, weights_only=False):
+        return super().load_checkpoint(path, map_location=map_location, weights_only=False)
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
@@ -411,12 +419,19 @@ def main(cfg: DictConfig):
             "    enabled: true|false\n"
         )
 
+    ckpt_path = training_config.get("resume_from_checkpoint", None)
+    trainer_plugins = None
+    if ckpt_path:
+        trainer_plugins = [TrustedFullCheckpointIO()]
+        logger.info("✓ Resume compatibility: forcing full checkpoint deserialization")
+
     trainer = pl.Trainer(
         max_epochs=training_config.epochs,
         max_steps=training_config.get("max_steps") or -1,  # Convert None to -1
         accelerator="auto",
         devices="auto",
         strategy="auto",
+        plugins=trainer_plugins,
         precision=cfg.get("precision", "32-true"),
         gradient_clip_val=training_config.gradient.clip_val,
         gradient_clip_algorithm=training_config.gradient.clip_algorithm,
@@ -463,7 +478,6 @@ def main(cfg: DictConfig):
         logger.info(f"  - Loaded {len(model_state)} weight tensors (fresh optimizer/scheduler)")
 
     # Check for full resume (restores optimizer/scheduler state)
-    ckpt_path = training_config.get("resume_from_checkpoint", None)
     if ckpt_path:
         logger.info(f"✓ Resuming from checkpoint: {ckpt_path}")
 

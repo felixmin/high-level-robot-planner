@@ -180,6 +180,9 @@ This script is a pure Hydra CLI. Common overrides:
 - `cluster.slurm.partition=...`, `cluster.slurm.qos=...`, `cluster.slurm.account=...`
 - `cluster.container.image=/path/to/container.sqsh`
 
+If `cluster.compute.cpus_per_task` or `cluster.compute.mem_gb` are not set, `submit_job.py`
+does not emit `#SBATCH --cpus-per-task` / `#SBATCH --mem`, so Slurm/cluster defaults are used.
+
 ---
 
 ## Container Configuration
@@ -265,8 +268,8 @@ Each job generates a script like:
 #SBATCH --partition=lrz-hgx-h100-94x4
 #SBATCH --qos=mcml
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=200G
+#SBATCH --cpus-per-task=16  # Optional; omitted when unset
+#SBATCH --mem=128G          # Optional; omitted when unset
 #SBATCH --time=15:00:00
 #SBATCH --output=/dss/.../runs/slurm/%j.out
 #SBATCH --error=/dss/.../runs/slurm/%j.err

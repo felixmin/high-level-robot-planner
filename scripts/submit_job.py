@@ -104,8 +104,8 @@ def generate_sbatch_script(
     qos: str | None,
     account: str | None,
     gpus: int,
-    mem: str,
-    cpus: int,
+    mem: str | None,
+    cpus: int | None,
     container_image: str,
     job_name: str,
     container_mounts: str,
@@ -127,6 +127,8 @@ def generate_sbatch_script(
         raise ValueError("Missing time limit (set time_limit or time)")
     if gpus < 0:
         raise ValueError("gpus must be >= 0")
+    if cpus is not None and cpus <= 0:
+        raise ValueError("cpus must be > 0 when provided")
 
     # Build the python command with overrides.
     # Quote each override so bash doesn't expand Hydra interpolations like `${now:...}`
@@ -178,14 +180,17 @@ nvidia-smi
     else:
         gpu_info_block = 'echo "CPU-only job (no GPUs requested)"\n'
 
+    cpus_line = f"#SBATCH --cpus-per-task={cpus}" if cpus is not None else ""
+    mem_line = f"#SBATCH --mem={mem}" if mem else ""
+
     script_content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH --partition={partition}
 {f"#SBATCH --qos={qos}" if qos else ""}
 {f"#SBATCH --account={account}" if account else ""}
 {gres_line}
-#SBATCH --cpus-per-task={cpus}
-#SBATCH --mem={mem}
+{cpus_line}
+{mem_line}
 #SBATCH --time={time_limit}
 #SBATCH --output={slurm_logs_dir}/%j.out
 #SBATCH --error={slurm_logs_dir}/%j.err
@@ -349,7 +354,10 @@ def main():
     gpus = 1 if gpus_value is None else int(gpus_value)
     if gpus < 0:
         raise SystemExit("cluster.compute.gpus_per_node must be >= 0")
-    cpus = int(OmegaConf.select(cfg, "cluster.compute.cpus_per_task") or 8)
+    cpus_value = OmegaConf.select(cfg, "cluster.compute.cpus_per_task")
+    cpus = int(cpus_value) if cpus_value is not None else None
+    if cpus is not None and cpus <= 0:
+        raise SystemExit("cluster.compute.cpus_per_task must be > 0 when set")
     time_limit = OmegaConf.select(cfg, "cluster.compute.time_limit") or "24:00:00"
 
     # Container image is required for Slurm submissions.
@@ -368,11 +376,14 @@ def main():
             "Set `cluster.container.image=/path/to/container.sqsh` (or update your cluster config)."
         )
 
-    # Memory: use cluster config > default 200G
-    if OmegaConf.select(cfg, "cluster.compute.mem_gb"):
-        mem = f"{cfg.cluster.compute.mem_gb}G"
+    mem_value = OmegaConf.select(cfg, "cluster.compute.mem_gb")
+    if mem_value is None:
+        mem = None
     else:
-        mem = "200G"  # Safe default for OXE streaming
+        mem_gb = int(mem_value)
+        if mem_gb <= 0:
+            raise SystemExit("cluster.compute.mem_gb must be > 0 when set")
+        mem = f"{mem_gb}G"
 
     # Ensure directories exist on the shared filesystem.
     # For single jobs, runs_dir is the job directory.
@@ -462,8 +473,8 @@ def main():
     else:
         print(f"  GPUs: {gpus}")
     print(f"  Time: {time_limit}")
-    print(f"  Memory: {mem}")
-    print(f"  CPUs: {cpus}")
+    print(f"  Memory: {mem}" if mem else "  Memory: cluster default (unset)")
+    print(f"  CPUs: {cpus}" if cpus is not None else "  CPUs: cluster default (unset)")
     print(f"  Container: {container_image}")
     print(f"  Runs dir: {runs_dir}")
     print(f"  Cache dir: {cache_dir}")

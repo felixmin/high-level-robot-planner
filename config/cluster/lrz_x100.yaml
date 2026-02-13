@@ -1,7 +1,7 @@
-# MCML H100 Single Node Configuration
-# Single node on MCML H100 partition
+# LRZ H100 Single Node Configuration
+# 1 node with 4x H100 GPUs
 
-name: mcml_h100
+name: lrz_x100
 
 compute:
   num_nodes: 1
@@ -10,8 +10,7 @@ compute:
 
 slurm:
   enabled: true
-  partition: mcml-hgx-h100-94x4
-  qos: mcml
+  partition: lrz-hgx-h100-94x4,lrz-hgx-a100-80x4,lrz-dgx-a100-80x8
   account: null  # Set if needed
 
 container:
