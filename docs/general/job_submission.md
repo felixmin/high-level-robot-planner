@@ -172,6 +172,7 @@ This script is a pure Hydra CLI. Common overrides:
 
 - `submit.dry_run=true` (print sbatch scripts, don’t submit)
 - `submit.script=4_train_foundation` (override which `scripts/*.py` entrypoint runs)
+- `submit.pre_commands=[...]` (run shell commands before training starts)
 - `cluster=<name>` (select cluster config)
 - `cluster.compute.gpus_per_node=...`
 - `cluster.compute.cpus_per_task=...`
@@ -182,6 +183,31 @@ This script is a pure Hydra CLI. Common overrides:
 
 If `cluster.compute.cpus_per_task` or `cluster.compute.mem_gb` are not set, `submit_job.py`
 does not emit `#SBATCH --cpus-per-task` / `#SBATCH --mem`, so Slurm/cluster defaults are used.
+
+---
+
+## Installing Local Policy Plugins Per Job
+
+When policy code changes frequently and should stay outside the container image, run an editable install at job start:
+
+```bash
+python scripts/submit_job.py \
+    cluster=lrz_h100 \
+    experiment=vla_smol \
+    'submit.pre_commands=["pip install -e /dss/.../high-level-robot-planner/lerobot_policy_hlrp"]'
+```
+
+This executes `pip install -e ...` inside the job container before the training command, so `lerobot`
+policy discovery can see the plugin package for that run.
+
+For multiple setup steps, pass multiple commands:
+
+```bash
+python scripts/submit_job.py \
+    cluster=lrz_h100 \
+    experiment=vla_smol \
+    'submit.pre_commands=["pip install -e /dss/.../lerobot","pip install -e /dss/.../high-level-robot-planner/lerobot_policy_hlrp"]'
+```
 
 ---
 
