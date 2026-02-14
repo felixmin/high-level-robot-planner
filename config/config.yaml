@@ -60,6 +60,9 @@ submit:
   dry_run: false
   # Where to persist pretrained model downloads (HF + torch/torchvision).
   cache_dir: cache
+  # Optional shell commands to run before launching the training command.
+  # Typical use case: editable-install a local LeRobot plugin package.
+  pre_commands: []
 
 # Lightweight benchmarking knobs (used by scripts/bench_oxe_dataloader.py)
 benchmark:

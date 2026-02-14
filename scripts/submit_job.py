@@ -97,6 +97,44 @@ def generate_sweep_combinations(sweep_params: dict[str, list[str]]) -> list[list
     return combinations
 
 
+def normalize_shell_commands(raw_value, *, field_name: str) -> list[str]:
+    """Normalize a shell-command config value into a list of command strings."""
+
+    if raw_value is None:
+        return []
+
+    if isinstance(raw_value, str):
+        command = raw_value.strip()
+        return [command] if command else []
+
+    if OmegaConf.is_list(raw_value) or isinstance(raw_value, (list, tuple)):
+        commands: list[str] = []
+        for idx, value in enumerate(raw_value):
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise SystemExit(f"{field_name}[{idx}] must be a string")
+            command = value.strip()
+            if command:
+                commands.append(command)
+        return commands
+
+    raise SystemExit(f"{field_name} must be a string or list of strings")
+
+
+def normalize_paths(raw_value, *, field_name: str) -> list[Path]:
+    """Normalize a path config value into a list of absolute paths."""
+
+    raw_paths = normalize_shell_commands(raw_value, field_name=field_name)
+    paths: list[Path] = []
+    for raw_path in raw_paths:
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        paths.append(candidate)
+    return paths
+
+
 def generate_sbatch_script(
     script: str,
     overrides: list,
@@ -113,6 +151,7 @@ def generate_sbatch_script(
     cache_dir: Path,
     hf_token_path: Path | None,
     tfds_local_root: Path | None,
+    pre_commands: list[str] | None = None,
     *,
     time_limit: str | None = None,
     time: str | None = None,
@@ -135,6 +174,20 @@ def generate_sbatch_script(
     # or `${hydra.job.num}` inside the sbatch script.
     python_args = ["python", f"scripts/{script}.py", *overrides]
     python_cmd = " ".join(shlex.quote(str(arg)) for arg in python_args).strip()
+
+    pre_command_block = ""
+    if pre_commands:
+        pre_lines = [
+            "# Run optional pre-commands (e.g., editable policy install).",
+            "echo \"Running submit.pre_commands...\"",
+        ]
+        total = len(pre_commands)
+        for idx, cmd in enumerate(pre_commands, start=1):
+            pre_lines.append(
+                f"echo {shlex.quote(f'[pre_command {idx}/{total}] {cmd}')}"
+            )
+            pre_lines.append(cmd)
+        pre_command_block = "\n".join(pre_lines) + "\n"
 
     if hf_token_path:
         hf_auth_block = f"""# Hugging Face auth for gated repos (e.g. DINOv3).
@@ -230,6 +283,8 @@ export PYTHONPATH={PROJECT_ROOT}/packages:${{PYTHONPATH:-}}
 
 {tfds_root_block}
 
+{pre_command_block}
+
 # Run training
 {python_cmd}
 
@@ -281,6 +336,14 @@ def main():
     if not cache_dir.is_absolute():
         cache_dir = resolved_logging_root / cache_dir
 
+    pre_commands = normalize_shell_commands(
+        OmegaConf.select(cfg, "submit.pre_commands"),
+        field_name="submit.pre_commands",
+    )
+    submit_extra_mounts = normalize_paths(
+        OmegaConf.select(cfg, "submit.extra_mounts"),
+        field_name="submit.extra_mounts",
+    )
 
     # Check for sweep parameters
     sweep_params = parse_sweep_params(cfg)
@@ -297,6 +360,14 @@ def main():
         print(f"\nPaths:")
         print(f"  Runs dir: {runs_dir}")
         print(f"  Cache dir: {cache_dir}")
+        if pre_commands:
+            print("  Pre-commands:")
+            for pre_cmd in pre_commands:
+                print(f"    {pre_cmd}")
+        if submit_extra_mounts:
+            print("  Extra mounts:")
+            for mount_path in submit_extra_mounts:
+                print(f"    {mount_path}")
         runs_dir.parent.mkdir(parents=True, exist_ok=True)
         cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -338,10 +409,23 @@ def main():
 
             if dry_run:
                 print(f"\n[DRY RUN] {job_runs_dir.name}: {override_str}")
+                if pre_commands:
+                    print("  pre-commands:")
+                    for pre_cmd in pre_commands:
+                        print(f"    {pre_cmd}")
                 print("  " + " ".join(cmd))
                 continue
 
             print(f"\nRunning {job_runs_dir.name}: {override_str}" if override_str else f"\nRunning {job_runs_dir.name}")
+            for pre_cmd in pre_commands:
+                print(f"  Running pre-command: {pre_cmd}")
+                subprocess.run(
+                    pre_cmd,
+                    cwd=str(PROJECT_ROOT),
+                    env=base_env,
+                    shell=True,
+                    check=True,
+                )
             subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=base_env, check=True)
 
         return
@@ -434,6 +518,15 @@ def main():
 
     # Build container mounts: always mount the project root, plus any external run/cache roots.
     # Mount runs_dir.parent to include all sweep job directories (which are siblings).
+    for mount_path in submit_extra_mounts:
+        if not mount_path.exists():
+            print(
+                "WARNING: submit.extra_mounts path does not exist on the submit host; "
+                f"skipping container mount: {mount_path}"
+            )
+            continue
+        extra_mounts.append(mount_path)
+
     mount_roots: list[Path] = [PROJECT_ROOT, runs_dir.parent, cache_dir, *extra_mounts]
     if hf_token_path is not None:
         mount_roots.append(hf_token_path.parent)
@@ -478,6 +571,14 @@ def main():
     print(f"  Container: {container_image}")
     print(f"  Runs dir: {runs_dir}")
     print(f"  Cache dir: {cache_dir}")
+    if pre_commands:
+        print("  Pre-commands:")
+        for pre_cmd in pre_commands:
+            print(f"    {pre_cmd}")
+    if submit_extra_mounts:
+        print("  Extra mounts:")
+        for mount_path in submit_extra_mounts:
+            print(f"    {mount_path}")
 
     # Submit jobs for each sweep combination
     submitted_jobs = []
@@ -538,6 +639,7 @@ def main():
             cache_dir=cache_dir,
             hf_token_path=hf_token_path,
             tfds_local_root=tfds_local_root_path,
+            pre_commands=pre_commands,
         )
 
         if dry_run:
