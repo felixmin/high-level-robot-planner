@@ -490,7 +490,11 @@ def main(cfg: DictConfig):
     # Print best checkpoint
     if checkpoint_callback.best_model_path:
         logger.info(f"✓ Best checkpoint: {checkpoint_callback.best_model_path}")
-        logger.info(f"  - Best val/loss: {checkpoint_callback.best_model_score:.4f}")
+        best_score = checkpoint_callback.best_model_score
+        if best_score is None:
+            logger.warning("  - Best val/loss unavailable (no validation metric recorded in this run state)")
+        else:
+            logger.info(f"  - Best val/loss: {float(best_score):.4f}")
 
     if wandb.run:
         wandb.finish()
