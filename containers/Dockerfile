@@ -1,81 +1,54 @@
-# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# This Dockerfile is designed for lerobot developers who want to
-# mount their code into the container at runtime for live development.
-# The virtual environment is placed in /opt/lerobot-venv to avoid
-# being shadowed when mounting code to /lerobot.
-
-# docker build -f docker/Dockerfile.user -t lerobot-user .
-# docker run -it --gpus all -v $(pwd):/lerobot --rm lerobot-user
-
-# Configure the base image
-# FROM nvcr.io/nvidia/cuda:12.4.0-devel-ubuntu22.04
 FROM nvcr.io/nvidia/pytorch:25.10-py3
 
 # Configure environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
-    MUJOCO_GL=osmesa \
-    PATH=/opt/lerobot-venv/bin:$PATH
+    MUJOCO_GL=egl
 
-# ENV NVIDIA_VISIBLE_DEVICES ${NVIDIA_VISIBLE_DEVICES:-all}
-# ENV NVIDIA_DRIVER_CAPABILITIES ${NVIDIA_DRIVER_CAPABILITIES:+$NVIDIA_DRIVER_CAPABILITIES,}graphics
-
-# Install system dependencies and uv (as root)
+# Install system dependencies (as root)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git curl libglib2.0-0 libegl1-mesa-dev libgl1-mesa-glx libegl1-mesa ffmpeg  libosmesa6-dev libglfw3 xvfb \
-    libusb-1.0-0-dev speech-dispatcher libgeos-dev portaudio19-dev \
-    cmake pkg-config ninja-build \
-    python3.10 python3.10-venv python3.10-dev \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh \
-    && mv /root/.local/bin/uv /usr/local/bin/uv \
+    build-essential git curl \
+    libglib2.0-0 \
+    libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev \
+    libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev \
+    libswscale-dev libswresample-dev libavfilter-dev \
+    ffmpeg \
+    pkg-config \
     && useradd --create-home --shell /bin/bash user_lerobot \
     && usermod -aG sudo user_lerobot \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Create application directory and virtual environment directory with proper permissions
-WORKDIR /lerobot
-RUN chown -R user_lerobot:user_lerobot /lerobot && \
-    mkdir -p /opt/lerobot-venv && \
-    chown -R user_lerobot:user_lerobot /opt/lerobot-venv
+WORKDIR /workspace/high-level-robot-planner
+RUN chown -R user_lerobot:user_lerobot /workspace
 
 # Switch to the non-root user
 USER user_lerobot
 
-# Environment variables for the testing
+# Environment variables
+ARG CONDA_ENV_NAME=hlrp
+ENV PATH=/opt/conda/envs/${CONDA_ENV_NAME}/bin:/opt/conda/bin:$PATH
 ENV HOME=/home/user_lerobot \
     HF_HOME=/home/user_lerobot/.cache/huggingface \
     HF_LEROBOT_HOME=/home/user_lerobot/.cache/huggingface/lerobot \
     TORCH_HOME=/home/user_lerobot/.cache/torch \
     TRITON_CACHE_DIR=/home/user_lerobot/.cache/triton
 
-# Create the virtual environment in /opt
-# We use /opt instead of /lerobot so it won't be shadowed by volume mounts
-RUN uv venv --python python3.10 /opt/lerobot-venv
-
-# Install Python dependencies for caching
-COPY --chown=user_lerobot:user_lerobot pyproject.toml README.md MANIFEST.in ./
-COPY --chown=user_lerobot:user_lerobot src/ src/
-
-ARG UNBOUND_DEPS=false
-
-RUN if [ "$UNBOUND_DEPS" = "true" ]; then \
-    sed -i 's/,[[:space:]]*<[0-9\.]*//g' pyproject.toml; \
-    echo "Dependencies unbound:" && cat pyproject.toml; \
-    fi
-
-RUN uv pip install --no-cache -e ".[all]"
+# Preserve the PyTorch stack from the NGC base image:
+# 1) clone base env (keeps torch/torchvision/torchaudio versions)
+# 2) install cmake<4 + ninja
+# 3) install egl_probe
+# 4) install lerobot + libero with torch packages pinned via constraints
+# Policy plugin is installed at runtime from the mounted repo.
+RUN conda create -y -n ${CONDA_ENV_NAME} --clone base && \
+    conda install -y -n ${CONDA_ENV_NAME} -c conda-forge "cmake<4" ninja && \
+    conda run -n ${CONDA_ENV_NAME} python -c "import importlib.util, importlib; \
+pkgs=['torch','torchvision','torchaudio']; \
+lines=[]; \
+[lines.append(f'{p}=={importlib.import_module(p).__version__}') for p in pkgs if importlib.util.find_spec(p) is not None]; \
+open('/tmp/torch-constraints.txt','w',encoding='utf-8').write('\\n'.join(lines) + ('\\n' if lines else ''))" && \
+    conda run -n ${CONDA_ENV_NAME} pip install --no-build-isolation egl_probe && \
+    conda run -n ${CONDA_ENV_NAME} pip install --constraint /tmp/torch-constraints.txt "lerobot[libero]" && \
+    conda clean -afy && \
+    echo "conda activate ${CONDA_ENV_NAME}" >> /home/user_lerobot/.bashrc
 
 
 # Set the default command
