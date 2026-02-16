@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,103 @@ def _episodes_arg(value: object) -> str | None:
         return json.dumps(list(value), separators=(",", ":"))
     s = str(value).strip()
     return s if s else None
+
+
+def _run_install_command(
+    cmd: list[str],
+    *,
+    logger,
+    cwd: Path,
+    env: dict[str, str],
+) -> tuple[bool, str]:
+    logger.info("Install command: %s", shlex.join(cmd))
+    try:
+        subprocess.run(cmd, cwd=str(cwd), env=env, check=True)
+        return True, ""
+    except subprocess.CalledProcessError as e:
+        err = f"Command failed ({e.returncode}): {shlex.join(cmd)}"
+        logger.warning(err)
+        return False, err
+
+
+def _install_editable_policy(
+    *,
+    editable_path: Path,
+    logger,
+    cwd: Path,
+    env: dict[str, str],
+) -> None:
+    python = sys.executable
+    attempted_errors: list[str] = []
+
+    # 1) Prefer the current interpreter's pip module.
+    ok, err = _run_install_command(
+        [python, "-m", "pip", "install", "-e", str(editable_path)],
+        logger=logger,
+        cwd=cwd,
+        env=env,
+    )
+    if ok:
+        return
+    attempted_errors.append(err)
+
+    # 1b) If pip module is missing, try bootstrapping it.
+    if "No module named pip" in err:
+        logger.info("pip module missing; attempting bootstrap via ensurepip")
+        boot_ok, boot_err = _run_install_command(
+            [python, "-m", "ensurepip", "--upgrade"],
+            logger=logger,
+            cwd=cwd,
+            env=env,
+        )
+        if boot_ok:
+            ok, err = _run_install_command(
+                [python, "-m", "pip", "install", "-e", str(editable_path)],
+                logger=logger,
+                cwd=cwd,
+                env=env,
+            )
+            if ok:
+                return
+            attempted_errors.append(err)
+        else:
+            attempted_errors.append(boot_err)
+
+    # 2) Try pip executable on PATH.
+    pip_bin = shutil.which("pip", path=env.get("PATH"))
+    if pip_bin is not None:
+        ok, err = _run_install_command(
+            [pip_bin, "install", "-e", str(editable_path)],
+            logger=logger,
+            cwd=cwd,
+            env=env,
+        )
+        if ok:
+            return
+        attempted_errors.append(err)
+    else:
+        attempted_errors.append("pip executable not found on PATH")
+
+    # 3) Try uv pip with explicit interpreter.
+    uv_bin = shutil.which("uv", path=env.get("PATH"))
+    if uv_bin is not None:
+        ok, err = _run_install_command(
+            [uv_bin, "pip", "install", "--python", python, "-e", str(editable_path)],
+            logger=logger,
+            cwd=cwd,
+            env=env,
+        )
+        if ok:
+            return
+        attempted_errors.append(err)
+    else:
+        attempted_errors.append("uv executable not found on PATH")
+
+    details = "\n".join(f"- {msg}" for msg in attempted_errors)
+    raise RuntimeError(
+        "Failed to editable-install policy package with all supported installers:\n"
+        f"{details}"
+    )
 
 
 def _command_from_cfg(cfg: DictConfig) -> list[str]:
@@ -164,10 +262,13 @@ def main(cfg: DictConfig) -> None:
             editable_path = workspace_root / editable_path
         if not editable_path.exists():
             raise FileNotFoundError(f"Editable policy path not found: {editable_path}")
-        pip_cmd = [sys.executable, "-m", "pip", "install", "-e", str(editable_path)]
         logger.info("Installing editable policy package: %s", editable_path)
-        logger.info("Command: %s", shlex.join(pip_cmd))
-        subprocess.run(pip_cmd, cwd=str(workspace_root), env=env, check=True)
+        _install_editable_policy(
+            editable_path=editable_path,
+            logger=logger,
+            cwd=workspace_root,
+            env=env,
+        )
 
     cmd = _command_from_cfg(cfg)
     logger.info("Launching LeRobot command:")
