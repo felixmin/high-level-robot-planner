@@ -81,5 +81,5 @@ python scripts/submit_job.py \
 |---|---|---|---|---|---|
 | 2026-02-16 | Stage 2 smoke | LRZ X100 | 5482581 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Failed early (`extract_oxe_actions` batch format bug) |
 | 2026-02-16 | Stage 2 smoke | MCML X100 | 5482582 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Canceled (duplicate queue after LRZ failure diagnosis) |
-| 2026-02-16 | Stage 2 smoke retry | LRZ X100 | 5482673 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Submitted (pending) |
-| 2026-02-16 | Stage 2 smoke retry | MCML X100 | 5482674 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Submitted (pending) |
+| 2026-02-16 | Stage 2 smoke retry | LRZ X100 | 5482673 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Failed early (`target_actions` dim mismatch: expected 5, got 3) |
+| 2026-02-16 | Stage 2 smoke retry | MCML X100 | 5482674 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Canceled (duplicate queue after LRZ failure diagnosis) |
