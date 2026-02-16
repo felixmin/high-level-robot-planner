@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Script 6: Stage-3 LeRobot fine-tuning/evaluation entrypoint.
+Script 7: Stage-3 LeRobot rollout/evaluation entrypoint.
 
 This script is intended to run inside the Slurm container launched by
 `scripts/submit_job.py`. It can optionally editable-install a local LeRobot
-policy plugin and then execute `lerobot-train`.
+policy plugin and then execute `lerobot-eval`.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import shlex
 import shutil
@@ -30,15 +29,6 @@ from common.unified_logging import resolve_runs_dir, setup_unified_logging
 
 def _to_bool_flag(value: object) -> str:
     return "true" if bool(value) else "false"
-
-
-def _episodes_arg(value: object) -> str | None:
-    if value is None:
-        return None
-    if OmegaConf.is_list(value) or isinstance(value, (list, tuple)):
-        return json.dumps(list(value), separators=(",", ":"))
-    s = str(value).strip()
-    return s if s else None
 
 
 def _run_install_command(
@@ -68,7 +58,6 @@ def _install_editable_policy(
     python = sys.executable
     attempted_errors: list[str] = []
 
-    # 1) Prefer the current interpreter's pip module.
     ok, err = _run_install_command(
         [python, "-m", "pip", "install", "--no-deps", "-e", str(editable_path)],
         logger=logger,
@@ -79,7 +68,6 @@ def _install_editable_policy(
         return
     attempted_errors.append(err)
 
-    # 1b) If pip module is missing, try bootstrapping it.
     if "No module named pip" in err:
         logger.info("pip module missing; attempting bootstrap via ensurepip")
         boot_ok, boot_err = _run_install_command(
@@ -101,7 +89,6 @@ def _install_editable_policy(
         else:
             attempted_errors.append(boot_err)
 
-    # 2) Prefer uv pip with explicit interpreter (installs into the active env).
     uv_bin = shutil.which("uv", path=env.get("PATH"))
     if uv_bin is not None:
         ok, err = _run_install_command(
@@ -125,7 +112,6 @@ def _install_editable_policy(
     else:
         attempted_errors.append("uv executable not found on PATH")
 
-    # 3) Last resort: pip executable on PATH (may target user/system site).
     pip_bin = shutil.which("pip", path=env.get("PATH"))
     if pip_bin is not None:
         ok, err = _run_install_command(
@@ -148,81 +134,68 @@ def _install_editable_policy(
 
 
 def _command_from_cfg(cfg: DictConfig) -> list[str]:
-    train_cmd = str(OmegaConf.select(cfg, "lerobot.command") or "lerobot-train")
+    eval_cmd = str(OmegaConf.select(cfg, "lerobot_eval.command") or "lerobot-eval")
 
-    policy_type = OmegaConf.select(cfg, "lerobot.policy_type")
-    policy_repo_id = OmegaConf.select(cfg, "lerobot.policy_repo_id")
-    dataset_repo_id = OmegaConf.select(cfg, "lerobot.dataset_repo_id")
-    output_dir = OmegaConf.select(cfg, "lerobot.output_dir")
-    job_name = OmegaConf.select(cfg, "lerobot.job_name")
-    steps = OmegaConf.select(cfg, "lerobot.steps")
-    batch_size = OmegaConf.select(cfg, "lerobot.batch_size")
-    num_workers = OmegaConf.select(cfg, "lerobot.num_workers")
-    eval_freq = OmegaConf.select(cfg, "lerobot.eval_freq")
-    log_freq = OmegaConf.select(cfg, "lerobot.log_freq")
-    save_freq = OmegaConf.select(cfg, "lerobot.save_freq")
+    policy_path = OmegaConf.select(cfg, "lerobot_eval.policy_path")
+    env_type = OmegaConf.select(cfg, "lerobot_eval.env_type")
+    n_episodes = OmegaConf.select(cfg, "lerobot_eval.eval_n_episodes")
+    batch_size = OmegaConf.select(cfg, "lerobot_eval.eval_batch_size")
 
     required = {
-        "lerobot.policy_type": policy_type,
-        "lerobot.policy_repo_id": policy_repo_id,
-        "lerobot.dataset_repo_id": dataset_repo_id,
-        "lerobot.output_dir": output_dir,
-        "lerobot.job_name": job_name,
-        "lerobot.steps": steps,
-        "lerobot.batch_size": batch_size,
-        "lerobot.num_workers": num_workers,
-        "lerobot.eval_freq": eval_freq,
-        "lerobot.log_freq": log_freq,
-        "lerobot.save_freq": save_freq,
+        "lerobot_eval.policy_path": policy_path,
+        "lerobot_eval.env_type": env_type,
+        "lerobot_eval.eval_n_episodes": n_episodes,
+        "lerobot_eval.eval_batch_size": batch_size,
     }
     missing = [k for k, v in required.items() if v is None]
     if missing:
-        raise ValueError(f"Missing required lerobot config keys: {missing}")
+        raise ValueError(f"Missing required lerobot_eval config keys: {missing}")
 
     cmd = [
-        train_cmd,
-        f"--policy.type={policy_type}",
-        f"--policy.repo_id={policy_repo_id}",
-        f"--policy.push_to_hub={_to_bool_flag(OmegaConf.select(cfg, 'lerobot.push_to_hub') is True)}",
-        f"--dataset.repo_id={dataset_repo_id}",
-        f"--output_dir={output_dir}",
-        f"--job_name={job_name}",
-        f"--steps={int(steps)}",
-        f"--batch_size={int(batch_size)}",
-        f"--num_workers={int(num_workers)}",
-        f"--eval_freq={int(eval_freq)}",
-        f"--log_freq={int(log_freq)}",
-        f"--save_freq={int(save_freq)}",
-        f"--wandb.enable={_to_bool_flag(OmegaConf.select(cfg, 'lerobot.wandb_enable') is True)}",
+        eval_cmd,
+        f"--policy.path={policy_path}",
+        f"--env.type={env_type}",
+        f"--eval.n_episodes={int(n_episodes)}",
+        f"--eval.batch_size={int(batch_size)}",
     ]
 
-    policy_device = OmegaConf.select(cfg, "lerobot.policy_device")
-    if policy_device is not None:
-        cmd.append(f"--policy.device={policy_device}")
-
-    stage2_checkpoint = OmegaConf.select(cfg, "lerobot.stage2_checkpoint")
-    if stage2_checkpoint:
-        cmd.append(f"--policy.stage2_checkpoint={stage2_checkpoint}")
-
-    episodes = _episodes_arg(OmegaConf.select(cfg, "lerobot.dataset_episodes"))
-    if episodes is not None:
-        cmd.append(f"--dataset.episodes={episodes}")
-
-    env_type = OmegaConf.select(cfg, "lerobot.env_type")
-    if env_type:
-        cmd.append(f"--env.type={env_type}")
-    env_task = OmegaConf.select(cfg, "lerobot.env_task")
+    env_task = OmegaConf.select(cfg, "lerobot_eval.env_task")
     if env_task:
         cmd.append(f"--env.task={env_task}")
 
-    extra_args = OmegaConf.select(cfg, "lerobot.extra_args") or []
+    policy_device = OmegaConf.select(cfg, "lerobot_eval.policy_device")
+    if policy_device is not None:
+        cmd.append(f"--policy.device={policy_device}")
+
+    policy_use_amp = OmegaConf.select(cfg, "lerobot_eval.policy_use_amp")
+    if policy_use_amp is not None:
+        cmd.append(f"--policy.use_amp={_to_bool_flag(policy_use_amp)}")
+
+    output_dir = OmegaConf.select(cfg, "lerobot_eval.output_dir")
+    if output_dir:
+        cmd.append(f"--output_dir={output_dir}")
+
+    job_name = OmegaConf.select(cfg, "lerobot_eval.job_name")
+    if job_name:
+        cmd.append(f"--job_name={job_name}")
+
+    seed = OmegaConf.select(cfg, "lerobot_eval.seed")
+    if seed is not None:
+        cmd.append(f"--seed={int(seed)}")
+
+    trust_remote_code = OmegaConf.select(cfg, "lerobot_eval.trust_remote_code")
+    if trust_remote_code is not None:
+        cmd.append(f"--trust_remote_code={_to_bool_flag(trust_remote_code)}")
+
+    extra_args = OmegaConf.select(cfg, "lerobot_eval.extra_args") or []
     if not (OmegaConf.is_list(extra_args) or isinstance(extra_args, (list, tuple))):
-        raise ValueError("lerobot.extra_args must be a list of strings")
+        raise ValueError("lerobot_eval.extra_args must be a list of strings")
     for i, arg in enumerate(extra_args):
         if not isinstance(arg, str):
-            raise ValueError(f"lerobot.extra_args[{i}] must be a string")
+            raise ValueError(f"lerobot_eval.extra_args[{i}] must be a string")
         if arg.strip():
             cmd.append(arg.strip())
+
     return cmd
 
 
@@ -246,11 +219,11 @@ def main(cfg: DictConfig) -> None:
         runs_dir=runs_dir,
         job_id=OmegaConf.select(cfg, "logging.job_id"),
         log_level=str(OmegaConf.select(cfg, "logging.level") or "INFO"),
-        logger_name="lerobot.training",
+        logger_name="lerobot.rollout",
     )
 
     logger.info("=" * 80)
-    logger.info("LAPA Stage 3: LeRobot Training")
+    logger.info("LAPA Stage 3: LeRobot Rollout")
     logger.info("=" * 80)
     logger.info("\nConfiguration:")
     logger.info(OmegaConf.to_yaml(cfg))
@@ -260,15 +233,15 @@ def main(cfg: DictConfig) -> None:
         configure_cache_env(cache_dir=cache_dir, logger=logger)
 
     env = os.environ.copy()
-    env_overrides = OmegaConf.select(cfg, "lerobot.env") or {}
+    env_overrides = OmegaConf.select(cfg, "lerobot_eval.env") or {}
     if not OmegaConf.is_dict(env_overrides):
-        raise ValueError("lerobot.env must be a mapping of environment variables")
+        raise ValueError("lerobot_eval.env must be a mapping of environment variables")
     for k, v in env_overrides.items():
         if v is None:
             continue
         env[str(k)] = str(v)
 
-    install_editable = OmegaConf.select(cfg, "lerobot.install_policy_editable")
+    install_editable = OmegaConf.select(cfg, "lerobot_eval.install_policy_editable")
     if install_editable:
         editable_path = Path(str(install_editable))
         if not editable_path.is_absolute():
@@ -284,10 +257,10 @@ def main(cfg: DictConfig) -> None:
         )
 
     cmd = _command_from_cfg(cfg)
-    logger.info("Launching LeRobot command:")
+    logger.info("Launching LeRobot rollout command:")
     logger.info("  %s", shlex.join(cmd))
     subprocess.run(cmd, cwd=str(workspace_root), env=env, check=True)
-    logger.info("Stage 3 training complete.")
+    logger.info("Stage 3 rollout complete.")
 
 
 if __name__ == "__main__":

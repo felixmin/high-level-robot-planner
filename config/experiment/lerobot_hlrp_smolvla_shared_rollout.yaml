@@ -1,0 +1,50 @@
+# @package _global_
+
+# Stage 3: LeRobot rollout/eval for shared SmolVLA HLRP policy.
+
+defaults:
+  - /cluster@cluster: mcml_h100
+  - optional /user_config: local
+
+experiment:
+  name: lerobot_hlrp_smolvla_shared_rollout
+  description: "Stage 3 rollout run (LeRobot eval + HLRP shared SmolVLA policy)"
+
+submit:
+  script: 7_rollout_lerobot
+
+cluster:
+  compute:
+    gpus_per_node: 1
+    cpus_per_task: 8
+    mem_gb: 32
+    time_limit: "00:30:00"
+  container:
+    image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/enroot/hlrp_libero.sqsh
+
+logging:
+  use_wandb: false
+  tags: ["stage3", "lerobot", "rollout", "hlrp-policy", "smolvla"]
+
+lerobot_eval:
+  command: lerobot-eval
+  install_policy_editable: lerobot_policy_hlrp
+
+  policy_path: null
+  policy_device: cuda
+  policy_use_amp: false
+
+  env_type: libero
+  env_task: libero_object
+  eval_n_episodes: 5
+  eval_batch_size: 1
+
+  output_dir: ${logging.runs_dir}/lerobot_rollout
+  job_name: ${experiment.name}
+  seed: 1000
+  trust_remote_code: false
+
+  env:
+    MUJOCO_GL: egl
+
+  extra_args: []

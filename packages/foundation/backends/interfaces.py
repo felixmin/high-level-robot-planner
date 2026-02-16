@@ -28,6 +28,7 @@ class FoundationBatch:
 
 class BackendMode(str, Enum):
     CODES = "codes"
+    LATENT_FLOW = "latent_flow"
     ACTIONS = "actions"
     MULTITASK = "multitask"
 

@@ -1,11 +1,11 @@
 # Stage 2 (Foundation) shared-trunk SmolVLM backend:
 # - flow-matching latent-vector head (LAQ codebook vectors)
-# - real-action regression head
+# - real-action head is initialized but not trained in Stage 2
 
 name: vla_smol_flow_shared
 
-backend: smol_flow_action
-training_mode: multitask
+backend: smolvla_shared
+training_mode: latent_flow
 
 vla:
   model_name: HuggingFaceTB/SmolVLM2-500M-Video-Instruct
@@ -25,11 +25,15 @@ action_tokens:
   token_fmt: "<ACT_{i}>"
 
 flow:
-  action_dim: 5
+  action_dim: null
   flow_hidden_dim: 1024
   flow_steps: 8
   latent_loss_weight: 1.0
-  action_loss_weight: 1.0
+  action_loss_weight: 0.0
+  min_period: 4.0e-3
+  max_period: 4.0
+  time_beta_alpha: 1.5
+  time_beta_beta: 1.0
 
 chat:
   system_prompt: "You are a robot policy."

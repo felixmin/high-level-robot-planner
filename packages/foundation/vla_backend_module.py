@@ -206,6 +206,10 @@ class VLATokenBackendLightningModule(pl.LightningModule):
 
         if self.backend_mode is BackendMode.CODES:
             codes = self.code_provider.codes_from_video(video).to(torch.long).detach().cpu()
+        elif self.backend_mode is BackendMode.LATENT_FLOW:
+            codes, vectors = self.code_provider.codes_and_vectors_from_video(video)
+            codes = codes.to(torch.long).detach().cpu()
+            vectors = vectors.detach().cpu()
         elif self.backend_mode is BackendMode.MULTITASK:
             codes, vectors = self.code_provider.codes_and_vectors_from_video(video)
             codes = codes.to(torch.long).detach().cpu()

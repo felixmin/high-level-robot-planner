@@ -50,6 +50,8 @@ from foundation.backends.smol_latent_head_backend import (
     SmolLatentHeadBackend,
     SmolLatentHeadBackendConfig,
 )
+from foundation.backends.smolvla_shared.config import SmolVLASharedBackendConfig
+from foundation.backends.smolvla_shared_backend import SmolVLASharedBackend
 from foundation.online_laq import LAQTaskCodeProvider
 from foundation.vla_inputs import ChatConfig
 from foundation.vla_backend_module import VLATokenBackendLightningModule, VLAOptimizerConfig
@@ -378,6 +380,53 @@ def main(cfg: DictConfig):
                 flow_steps=int(flow_cfg.flow_steps),
                 latent_loss_weight=float(flow_cfg.latent_loss_weight),
                 action_loss_weight=float(flow_cfg.action_loss_weight),
+            ),
+            frames_to_images=oxe_first_frames_to_pil,
+        )
+        try:
+            backend.setup(device=torch.device("cpu"))
+        except Exception as exc:
+            help_msg = hf_download_help_message(exc=exc)
+            if help_msg:
+                logger.error(help_msg)
+            raise
+    elif backend_type == "smolvla_shared":
+        if backend_mode not in (BackendMode.LATENT_FLOW, BackendMode.ACTIONS, BackendMode.MULTITASK):
+            raise ValueError(
+                "smolvla_shared backend supports model.training_mode in {latent_flow, actions, multitask}"
+            )
+
+        trust_remote_code = bool(OmegaConf.select(cfg, "model.vla.trust_remote_code") or False)
+        use_gpu_preprocessing = bool(OmegaConf.select(cfg, "model.vla.use_gpu_preprocessing") or False)
+        image_size_cfg = OmegaConf.select(cfg, "model.vla.image_size")
+        image_size = tuple(image_size_cfg) if image_size_cfg else (384, 384)
+        flow_cfg = OmegaConf.select(cfg, "model.flow")
+        if flow_cfg is None:
+            raise ValueError("Missing model.flow config for smolvla_shared backend")
+
+        latent_vector_dim = int(laq_provider.code_seq_len * laq_provider.codebook_dim)
+        action_dim_cfg = OmegaConf.select(flow_cfg, "action_dim")
+        action_dim = int(action_dim_cfg) if action_dim_cfg is not None else None
+
+        backend = SmolVLASharedBackend(
+            config=SmolVLASharedBackendConfig(
+                model_name=str(model_name),
+                latent_vector_dim=latent_vector_dim,
+                action_dim=action_dim,
+                torch_dtype=dtype,
+                trust_remote_code=trust_remote_code,
+                chat=ChatConfig(system_prompt=cfg.model.chat.system_prompt),
+                action_tokens=action_cfg,
+                use_gpu_preprocessing=use_gpu_preprocessing,
+                image_size=image_size,
+                flow_hidden_dim=int(flow_cfg.flow_hidden_dim),
+                flow_steps=int(flow_cfg.flow_steps),
+                latent_loss_weight=float(flow_cfg.latent_loss_weight),
+                action_loss_weight=float(flow_cfg.action_loss_weight),
+                min_period=float(OmegaConf.select(flow_cfg, "min_period") or 4e-3),
+                max_period=float(OmegaConf.select(flow_cfg, "max_period") or 4.0),
+                time_beta_alpha=float(OmegaConf.select(flow_cfg, "time_beta_alpha") or 1.5),
+                time_beta_beta=float(OmegaConf.select(flow_cfg, "time_beta_beta") or 1.0),
             ),
             frames_to_images=oxe_first_frames_to_pil,
         )
