@@ -38,12 +38,18 @@ from foundation.callbacks import (
     VLASampleVizConfig,
     VLASampleVisualizationCallback,
 )
+from foundation.backends.interfaces import BackendMode
 from foundation.image_adapters import oxe_first_frames_to_pil
 from foundation.backends.qwen3vl_chat_backend import (
     Qwen3VLChatActionTokenBackend,
     Qwen3VLChatBackendConfig,
 )
-from foundation.backends.smol_latent_head_backend import SmolLatentHeadBackend, SmolLatentHeadBackendConfig
+from foundation.backends.smol_latent_head_backend import (
+    SmolFlowActionBackend,
+    SmolFlowActionBackendConfig,
+    SmolLatentHeadBackend,
+    SmolLatentHeadBackendConfig,
+)
 from foundation.online_laq import LAQTaskCodeProvider
 from foundation.vla_inputs import ChatConfig
 from foundation.vla_backend_module import VLATokenBackendLightningModule, VLAOptimizerConfig
@@ -225,6 +231,13 @@ def main(cfg: DictConfig):
     if not backend_type:
         raise ValueError("Set `model.backend` (e.g., 'qwen3vl_chat_tokens' or 'smol_latent_head').")
     backend_type = str(backend_type)
+    backend_mode_raw = OmegaConf.select(cfg, "model.training_mode")
+    if not backend_mode_raw:
+        raise ValueError("Set `model.training_mode` to one of: codes, actions, multitask.")
+    try:
+        backend_mode = BackendMode(str(backend_mode_raw))
+    except ValueError as exc:
+        raise ValueError(f"Unknown model.training_mode={backend_mode_raw!r}. Use one of: codes, actions, multitask.") from exc
 
     model_name = cfg.model.vla.model_name
     torch_dtype = str(cfg.model.vla.torch_dtype).lower()
@@ -242,6 +255,8 @@ def main(cfg: DictConfig):
 
     action_token_ids = None
     if backend_type == "qwen3vl_chat_tokens":
+        if backend_mode is not BackendMode.CODES:
+            raise ValueError("qwen3vl_chat_tokens backend currently supports only model.training_mode=codes")
         from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
 
         vla_model = Qwen3VLForConditionalGeneration.from_pretrained(
@@ -310,6 +325,8 @@ def main(cfg: DictConfig):
             )
 
     elif backend_type == "smol_latent_head":
+        if backend_mode is not BackendMode.CODES:
+            raise ValueError("smol_latent_head backend currently supports only model.training_mode=codes")
         trust_remote_code = bool(OmegaConf.select(cfg, "model.vla.trust_remote_code") or False)
         use_gpu_preprocessing = bool(OmegaConf.select(cfg, "model.vla.use_gpu_preprocessing") or False)
         image_size_cfg = OmegaConf.select(cfg, "model.vla.image_size")
@@ -333,12 +350,51 @@ def main(cfg: DictConfig):
             if help_msg:
                 logger.error(help_msg)
             raise
+    elif backend_type == "smol_flow_action":
+        if backend_mode not in (BackendMode.MULTITASK, BackendMode.ACTIONS):
+            raise ValueError("smol_flow_action backend supports model.training_mode in {actions, multitask}")
+
+        trust_remote_code = bool(OmegaConf.select(cfg, "model.vla.trust_remote_code") or False)
+        use_gpu_preprocessing = bool(OmegaConf.select(cfg, "model.vla.use_gpu_preprocessing") or False)
+        image_size_cfg = OmegaConf.select(cfg, "model.vla.image_size")
+        image_size = tuple(image_size_cfg) if image_size_cfg else (384, 384)
+        flow_cfg = OmegaConf.select(cfg, "model.flow")
+        if flow_cfg is None:
+            raise ValueError("Missing model.flow config for smol_flow_action backend")
+
+        latent_vector_dim = int(laq_provider.code_seq_len * laq_provider.codebook_dim)
+        backend = SmolFlowActionBackend(
+            config=SmolFlowActionBackendConfig(
+                model_name=str(model_name),
+                latent_vector_dim=latent_vector_dim,
+                action_dim=int(flow_cfg.action_dim),
+                torch_dtype=dtype,
+                trust_remote_code=trust_remote_code,
+                chat=ChatConfig(system_prompt=cfg.model.chat.system_prompt),
+                action_tokens=action_cfg,
+                use_gpu_preprocessing=use_gpu_preprocessing,
+                image_size=image_size,
+                flow_hidden_dim=int(flow_cfg.flow_hidden_dim),
+                flow_steps=int(flow_cfg.flow_steps),
+                latent_loss_weight=float(flow_cfg.latent_loss_weight),
+                action_loss_weight=float(flow_cfg.action_loss_weight),
+            ),
+            frames_to_images=oxe_first_frames_to_pil,
+        )
+        try:
+            backend.setup(device=torch.device("cpu"))
+        except Exception as exc:
+            help_msg = hf_download_help_message(exc=exc)
+            if help_msg:
+                logger.error(help_msg)
+            raise
     else:
         raise ValueError(f"Unknown model.backend={backend_type!r}")
 
     module = VLATokenBackendLightningModule(
         backend=backend,
         code_provider=laq_provider,
+        backend_mode=backend_mode,
         optimizer=VLAOptimizerConfig(
             lr=float(cfg.training.optimizer.lr),
             weight_decay=float(cfg.training.optimizer.weight_decay),

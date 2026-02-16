@@ -21,6 +21,8 @@ class FoundationBatch:
     frames: torch.Tensor
     instructions: Sequence[str]
     target_codes: torch.Tensor | None = None  # [B, S] long (optional)
+    target_latent_vectors: torch.Tensor | None = None  # [B, S, D] or [B, D] (optional)
+    target_actions: torch.Tensor | None = None  # [B, A] float (optional)
     meta: dict[str, Any] | None = None
 
 
@@ -43,6 +45,7 @@ class LatentOutput:
     tokens: torch.Tensor | None = None  # [B, S] long
     # Continuous (future)
     vector: torch.Tensor | None = None  # [B, D] or [B, S, D]
+    actions: torch.Tensor | None = None  # [B, A]
     # Small debug objects
     meta: dict[str, Any] | None = None
 

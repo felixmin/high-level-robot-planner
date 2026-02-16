@@ -242,13 +242,21 @@ class SmolLatentHeadBackend(torch.nn.Module):
 
     def _forward_logits(self, batch: FoundationBatch) -> torch.Tensor:
         """Dispatch to optimized or original forward path based on config."""
-        if self.cfg.use_gpu_preprocessing:
-            return self._forward_logits_optimized(batch)
-        return self._forward_logits_original(batch)
+        _device, _vlm, _processor, head = self._require_ready()
+        pooled = self._forward_pooled(batch)
+        if pooled.dtype != head.weight.dtype:
+            pooled = pooled.to(dtype=head.weight.dtype)
+        return head(pooled).view(-1, self.code_seq_len, self.codebook_size)
 
-    def _forward_logits_original(self, batch: FoundationBatch) -> torch.Tensor:
+    def _forward_pooled(self, batch: FoundationBatch) -> torch.Tensor:
+        """Return pooled trunk features before the latent action head."""
+        if self.cfg.use_gpu_preprocessing:
+            return self._forward_pooled_optimized(batch)
+        return self._forward_pooled_original(batch)
+
+    def _forward_pooled_original(self, batch: FoundationBatch) -> torch.Tensor:
         """Original forward path using HF processor (slow but reference implementation)."""
-        device, vlm, processor, head = self._require_ready()
+        device, vlm, processor, _head = self._require_ready()
 
         images_1 = self.frames_to_images(batch.frames)
         # SmolVLMProcessor expects nested images: one sublist per sample.
@@ -286,12 +294,9 @@ class SmolLatentHeadBackend(torch.nn.Module):
 
         attn = inputs["attention_mask"].to(dtype=torch.bool)
         pooled = _masked_mean_pool(last, attn)
-        if pooled.dtype != head.weight.dtype:
-            pooled = pooled.to(dtype=head.weight.dtype)
-        logits = head(pooled).view(-1, self.code_seq_len, self.codebook_size)
-        return logits
+        return pooled
 
-    def _forward_logits_optimized(self, batch: FoundationBatch) -> torch.Tensor:
+    def _forward_pooled_optimized(self, batch: FoundationBatch) -> torch.Tensor:
         """Optimized forward path bypassing HF processor entirely (LeRobot-style).
 
         This approach:
@@ -307,7 +312,7 @@ class SmolLatentHeadBackend(torch.nn.Module):
 
         By calling model components directly, we get massive speedups.
         """
-        device, vlm, processor, head = self._require_ready()
+        device, vlm, processor, _head = self._require_ready()
 
         # Cache model components on first call
         if self._vision_model is None:
@@ -437,10 +442,7 @@ class SmolLatentHeadBackend(torch.nn.Module):
 
         # Pool and predict
         pooled = _masked_mean_pool(last, combined_attention_mask)
-        if pooled.dtype != head.weight.dtype:
-            pooled = pooled.to(dtype=head.weight.dtype)
-        logits = head(pooled).view(-1, self.code_seq_len, self.codebook_size)
-        return logits
+        return pooled
 
     def _cache_model_components(self, vlm: torch.nn.Module) -> None:
         """Cache references to model components for direct access."""
@@ -477,3 +479,184 @@ class SmolLatentHeadBackend(torch.nn.Module):
         logits = self._forward_logits(batch)
         tokens = logits.argmax(dim=-1)
         return LatentOutput(logits=logits, tokens=tokens, vector=None, meta=None)
+
+
+@dataclass
+class SmolFlowActionBackendConfig:
+    model_name: str
+    latent_vector_dim: int
+    action_dim: int
+    torch_dtype: torch.dtype = torch.bfloat16
+    trust_remote_code: bool = False
+    chat: ChatConfig = field(default_factory=lambda: ChatConfig(system_prompt=None))
+    action_tokens: ActionTokenConfig = field(default_factory=lambda: ActionTokenConfig(codebook_size=8, code_seq_len=4))
+    use_gpu_preprocessing: bool = True
+    image_size: tuple[int, int] = (384, 384)
+    flow_hidden_dim: int = 1024
+    flow_steps: int = 8
+    latent_loss_weight: float = 1.0
+    action_loss_weight: float = 1.0
+
+
+class SmolFlowActionBackend(SmolLatentHeadBackend):
+    """
+    Shared-trunk SmolVLM backend with two lightweight heads:
+    - Flow-matching head for continuous LAQ codebook vectors
+    - Action regression head for real robot actions
+    """
+
+    def __init__(
+        self,
+        *,
+        config: SmolFlowActionBackendConfig,
+        vlm: torch.nn.Module | None = None,
+        processor: Any | None = None,
+        frames_to_images: Callable[[torch.Tensor], List[Any]] | None = None,
+    ) -> None:
+        super().__init__(
+            config=SmolLatentHeadBackendConfig(
+                model_name=config.model_name,
+                torch_dtype=config.torch_dtype,
+                trust_remote_code=config.trust_remote_code,
+                chat=config.chat,
+                action_tokens=config.action_tokens,
+                use_gpu_preprocessing=config.use_gpu_preprocessing,
+                image_size=config.image_size,
+            ),
+            vlm=vlm,
+            processor=processor,
+            frames_to_images=frames_to_images,
+        )
+        self.flow_cfg = config
+        self.latent_vector_dim = int(config.latent_vector_dim)
+        self.action_dim = int(config.action_dim)
+
+        self.flow_head: torch.nn.Module | None = None
+        self.action_head: torch.nn.Linear | None = None
+
+    def setup(self, *, device: torch.device) -> None:
+        super().setup(device=device)
+        if self.laq_head is None:
+            raise RuntimeError("Smol latent head must be initialized before flow/action heads")
+
+        hidden = int(self.laq_head.in_features)
+        dtype = self.laq_head.weight.dtype
+        if self.flow_head is None:
+            self.flow_head = torch.nn.Sequential(
+                torch.nn.Linear(hidden + self.latent_vector_dim + 1, int(self.flow_cfg.flow_hidden_dim)),
+                torch.nn.SiLU(),
+                torch.nn.Linear(int(self.flow_cfg.flow_hidden_dim), self.latent_vector_dim),
+            ).to(device=device, dtype=dtype)
+        if self.action_head is None:
+            self.action_head = torch.nn.Linear(hidden, self.action_dim).to(device=device, dtype=dtype)
+
+    def _require_multitask_ready(self) -> tuple[torch.device, torch.nn.Module, torch.nn.Linear]:
+        if self.vlm is None or self.flow_head is None or self.action_head is None:
+            raise RuntimeError("Backend not initialized. Call setup(device=...) first.")
+        try:
+            device = next(self.vlm.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
+        return device, self.flow_head, self.action_head
+
+    def _require_target_vector(self, batch: FoundationBatch) -> torch.Tensor:
+        if batch.target_latent_vectors is None:
+            raise ValueError("batch.target_latent_vectors is required for flow-matching latent training.")
+        vec = batch.target_latent_vectors
+        if vec.ndim == 3:
+            vec = vec.reshape(vec.shape[0], -1)
+        elif vec.ndim != 2:
+            raise ValueError(f"Expected target_latent_vectors [B,S,D] or [B,D], got {tuple(vec.shape)}")
+        if vec.shape[1] != self.latent_vector_dim:
+            raise ValueError(
+                f"target_latent_vectors dim mismatch: expected {self.latent_vector_dim}, got {int(vec.shape[1])}"
+            )
+        return vec
+
+    def _require_target_actions(self, batch: FoundationBatch) -> torch.Tensor:
+        if batch.target_actions is None:
+            raise ValueError("batch.target_actions is required for real-action training.")
+        actions = batch.target_actions
+        if actions.ndim != 2:
+            raise ValueError(f"Expected target_actions [B,A], got {tuple(actions.shape)}")
+        if actions.shape[1] != self.action_dim:
+            raise ValueError(f"target_actions dim mismatch: expected {self.action_dim}, got {int(actions.shape[1])}")
+        return actions
+
+    def _flow_matching_loss(self, pooled: torch.Tensor, target_vec: torch.Tensor, flow_head: torch.nn.Module) -> torch.Tensor:
+        x_1 = target_vec
+        x_0 = torch.randn_like(x_1)
+        t = torch.rand((x_1.shape[0], 1), device=x_1.device, dtype=x_1.dtype)
+        x_t = (1.0 - t) * x_0 + t * x_1
+        v_target = x_1 - x_0
+        v_pred = flow_head(torch.cat([pooled, x_t, t], dim=-1))
+        return F.mse_loss(v_pred, v_target)
+
+    def _flow_sample(self, pooled: torch.Tensor, flow_head: torch.nn.Module) -> torch.Tensor:
+        steps = int(self.flow_cfg.flow_steps)
+        if steps <= 0:
+            raise ValueError("flow_steps must be > 0")
+        batch_size = int(pooled.shape[0])
+        x = torch.randn((batch_size, self.latent_vector_dim), device=pooled.device, dtype=pooled.dtype)
+        dt = 1.0 / float(steps)
+        for i in range(steps):
+            t_val = float(i) / float(steps)
+            t = torch.full((batch_size, 1), t_val, device=pooled.device, dtype=pooled.dtype)
+            v = flow_head(torch.cat([pooled, x, t], dim=-1))
+            x = x + dt * v
+        return x
+
+    def loss_from_batch(self, batch: FoundationBatch, *, mode: BackendMode) -> LossOutput:
+        if mode is BackendMode.CODES:
+            return super().loss_from_batch(batch, mode=mode)
+        if mode not in (BackendMode.ACTIONS, BackendMode.MULTITASK):
+            raise NotImplementedError(f"{type(self).__name__} does not support mode={mode.value!r}")
+
+        _device, flow_head, action_head = self._require_multitask_ready()
+        pooled = self._forward_pooled(batch)
+        if pooled.dtype != action_head.weight.dtype:
+            pooled = pooled.to(dtype=action_head.weight.dtype)
+
+        pred_actions = action_head(pooled)
+        target_actions = self._require_target_actions(batch).to(device=pred_actions.device, dtype=pred_actions.dtype)
+        action_loss = F.mse_loss(pred_actions, target_actions)
+
+        if mode is BackendMode.ACTIONS:
+            return LossOutput(
+                loss=action_loss,
+                metrics={
+                    "loss": float(action_loss.detach().cpu().item()),
+                    "action_loss": float(action_loss.detach().cpu().item()),
+                },
+            )
+
+        target_vec = self._require_target_vector(batch).to(device=pooled.device, dtype=pooled.dtype)
+        latent_loss = self._flow_matching_loss(pooled, target_vec, flow_head)
+        total = float(self.flow_cfg.latent_loss_weight) * latent_loss + float(self.flow_cfg.action_loss_weight) * action_loss
+        return LossOutput(
+            loss=total,
+            metrics={
+                "loss": float(total.detach().cpu().item()),
+                "latent_loss": float(latent_loss.detach().cpu().item()),
+                "action_loss": float(action_loss.detach().cpu().item()),
+            },
+        )
+
+    @torch.no_grad()
+    def latent_from_batch(self, batch: FoundationBatch, *, mode: BackendMode) -> LatentOutput:
+        if mode is BackendMode.CODES:
+            return super().latent_from_batch(batch, mode=mode)
+        if mode not in (BackendMode.ACTIONS, BackendMode.MULTITASK):
+            raise NotImplementedError(f"{type(self).__name__} does not support mode={mode.value!r}")
+
+        _device, flow_head, action_head = self._require_multitask_ready()
+        pooled = self._forward_pooled(batch)
+        if pooled.dtype != action_head.weight.dtype:
+            pooled = pooled.to(dtype=action_head.weight.dtype)
+        pred_actions = action_head(pooled)
+
+        if mode is BackendMode.ACTIONS:
+            return LatentOutput(logits=None, tokens=None, vector=None, actions=pred_actions, meta=None)
+
+        vec = self._flow_sample(pooled, flow_head)
+        return LatentOutput(logits=None, tokens=None, vector=vec, actions=pred_actions, meta=None)

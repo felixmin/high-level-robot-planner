@@ -17,7 +17,12 @@ import torch
 
 from foundation.backends.interfaces import BackendMode, FoundationBatch, VLABackend
 from foundation.constrained_decode import ActionTokenIds
-from foundation.online_laq import LatentCodeProvider, extract_oxe_language, oxe_frames_to_laq_video
+from foundation.online_laq import (
+    LatentCodeProvider,
+    extract_oxe_actions,
+    extract_oxe_language,
+    oxe_frames_to_laq_video,
+)
 
 
 @dataclass
@@ -40,6 +45,7 @@ class VLATokenBackendLightningModule(pl.LightningModule):
         *,
         backend: VLABackend,
         code_provider: LatentCodeProvider,
+        backend_mode: BackendMode = BackendMode.CODES,
         optimizer: VLAOptimizerConfig | None = None,
         action_token_ids: ActionTokenIds | None = None,
         train_teacher_forced_metrics_every_n_steps: int | None = None,
@@ -47,6 +53,7 @@ class VLATokenBackendLightningModule(pl.LightningModule):
         super().__init__()
         self.backend = backend  # should be an nn.Module so Lightning can optimize it
         self.code_provider = code_provider
+        self.backend_mode = backend_mode
         self.optimizer_cfg = optimizer or VLAOptimizerConfig()
         self.action_token_ids = action_token_ids
         self.train_teacher_forced_metrics_every_n_steps = train_teacher_forced_metrics_every_n_steps
@@ -77,21 +84,29 @@ class VLATokenBackendLightningModule(pl.LightningModule):
         return getattr(self.backend, "frames_to_images", None)
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        out = self._loss_from_oxe_batch(batch)
+        out, _codes, _vectors, _actions, _frames, _instructions = self._loss_and_targets_from_oxe_batch(batch)
         self.log("train/loss", out.loss, prog_bar=True, sync_dist=True)
+        for key, value in out.metrics.items():
+            if key == "loss":
+                continue
+            self.log(f"train/{key}", float(value), prog_bar=False, sync_dist=True)
         return out.loss
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        out, codes, frames, instructions = self._loss_and_targets_from_oxe_batch(batch)
+        out, codes, vectors, actions, frames, instructions = self._loss_and_targets_from_oxe_batch(batch)
         self.log("val/loss", out.loss, prog_bar=True, sync_dist=True)
+        for key, value in out.metrics.items():
+            if key == "loss":
+                continue
+            self.log(f"val/{key}", float(value), prog_bar=False, sync_dist=True)
 
         if batch_idx == 0:
             latent = self.backend.latent_from_batch(
                 FoundationBatch(frames=frames, instructions=instructions),
-                mode=BackendMode.CODES,
+                mode=self.backend_mode,
             )
             pred = latent.tokens
-            if pred is not None:
+            if pred is not None and codes is not None:
                 gt = codes.to(device=pred.device, dtype=torch.long)
                 pred = pred.to(torch.long)
                 if pred.shape == gt.shape and pred.numel() > 0:
@@ -108,6 +123,20 @@ class VLATokenBackendLightningModule(pl.LightningModule):
                         prog_bar=False,
                         sync_dist=True,
                     )
+
+            pred_vector = latent.vector
+            if pred_vector is not None and vectors is not None:
+                gt_vec = vectors.reshape(vectors.shape[0], -1).to(device=pred_vector.device, dtype=pred_vector.dtype)
+                if pred_vector.shape == gt_vec.shape and pred_vector.numel() > 0:
+                    vec_mse = torch.mean((pred_vector - gt_vec) ** 2)
+                    self.log("val/latent_vector_mse", vec_mse.to(self.device), prog_bar=True, sync_dist=True)
+
+            pred_actions = latent.actions
+            if pred_actions is not None and actions is not None:
+                gt_actions = actions.to(device=pred_actions.device, dtype=pred_actions.dtype)
+                if pred_actions.shape == gt_actions.shape and pred_actions.numel() > 0:
+                    act_mse = torch.mean((pred_actions - gt_actions) ** 2)
+                    self.log("val/action_mse", act_mse.to(self.device), prog_bar=True, sync_dist=True)
 
             meta = latent.meta if isinstance(latent.meta, dict) else {}
             gen_debug = meta.get("parse_debug") if isinstance(meta.get("parse_debug"), list) else None
@@ -136,19 +165,23 @@ class VLATokenBackendLightningModule(pl.LightningModule):
 
             # Save a small sample for visualization callbacks.
             try:
-                max_items = min(64, len(instructions), int(codes.shape[0]))
+                max_items = min(64, len(instructions))
+                if codes is not None:
+                    max_items = min(max_items, int(codes.shape[0]))
                 episode_id = batch.get("episode_id") if isinstance(batch, dict) else None
                 frame_idx = batch.get("frame_idx") if isinstance(batch, dict) else None
-                pred_list = (
-                    pred[:max_items].detach().cpu().tolist()
-                    if isinstance(pred, torch.Tensor)
-                    else [[-1] * int(codes.shape[1]) for _ in range(max_items)]
-                )
+                pred_list: list[list[int]] | None = None
+                if codes is not None:
+                    pred_list = (
+                        pred[:max_items].detach().cpu().tolist()
+                        if isinstance(pred, torch.Tensor)
+                        else [[-1] * int(codes.shape[1]) for _ in range(max_items)]
+                    )
                 self._last_val_sample = {
                     "frames": frames[:max_items].detach().cpu(),
                     "instructions": list(instructions[:max_items]),
-                    "gt_codes": [row.tolist() for row in codes[:max_items].detach().cpu()],
-                    "pred_codes": [list(row) for row in pred_list],
+                    "gt_codes": [row.tolist() for row in codes[:max_items].detach().cpu()] if codes is not None else None,
+                    "pred_codes": [list(row) for row in pred_list] if pred_list is not None else None,
                     "gen_debug": gen_debug[:max_items] if isinstance(gen_debug, list) else None,
                     "episode_id": list(episode_id[:max_items]) if episode_id is not None else None,
                     "frame_idx": list(frame_idx[:max_items]) if frame_idx is not None else None,
@@ -158,27 +191,42 @@ class VLATokenBackendLightningModule(pl.LightningModule):
 
         return out.loss
 
-    def _loss_from_oxe_batch(self, batch: Any):
-        out, _codes, _frames, _instructions = self._loss_and_targets_from_oxe_batch(batch)
-        return out
-
     def _loss_and_targets_from_oxe_batch(
         self, batch: Any
-    ) -> tuple[Any, torch.Tensor, torch.Tensor, list[str]]:
+    ) -> tuple[Any, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor, list[str]]:
         if not isinstance(batch, dict):
             raise TypeError("Expected OXE batch dict with keys including 'frames' and 'language'.")
 
         frames = batch["frames"]
         instructions = extract_oxe_language(batch)
-
         video = oxe_frames_to_laq_video(frames)
-        codes = self.code_provider.codes_from_video(video).to(torch.long).detach().cpu()  # [B, S]
+        actions: torch.Tensor | None = None
+        codes: torch.Tensor | None = None
+        vectors: torch.Tensor | None = None
+
+        if self.backend_mode is BackendMode.CODES:
+            codes = self.code_provider.codes_from_video(video).to(torch.long).detach().cpu()
+        elif self.backend_mode is BackendMode.MULTITASK:
+            codes, vectors = self.code_provider.codes_and_vectors_from_video(video)
+            codes = codes.to(torch.long).detach().cpu()
+            vectors = vectors.detach().cpu()
+            actions = extract_oxe_actions(batch).detach().cpu()
+        elif self.backend_mode is BackendMode.ACTIONS:
+            actions = extract_oxe_actions(batch).detach().cpu()
+        else:
+            raise NotImplementedError(f"Unsupported backend mode: {self.backend_mode}")
 
         out = self.backend.loss_from_batch(
-            FoundationBatch(frames=frames, instructions=instructions, target_codes=codes),
-            mode=BackendMode.CODES,
+            FoundationBatch(
+                frames=frames,
+                instructions=instructions,
+                target_codes=codes,
+                target_latent_vectors=vectors,
+                target_actions=actions,
+            ),
+            mode=self.backend_mode,
         )
-        return out, codes, frames, instructions
+        return out, codes, vectors, actions, frames, instructions
 
     @torch.no_grad()
     def _predict_freeform_text(

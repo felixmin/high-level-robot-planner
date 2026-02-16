@@ -1,18 +1,18 @@
-# Stage 2 (Foundation) latent-head VLA using SmolVLM2 backbone.
+# Stage 2 (Foundation) shared-trunk SmolVLM backend:
+# - flow-matching latent-vector head (LAQ codebook vectors)
+# - real-action regression head
 
-name: vla_smol_latent
+name: vla_smol_flow_shared
 
-backend: smol_latent_head
-training_mode: codes
+backend: smol_flow_action
+training_mode: multitask
 
 vla:
   model_name: HuggingFaceTB/SmolVLM2-500M-Video-Instruct
   torch_dtype: bf16  # bf16, fp16, fp32
   trust_remote_code: true
-  # GPU preprocessing optimization - LeRobot-style direct vision encoder call
-  # Bypasses HF processor entirely for ~17x speedup
   use_gpu_preprocessing: true
-  image_size: [384, 384]  # SigLIP expected size
+  image_size: [384, 384]
 
 laq:
   checkpoint: ""  # required at runtime (Stage 1 LAQ checkpoint)
@@ -23,6 +23,13 @@ action_tokens:
   action_start: "<ACTION>"
   action_end: "</ACTION>"
   token_fmt: "<ACT_{i}>"
+
+flow:
+  action_dim: 5
+  flow_hidden_dim: 1024
+  flow_steps: 8
+  latent_loss_weight: 1.0
+  action_loss_weight: 1.0
 
 chat:
   system_prompt: "You are a robot policy."

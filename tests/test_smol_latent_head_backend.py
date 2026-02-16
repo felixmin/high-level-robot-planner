@@ -8,7 +8,12 @@ import torch
 
 from foundation.action_tokens import ActionTokenConfig
 from foundation.backends.interfaces import BackendMode, FoundationBatch
-from foundation.backends.smol_latent_head_backend import SmolLatentHeadBackend, SmolLatentHeadBackendConfig
+from foundation.backends.smol_latent_head_backend import (
+    SmolFlowActionBackend,
+    SmolFlowActionBackendConfig,
+    SmolLatentHeadBackend,
+    SmolLatentHeadBackendConfig,
+)
 from foundation.vla_inputs import ChatConfig
 
 
@@ -83,6 +88,7 @@ def test_smol_latent_head_backend_loss_and_latents():
             trust_remote_code=False,
             chat=ChatConfig(system_prompt="sys"),
             action_tokens=ActionTokenConfig(codebook_size=8, code_seq_len=4),
+            use_gpu_preprocessing=False,
         ),
         vlm=vlm,
         processor=FakeProcessor(),
@@ -114,6 +120,7 @@ def test_smol_latent_head_backend_handles_dtype_mismatch():
             trust_remote_code=False,
             chat=ChatConfig(system_prompt="sys"),
             action_tokens=ActionTokenConfig(codebook_size=8, code_seq_len=4),
+            use_gpu_preprocessing=False,
         ),
         vlm=vlm,
         processor=FakeProcessor(),
@@ -128,3 +135,41 @@ def test_smol_latent_head_backend_handles_dtype_mismatch():
     )
     latent = backend.latent_from_batch(batch, mode=BackendMode.CODES)
     assert latent.tokens is not None
+
+
+def test_smol_flow_action_backend_multitask():
+    vlm = DummyVLM(hidden_size=16)
+    backend = SmolFlowActionBackend(
+        config=SmolFlowActionBackendConfig(
+            model_name="dummy",
+            latent_vector_dim=8,
+            action_dim=3,
+            torch_dtype=torch.float32,
+            trust_remote_code=False,
+            chat=ChatConfig(system_prompt="sys"),
+            action_tokens=ActionTokenConfig(codebook_size=8, code_seq_len=4),
+            use_gpu_preprocessing=False,
+            flow_hidden_dim=32,
+            flow_steps=4,
+            latent_loss_weight=1.0,
+            action_loss_weight=1.0,
+        ),
+        vlm=vlm,
+        processor=FakeProcessor(),
+        frames_to_images=lambda frames: [object() for _ in range(frames.shape[0])],
+    )
+    backend.setup(device=torch.device("cpu"))
+
+    batch = FoundationBatch(
+        frames=torch.randint(0, 256, (2, 2, 8, 8, 3), dtype=torch.uint8),
+        instructions=["pick", "place"],
+        target_latent_vectors=torch.randn(2, 4, 2),
+        target_actions=torch.randn(2, 3),
+    )
+    out = backend.loss_from_batch(batch, mode=BackendMode.MULTITASK)
+    assert torch.is_tensor(out.loss)
+    latent = backend.latent_from_batch(batch, mode=BackendMode.MULTITASK)
+    assert latent.vector is not None
+    assert latent.actions is not None
+    assert latent.vector.shape == (2, 8)
+    assert latent.actions.shape == (2, 3)

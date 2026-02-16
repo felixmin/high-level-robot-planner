@@ -6,6 +6,7 @@
 name: vla_cosmos2_tokens
 
 backend: qwen3vl_chat_tokens
+training_mode: codes
 
 vla:
   model_name: nvidia/Cosmos-Reason2-2B
