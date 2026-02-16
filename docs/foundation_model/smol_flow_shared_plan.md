@@ -75,3 +75,9 @@ python scripts/submit_job.py \
 ## Open Follow-ups
 - Add explicit rollout/eval script wiring after Stage 3 checkpoint export.
 - Decide whether to keep action regression MSE or migrate action head to flow as well.
+
+## Run Log
+| Date | Stage | Cluster | Job ID | Config | Status |
+|---|---|---|---|---|---|
+| 2026-02-16 | Stage 2 smoke | LRZ X100 | 5482581 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Submitted (pending) |
+| 2026-02-16 | Stage 2 smoke | MCML X100 | 5482582 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Submitted (pending) |
