@@ -40,11 +40,12 @@ from foundation.callbacks import (
 )
 from foundation.backends.interfaces import BackendMode
 from foundation.image_adapters import oxe_first_frames_to_pil
-from foundation.backends.qwen3vl_chat_backend import (
+# Legacy backends kept for migration/reference.
+from foundation.legacy.backends.qwen3vl_chat_backend import (
     Qwen3VLChatActionTokenBackend,
     Qwen3VLChatBackendConfig,
 )
-from foundation.backends.smol_latent_head_backend import (
+from foundation.legacy.backends.smol_latent_head_backend import (
     SmolFlowActionBackend,
     SmolFlowActionBackendConfig,
     SmolLatentHeadBackend,
@@ -231,15 +232,17 @@ def main(cfg: DictConfig):
 
     backend_type = OmegaConf.select(cfg, "model.backend")
     if not backend_type:
-        raise ValueError("Set `model.backend` (e.g., 'qwen3vl_chat_tokens' or 'smol_latent_head').")
+        raise ValueError("Set `model.backend` (e.g., 'smolvla_shared').")
     backend_type = str(backend_type)
     backend_mode_raw = OmegaConf.select(cfg, "model.training_mode")
     if not backend_mode_raw:
-        raise ValueError("Set `model.training_mode` to one of: codes, actions, multitask.")
+        raise ValueError("Set `model.training_mode` to one of: codes, latent_flow, actions, multitask.")
     try:
         backend_mode = BackendMode(str(backend_mode_raw))
     except ValueError as exc:
-        raise ValueError(f"Unknown model.training_mode={backend_mode_raw!r}. Use one of: codes, actions, multitask.") from exc
+        raise ValueError(
+            f"Unknown model.training_mode={backend_mode_raw!r}. Use one of: codes, latent_flow, actions, multitask."
+        ) from exc
 
     model_name = cfg.model.vla.model_name
     torch_dtype = str(cfg.model.vla.torch_dtype).lower()
