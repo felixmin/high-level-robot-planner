@@ -183,6 +183,33 @@ def _select_code_diverse_indices(*, gt_codes: list[Any], max_items: int) -> list
     return chosen
 
 
+def _safe_vector_mse(a: Any, b: Any) -> float | None:
+    if not isinstance(a, list) or not isinstance(b, list):
+        return None
+    if len(a) != len(b) or len(a) == 0:
+        return None
+    try:
+        at = torch.tensor(a, dtype=torch.float32)
+        bt = torch.tensor(b, dtype=torch.float32)
+    except Exception:
+        return None
+    return float(torch.mean((at - bt) ** 2).item())
+
+
+def _vector_summary(vec: Any, *, head_dims: int = 6) -> str:
+    if not isinstance(vec, list):
+        return str(vec)
+    if len(vec) == 0:
+        return "dim=0 []"
+    try:
+        vals = [float(x) for x in vec]
+    except Exception:
+        return str(vec)
+    head = ", ".join(f"{x:.3f}" for x in vals[:head_dims])
+    l2 = float(torch.tensor(vals, dtype=torch.float32).norm().item())
+    return f"dim={len(vals)} l2={l2:.3f} head=[{head}]"
+
+
 def _save_grid_and_records(
     *,
     panels: list[Image.Image],
@@ -277,8 +304,6 @@ class VLASampleVisualizationCallback(Callback):
             return
 
         action_tokens = getattr(pl_module, "action_tokens", None)
-        if action_tokens is None:
-            return
 
         sample = getattr(pl_module, "_last_val_sample", None)
         if not isinstance(sample, dict):
@@ -286,12 +311,23 @@ class VLASampleVisualizationCallback(Callback):
 
         frames = sample.get("frames")
         instructions = sample.get("instructions")
+        mode = str(sample.get("mode") or "")
         gt_codes = sample.get("gt_codes")
         pred_codes = sample.get("pred_codes")
+        gt_vectors = sample.get("gt_vectors")
+        pred_vectors = sample.get("pred_vectors")
+        gt_actions = sample.get("gt_actions")
+        pred_actions = sample.get("pred_actions")
         gen_debug = sample.get("gen_debug")
         episode_id = sample.get("episode_id")
         frame_idx = sample.get("frame_idx")
-        if frames is None or instructions is None or gt_codes is None or pred_codes is None:
+        if frames is None or instructions is None:
+            return
+
+        has_codes = isinstance(gt_codes, list) and isinstance(pred_codes, list)
+        has_vectors = isinstance(gt_vectors, list) and isinstance(pred_vectors, list)
+        has_actions = isinstance(gt_actions, list) and isinstance(pred_actions, list)
+        if not (has_codes or has_vectors or has_actions):
             return
 
         try:
@@ -300,12 +336,18 @@ class VLASampleVisualizationCallback(Callback):
             logger.debug("val sample viz: frames_to_images failed", exc_info=True)
             return
 
-        num = min(self.cfg.num_samples, len(instructions), len(images), len(pred_codes))
+        num = min(self.cfg.num_samples, len(instructions), len(images))
+        if has_codes:
+            num = min(num, len(pred_codes), len(gt_codes))
+        if has_vectors:
+            num = min(num, len(pred_vectors), len(gt_vectors))
+        if has_actions:
+            num = min(num, len(pred_actions), len(gt_actions))
         if num <= 0:
             return
 
         indices: list[int] = []
-        if isinstance(gt_codes, list) and gt_codes:
+        if has_codes and isinstance(gt_codes, list) and gt_codes:
             indices = _select_code_diverse_indices(gt_codes=gt_codes, max_items=num)
         if len(indices) < num:
             extra = _select_diverse_indices(
@@ -344,11 +386,49 @@ class VLASampleVisualizationCallback(Callback):
         panels: list[Image.Image] = []
         records: list[dict[str, Any]] = []
         for j, i in enumerate(indices):
-            gt_str = action_tokens.format_target(gt_codes[i])
-            try:
-                pred_str = action_tokens.format_target(pred_codes[i])
-            except Exception:
-                pred_str = f"<INVALID> {pred_codes[i]}"
+            gt_str = ""
+            pred_str = ""
+            if mode == "codes" and has_codes and action_tokens is not None:
+                gt_str = action_tokens.format_target(gt_codes[i])
+                try:
+                    pred_str = action_tokens.format_target(pred_codes[i])
+                except Exception:
+                    pred_str = f"<INVALID> {pred_codes[i]}"
+            elif mode == "latent_flow" and has_vectors:
+                gt_str = f"latent_gt: {_vector_summary(gt_vectors[i])}"
+                pred_str = f"latent_pred: {_vector_summary(pred_vectors[i])}"
+                mse = _safe_vector_mse(gt_vectors[i], pred_vectors[i])
+                if mse is not None:
+                    pred_str = f"{pred_str} mse={mse:.4f}"
+            elif mode == "actions" and has_actions:
+                gt_str = f"action_gt: {_vector_summary(gt_actions[i])}"
+                pred_str = f"action_pred: {_vector_summary(pred_actions[i])}"
+                mse = _safe_vector_mse(gt_actions[i], pred_actions[i])
+                if mse is not None:
+                    pred_str = f"{pred_str} mse={mse:.4f}"
+            elif mode == "multitask":
+                latent_gt = _vector_summary(gt_vectors[i]) if has_vectors else "n/a"
+                latent_pred = _vector_summary(pred_vectors[i]) if has_vectors else "n/a"
+                action_gt = _vector_summary(gt_actions[i]) if has_actions else "n/a"
+                action_pred = _vector_summary(pred_actions[i]) if has_actions else "n/a"
+                gt_str = f"latent_gt: {latent_gt} action_gt: {action_gt}"
+                pred_str = f"latent_pred: {latent_pred} action_pred: {action_pred}"
+
+                latent_mse = _safe_vector_mse(gt_vectors[i], pred_vectors[i]) if has_vectors else None
+                action_mse = _safe_vector_mse(gt_actions[i], pred_actions[i]) if has_actions else None
+                suffix = []
+                if latent_mse is not None:
+                    suffix.append(f"latent_mse={latent_mse:.4f}")
+                if action_mse is not None:
+                    suffix.append(f"action_mse={action_mse:.4f}")
+                if suffix:
+                    pred_str = f"{pred_str} {' '.join(suffix)}"
+            elif has_vectors:
+                gt_str = f"latent_gt: {_vector_summary(gt_vectors[i])}"
+                pred_str = f"latent_pred: {_vector_summary(pred_vectors[i])}"
+            elif has_actions:
+                gt_str = f"action_gt: {_vector_summary(gt_actions[i])}"
+                pred_str = f"action_pred: {_vector_summary(pred_actions[i])}"
             freeform = freeform_texts[j] if freeform_texts is not None and j < len(freeform_texts) else None
             panels.append(
                 _render_panel(
@@ -368,11 +448,16 @@ class VLASampleVisualizationCallback(Callback):
             records.append(
                 {
                     "step": step,
+                    "mode": mode,
                     "index": int(i),
                     "rank": int(j),
                     "instruction": str(instructions[i]),
-                    "gt_codes": gt_codes[i],
-                    "pred_codes": pred_codes[i],
+                    "gt_codes": gt_codes[i] if has_codes else None,
+                    "pred_codes": pred_codes[i] if has_codes else None,
+                    "gt_vector": gt_vectors[i] if has_vectors else None,
+                    "pred_vector": pred_vectors[i] if has_vectors else None,
+                    "gt_action": gt_actions[i] if has_actions else None,
+                    "pred_action": pred_actions[i] if has_actions else None,
                     "pred_freeform": freeform,
                     "gen_debug": gen_debug[i]
                     if isinstance(gen_debug, list) and i < len(gen_debug)
@@ -505,9 +590,6 @@ class VLATrainSampleVisualizationCallback(Callback):
             return
 
         action_tokens = getattr(pl_module, "action_tokens", None)
-        if action_tokens is None:
-            logger.debug("train sample viz: missing pl_module.action_tokens")
-            return
         backend = getattr(pl_module, "backend", None)
         if backend is None or not hasattr(backend, "latent_from_batch"):
             logger.debug("train sample viz: missing pl_module.backend.latent_from_batch")
@@ -516,10 +598,22 @@ class VLATrainSampleVisualizationCallback(Callback):
         logger.debug("train sample viz: begin step=%d batch_idx=%d", step, int(batch_idx))
 
         try:
-            from foundation.online_laq import extract_oxe_language, oxe_frames_to_laq_video
+            from foundation.backends.interfaces import BackendMode, FoundationBatch
+            from foundation.online_laq import (
+                extract_oxe_actions,
+                extract_oxe_language,
+                oxe_frames_to_laq_video,
+            )
         except Exception:
-            logger.debug("train sample viz: failed to import online_laq helpers", exc_info=True)
+            logger.debug("train sample viz: failed to import helpers", exc_info=True)
             return
+
+        mode = getattr(pl_module, "backend_mode", BackendMode.CODES)
+        if not isinstance(mode, BackendMode):
+            try:
+                mode = BackendMode(str(mode))
+            except Exception:
+                mode = BackendMode.CODES
 
         frames = batch.get("frames")
         if frames is None:
@@ -566,36 +660,60 @@ class VLATrainSampleVisualizationCallback(Callback):
             logger.debug("train sample viz: frames_to_images failed on selection", exc_info=True)
             return
 
-        # Compute GT codes via frozen LAQ on the selected subset.
+        # Compute GT targets for the selected subset.
+        gt_codes_sel: list[list[int]] | None = None
+        gt_vectors_sel: list[list[float]] | None = None
+        gt_actions_sel: list[list[float]] | None = None
         try:
             video_sel = oxe_frames_to_laq_video(frames_sel)
-            gt_codes_t = pl_module.code_provider.codes_from_video(video_sel)
-            gt_codes_sel = [row.tolist() for row in gt_codes_t.detach().cpu()]
+            if mode is BackendMode.CODES:
+                gt_codes_t = pl_module.code_provider.codes_from_video(video_sel)
+                gt_codes_sel = [row.tolist() for row in gt_codes_t.detach().cpu()]
+            elif mode is BackendMode.LATENT_FLOW:
+                gt_codes_t, gt_vectors_t = pl_module.code_provider.codes_and_vectors_from_video(video_sel)
+                gt_codes_sel = [row.tolist() for row in gt_codes_t.detach().cpu()]
+                gt_vectors_sel = gt_vectors_t.detach().cpu().reshape(gt_vectors_t.shape[0], -1).tolist()
+            elif mode is BackendMode.ACTIONS:
+                gt_actions_t = extract_oxe_actions(batch)
+                gt_actions_sel = gt_actions_t[chosen].detach().cpu().tolist()
+            elif mode is BackendMode.MULTITASK:
+                gt_codes_t, gt_vectors_t = pl_module.code_provider.codes_and_vectors_from_video(video_sel)
+                gt_codes_sel = [row.tolist() for row in gt_codes_t.detach().cpu()]
+                gt_vectors_sel = gt_vectors_t.detach().cpu().reshape(gt_vectors_t.shape[0], -1).tolist()
+                gt_actions_t = extract_oxe_actions(batch)
+                gt_actions_sel = gt_actions_t[chosen].detach().cpu().tolist()
+            else:
+                return
         except Exception:
-            logger.debug("train sample viz: LAQ GT code extraction failed", exc_info=True)
+            logger.debug("train sample viz: GT target extraction failed", exc_info=True)
             return
 
-        # Predict codes via constrained generation (prefer debug variant when available).
-        pred_codes_sel: list[list[int]]
+        pred_codes_sel: list[list[int]] | None = None
+        pred_vectors_sel: list[list[float]] | None = None
+        pred_actions_sel: list[list[float]] | None = None
         gen_debug: Optional[list[dict[str, Any]]] = None
         try:
-            from foundation.backends.interfaces import BackendMode, FoundationBatch
-
             latent = backend.latent_from_batch(
                 FoundationBatch(frames=frames_sel, instructions=instr_sel),
-                mode=BackendMode.CODES,
+                mode=mode,
             )
             tokens = latent.tokens
             if tokens is None and isinstance(latent.logits, torch.Tensor):
                 tokens = latent.logits.argmax(dim=-1)
-            if not isinstance(tokens, torch.Tensor):
-                logger.debug("train sample viz: backend returned no discrete tokens")
-                return
-            pred_codes_sel = tokens.detach().cpu().tolist()
+            if isinstance(tokens, torch.Tensor):
+                pred_codes_sel = tokens.detach().cpu().tolist()
+            if isinstance(latent.vector, torch.Tensor):
+                pred_vectors_sel = latent.vector.detach().cpu().reshape(latent.vector.shape[0], -1).tolist()
+            if isinstance(latent.actions, torch.Tensor):
+                pred_actions_sel = latent.actions.detach().cpu().tolist()
             meta = latent.meta if isinstance(latent.meta, dict) else {}
             gen_debug = meta.get("parse_debug") if isinstance(meta.get("parse_debug"), list) else None
         except Exception:
-            logger.debug("train sample viz: code prediction failed", exc_info=True)
+            logger.debug("train sample viz: backend prediction failed", exc_info=True)
+            return
+
+        if pred_codes_sel is None and pred_vectors_sel is None and pred_actions_sel is None:
+            logger.debug("train sample viz: backend returned no prediction outputs")
             return
 
         freeform_texts: Optional[list[str]] = None
@@ -619,11 +737,64 @@ class VLATrainSampleVisualizationCallback(Callback):
         panels: list[Image.Image] = []
         records: list[dict[str, Any]] = []
         for rank, original_idx in enumerate(chosen):
-            gt_str = action_tokens.format_target(gt_codes_sel[rank])
-            try:
-                pred_str = action_tokens.format_target(pred_codes_sel[rank])
-            except Exception:
-                pred_str = f"<INVALID> {pred_codes_sel[rank]}"
+            gt_str = ""
+            pred_str = ""
+            if (
+                mode is BackendMode.CODES
+                and action_tokens is not None
+                and gt_codes_sel is not None
+                and pred_codes_sel is not None
+            ):
+                gt_str = action_tokens.format_target(gt_codes_sel[rank])
+                try:
+                    pred_str = action_tokens.format_target(pred_codes_sel[rank])
+                except Exception:
+                    pred_str = f"<INVALID> {pred_codes_sel[rank]}"
+            elif (
+                mode is BackendMode.LATENT_FLOW
+                and gt_vectors_sel is not None
+                and pred_vectors_sel is not None
+            ):
+                gt_str = f"latent_gt: {_vector_summary(gt_vectors_sel[rank])}"
+                pred_str = f"latent_pred: {_vector_summary(pred_vectors_sel[rank])}"
+                mse = _safe_vector_mse(gt_vectors_sel[rank], pred_vectors_sel[rank])
+                if mse is not None:
+                    pred_str = f"{pred_str} mse={mse:.4f}"
+            elif (
+                mode is BackendMode.ACTIONS
+                and gt_actions_sel is not None
+                and pred_actions_sel is not None
+            ):
+                gt_str = f"action_gt: {_vector_summary(gt_actions_sel[rank])}"
+                pred_str = f"action_pred: {_vector_summary(pred_actions_sel[rank])}"
+                mse = _safe_vector_mse(gt_actions_sel[rank], pred_actions_sel[rank])
+                if mse is not None:
+                    pred_str = f"{pred_str} mse={mse:.4f}"
+            elif mode is BackendMode.MULTITASK:
+                latent_gt = _vector_summary(gt_vectors_sel[rank]) if gt_vectors_sel is not None else "n/a"
+                latent_pred = _vector_summary(pred_vectors_sel[rank]) if pred_vectors_sel is not None else "n/a"
+                action_gt = _vector_summary(gt_actions_sel[rank]) if gt_actions_sel is not None else "n/a"
+                action_pred = _vector_summary(pred_actions_sel[rank]) if pred_actions_sel is not None else "n/a"
+                gt_str = f"latent_gt: {latent_gt} action_gt: {action_gt}"
+                pred_str = f"latent_pred: {latent_pred} action_pred: {action_pred}"
+
+                latent_mse = (
+                    _safe_vector_mse(gt_vectors_sel[rank], pred_vectors_sel[rank])
+                    if gt_vectors_sel is not None and pred_vectors_sel is not None
+                    else None
+                )
+                action_mse = (
+                    _safe_vector_mse(gt_actions_sel[rank], pred_actions_sel[rank])
+                    if gt_actions_sel is not None and pred_actions_sel is not None
+                    else None
+                )
+                suffix = []
+                if latent_mse is not None:
+                    suffix.append(f"latent_mse={latent_mse:.4f}")
+                if action_mse is not None:
+                    suffix.append(f"action_mse={action_mse:.4f}")
+                if suffix:
+                    pred_str = f"{pred_str} {' '.join(suffix)}"
             freeform = (
                 freeform_texts[rank]
                 if freeform_texts is not None and rank < len(freeform_texts)
@@ -648,11 +819,16 @@ class VLATrainSampleVisualizationCallback(Callback):
             records.append(
                 {
                     "step": step,
+                    "mode": mode.value,
                     "index": int(original_idx),
                     "rank": int(rank),
                     "instruction": str(instructions[original_idx]),
-                    "gt_codes": gt_codes_sel[rank],
-                    "pred_codes": pred_codes_sel[rank],
+                    "gt_codes": gt_codes_sel[rank] if gt_codes_sel is not None else None,
+                    "pred_codes": pred_codes_sel[rank] if pred_codes_sel is not None else None,
+                    "gt_vector": gt_vectors_sel[rank] if gt_vectors_sel is not None else None,
+                    "pred_vector": pred_vectors_sel[rank] if pred_vectors_sel is not None else None,
+                    "gt_action": gt_actions_sel[rank] if gt_actions_sel is not None else None,
+                    "pred_action": pred_actions_sel[rank] if pred_actions_sel is not None else None,
                     "pred_freeform": freeform,
                     "gen_debug": gen_debug[rank]
                     if isinstance(gen_debug, list) and rank < len(gen_debug)

@@ -9,7 +9,7 @@ from foundation.action_tokens import ActionTokenConfig
 from foundation.backends.interfaces import BackendMode, FoundationBatch, LatentOutput, LossOutput
 from foundation.constrained_decode import ActionTokenIds, make_prefix_allowed_tokens_fn
 from foundation.image_adapters import oxe_first_frames_to_pil
-from foundation.qwen3vl_setup import prepare_action_token_training
+from foundation.legacy.qwen3vl_setup import prepare_action_token_training
 from foundation.vla_inputs import ChatConfig, build_inputs_with_prompt_mask, build_prompt_inputs
 
 

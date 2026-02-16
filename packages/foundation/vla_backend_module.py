@@ -63,11 +63,19 @@ class VLATokenBackendLightningModule(pl.LightningModule):
 
     @property
     def vla_model(self) -> Any:
-        return getattr(self.backend, "vla_model", None)
+        model = getattr(self.backend, "vla_model", None)
+        if model is not None:
+            return model
+        core = getattr(self.backend, "core", None)
+        return getattr(core, "vlm", None)
 
     @property
     def processor(self) -> Any:
-        return getattr(self.backend, "processor", None)
+        proc = getattr(self.backend, "processor", None)
+        if proc is not None:
+            return proc
+        core = getattr(self.backend, "core", None)
+        return getattr(core, "processor", None)
 
     @property
     def action_tokens(self) -> Any:
@@ -81,7 +89,11 @@ class VLATokenBackendLightningModule(pl.LightningModule):
 
     @property
     def frames_to_images(self) -> Any:
-        return getattr(self.backend, "frames_to_images", None)
+        adapter = getattr(self.backend, "frames_to_images", None)
+        if adapter is not None:
+            return adapter
+        core = getattr(self.backend, "core", None)
+        return getattr(core, "frames_to_images", None)
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         out, _codes, _vectors, _actions, _frames, _instructions = self._loss_and_targets_from_oxe_batch(batch)
@@ -168,20 +180,39 @@ class VLATokenBackendLightningModule(pl.LightningModule):
                 max_items = min(64, len(instructions))
                 if codes is not None:
                     max_items = min(max_items, int(codes.shape[0]))
+                if vectors is not None:
+                    max_items = min(max_items, int(vectors.shape[0]))
+                if actions is not None:
+                    max_items = min(max_items, int(actions.shape[0]))
                 episode_id = batch.get("episode_id") if isinstance(batch, dict) else None
                 frame_idx = batch.get("frame_idx") if isinstance(batch, dict) else None
                 pred_list: list[list[int]] | None = None
-                if codes is not None:
-                    pred_list = (
-                        pred[:max_items].detach().cpu().tolist()
-                        if isinstance(pred, torch.Tensor)
-                        else [[-1] * int(codes.shape[1]) for _ in range(max_items)]
+                if isinstance(pred, torch.Tensor):
+                    pred_list = pred[:max_items].detach().cpu().tolist()
+                pred_vector_list: list[list[float]] | None = None
+                if isinstance(pred_vector, torch.Tensor):
+                    pred_vector_list = (
+                        pred_vector[:max_items].detach().cpu().reshape(max_items, -1).tolist()
                     )
+                gt_vector_list: list[list[float]] | None = None
+                if isinstance(vectors, torch.Tensor):
+                    gt_vector_list = vectors[:max_items].detach().cpu().reshape(max_items, -1).tolist()
+                pred_action_list: list[list[float]] | None = None
+                if isinstance(pred_actions, torch.Tensor):
+                    pred_action_list = pred_actions[:max_items].detach().cpu().tolist()
+                gt_action_list: list[list[float]] | None = None
+                if isinstance(actions, torch.Tensor):
+                    gt_action_list = actions[:max_items].detach().cpu().tolist()
                 self._last_val_sample = {
                     "frames": frames[:max_items].detach().cpu(),
                     "instructions": list(instructions[:max_items]),
+                    "mode": self.backend_mode.value,
                     "gt_codes": [row.tolist() for row in codes[:max_items].detach().cpu()] if codes is not None else None,
                     "pred_codes": [list(row) for row in pred_list] if pred_list is not None else None,
+                    "gt_vectors": gt_vector_list,
+                    "pred_vectors": pred_vector_list,
+                    "gt_actions": gt_action_list,
+                    "pred_actions": pred_action_list,
                     "gen_debug": gen_debug[:max_items] if isinstance(gen_debug, list) else None,
                     "episode_id": list(episode_id[:max_items]) if episode_id is not None else None,
                     "frame_idx": list(frame_idx[:max_items]) if frame_idx is not None else None,

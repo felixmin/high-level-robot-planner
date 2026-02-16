@@ -8,7 +8,7 @@ import torch
 
 from foundation.action_tokens import ActionTokenConfig
 from foundation.backends.interfaces import BackendMode, FoundationBatch
-from foundation.backends.smol_latent_head_backend import (
+from foundation.legacy.backends.smol_latent_head_backend import (
     SmolFlowActionBackend,
     SmolFlowActionBackendConfig,
     SmolLatentHeadBackend,

@@ -1,11 +1,13 @@
 """
 LAPA Foundation Package
 
-Stage 2: Foundation Policy (Vision-Language-Action Model)
+Stage 2 / Stage 3 shared foundation components.
 
-Current implementation:
-- Qwen3-VL / Cosmos-Reason2 backbone
-- Discrete latent actions represented as special tokens (Approach A)
+Canonical backend path:
+- foundation.backends.smolvla_shared*
+
+Legacy implementations are kept under:
+- foundation.legacy.*
 """
 
 __version__ = "0.1.0"

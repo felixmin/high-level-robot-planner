@@ -8,7 +8,7 @@ import torch
 
 from foundation.action_tokens import ActionTokenConfig
 from foundation.backends.interfaces import BackendMode, FoundationBatch
-from foundation.backends.qwen3vl_chat_backend import (
+from foundation.legacy.backends.qwen3vl_chat_backend import (
     Qwen3VLChatActionTokenBackend,
     Qwen3VLChatBackendConfig,
 )

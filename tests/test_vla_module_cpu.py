@@ -7,7 +7,7 @@ import torch
 
 from foundation.action_tokens import ActionTokenConfig
 from foundation.vla_inputs import ChatConfig
-from foundation.vla_module import VLATokenLightningModule, VLAOptimizerConfig
+from foundation.legacy.vla_module import VLATokenLightningModule, VLAOptimizerConfig
 
 
 class DummyCodeProvider:
