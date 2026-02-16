@@ -182,6 +182,14 @@ def extract_oxe_actions(batch: Dict[str, Any]) -> torch.Tensor:
 
     if isinstance(actions, torch.Tensor):
         out = actions.to(torch.float32)
+    elif isinstance(actions, list):
+        if not actions:
+            raise ValueError("Expected non-empty 'action' list in OXE batch")
+        first = actions[0]
+        if isinstance(first, torch.Tensor):
+            out = torch.stack([x.to(torch.float32) for x in actions], dim=0)
+        else:
+            out = torch.as_tensor(actions, dtype=torch.float32)
     else:
         out = torch.as_tensor(actions, dtype=torch.float32)
 

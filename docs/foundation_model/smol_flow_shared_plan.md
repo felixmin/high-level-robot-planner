@@ -79,5 +79,5 @@ python scripts/submit_job.py \
 ## Run Log
 | Date | Stage | Cluster | Job ID | Config | Status |
 |---|---|---|---|---|---|
-| 2026-02-16 | Stage 2 smoke | LRZ X100 | 5482581 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Submitted (pending) |
-| 2026-02-16 | Stage 2 smoke | MCML X100 | 5482582 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Submitted (pending) |
+| 2026-02-16 | Stage 2 smoke | LRZ X100 | 5482581 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Failed early (`extract_oxe_actions` batch format bug) |
+| 2026-02-16 | Stage 2 smoke | MCML X100 | 5482582 | `experiment=vla_smol_flow_shared`, `max_steps=200`, `check_interval=50`, viz off | Canceled (duplicate queue after LRZ failure diagnosis) |

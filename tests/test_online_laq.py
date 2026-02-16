@@ -87,3 +87,10 @@ def test_extract_oxe_actions_from_list():
     actions = extract_oxe_actions(batch)
     assert actions.shape == (2, 3)
     assert actions.dtype == torch.float32
+
+
+def test_extract_oxe_actions_from_list_of_tensors():
+    batch = {"action": [torch.tensor([1.0, 2.0]), torch.tensor([3.0, 4.0])]}
+    actions = extract_oxe_actions(batch)
+    assert actions.shape == (2, 2)
+    assert actions.dtype == torch.float32
