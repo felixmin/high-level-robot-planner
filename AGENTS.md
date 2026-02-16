@@ -1,0 +1,196 @@
+# HLRP Operational Notes
+
+## Scope
+This file captures the practical workflow used in this repo for:
+- Cluster access and job monitoring
+- Submitting training jobs via `scripts/submit_job.py`
+- Multi-stage training pipeline (`LAQ` -> `VLA` -> `LeRobot`)
+- Dual-queue strategy (`lrz_x100` and `mcml_x100`) with cancel-on-first-start
+
+## Research Engineering Principles
+This is a research codebase. Priorities:
+- Keep code clean, DRY, minimal.
+- Prefer fail-fast behavior over defensive fallback-heavy logic.
+- Avoid excessive input validation; it is acceptable for code to fail so issues surface quickly.
+- Keep defaults in Hydra config, not in Python code.
+- If a required value is missing from config, prefer explicit failure over silent code defaults.
+- Continuously remove unnecessary, bloated, or overly verbose adjacent code when editing.
+
+Comment/documentation policy:
+- Do not add process-comments in code.
+- Add comments only when they document the final state and help future readers understand the code.
+- Document process, rationale, failed alternatives, and migration history in `docs/` instead of inline code comments.
+
+Experiment workflow policy:
+- Always prefer an implement-run-analyze iteration loop.
+- Make small changes, run intermediate checks, and build incrementally.
+- Avoid large untested changes unless unavoidable.
+- For experiment tasks, check `docs/` first to avoid repeating already-tested ideas.
+- After experiments, document outcomes in `docs/`.
+
+Experiment tracking standard:
+- Use metrics-driven comparisons.
+- Record each run with config/settings + target metric(s).
+- Maintain compact result tables for iterative sweeps (one row per run).
+- Use these tables to guide next iterations and decisions.
+
+## Cluster Safety Rules (Strict)
+When operating on cluster systems:
+- Never delete anything. No exceptions.
+- Never run destructive cleanup/delete commands.
+- If disk space is exhausted or near limit: stop immediately and ask what to do next.
+- Only operate within:
+  - user home directory
+  - `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay`
+- Do not modify anything outside those locations.
+- Inside allowed locations, code/file edits are allowed.
+- Small-scale file operations (e.g., targeted rename/move) are allowed when needed and low-risk.
+- No deletion of files/directories, and no large-scale filesystem operations.
+
+## Repository Locations
+- Local repo path:
+  - `/mnt/data/workspace/code/high-level-robot-planner`
+- Cluster repo path:
+  - `~/workspace/code/high-level-robot-planner` (reachable via `ssh ai`)
+- Main DSS root used for runs/cache/images:
+  - `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay`
+
+## Repo Map (Brief)
+- `scripts/`: runnable entrypoints (environment setup, stage training, job submission).
+- `config/`: Hydra configs (experiments, model/data/training components, cluster presets, user overrides).
+- `packages/`: core Python modules:
+  - `packages/laq`: stage-1 latent action training + validation logic.
+  - `packages/foundation`: stage-2 foundation/VLA model code.
+  - `packages/common`: shared data adapters, logging, utilities.
+  - `packages/low_level`: low-level/action-decoder related modules.
+- `lerobot_policy_hlrp/`: installable LeRobot policy plugin package used in stage-3 runs.
+- `containers/`: container build definitions.
+- `docs/`: experiment notes, workflows, and technical documentation.
+- `tests/`: pytest-based tests.
+
+## Execution Context (Always Check First)
+Before deciding how to run anything, first check:
+- `pwd`
+- `hostname`
+- whether you are on cluster or workstation
+
+Decision rule:
+- If already on cluster and job needs cluster resources, run on cluster.
+- If on workstation, decide whether workstation is sufficient; otherwise submit/run on cluster via `ssh ai`.
+- Sometimes code is launched directly from code folders (without Slurm submit flow), both on workstation and on cluster (typically interactive/debug runs).
+
+Workstation capability reference (for local non-Slurm runs):
+- GPU: RTX 5090 (32 GB VRAM)
+- System RAM: 64 GB
+- Use local workstation for smaller/short LAQ or low-scale training/debug runs when resources are sufficient.
+- For larger runs, long runs, or shared reproducible jobs, prefer cluster.
+- Conda env selection on workstation:
+  - Use `hlrp` conda env for latent action model (LAQ) and VLA/stage-2 training.
+  - Use `lerobot` conda env for LeRobot/stage-3 training.
+
+## Primary Scripts
+- Stage 1 (Latent Action Model pretraining):
+  - `scripts/2_train_laq.py`
+- Stage 2 (Foundation/VLA training):
+  - `scripts/4_train_foundation.py`
+- Stage 3 (LeRobot fine-tune/eval integration):
+  - `scripts/6_train_lerobot.py`
+- Unified Slurm submission entrypoint:
+  - `scripts/submit_job.py`
+
+## Stage 3 (LeRobot) Config
+- Smoke config:
+  - `config/experiment/lerobot_hlrp_smoke.yaml`
+- Uses LeRobot policy plugin editable install from:
+  - `lerobot_policy_hlrp`
+
+## Cluster Access + Basic Operations
+- Connect:
+  - `ssh ai`
+- Go to repo:
+  - `cd ~/workspace/code/high-level-robot-planner`
+- Login-node policy:
+  - Never run training on login nodes.
+  - Use login nodes only for submission, monitoring, code sync, and lightweight ops.
+  - Launch compute allocations/jobs for any actual training.
+- Check queue:
+  - `squeue --me`
+- Monitor one job:
+  - `squeue -j <JOBID> -o "%.18i %.30P %.20j %.8T %.10M %.9l %R"`
+- Tail logs:
+  - `tail -f <RUN_DIR>/<JOBID>.out`
+  - `tail -f <RUN_DIR>/<JOBID>.err`
+- Final status:
+  - `sacct -j <JOBID> --format=JobID,State,ExitCode,Partition,Elapsed -n`
+
+## Submit Workflow
+- General form:
+  - `python scripts/submit_job.py experiment=<experiment_name> [overrides...]`
+- Dry-run generated sbatch only:
+  - `python scripts/submit_job.py submit.dry_run=true experiment=<experiment_name>`
+- Sweep support:
+  - define `sweep.params` in the experiment config
+  - submit all combinations:
+    - `python scripts/submit_job.py experiment=<sweep_experiment>`
+  - preview generated jobs:
+    - `python scripts/submit_job.py submit.dry_run=true experiment=<sweep_experiment>`
+- Local non-Slurm run path (when suitable):
+  - run training scripts directly, e.g. `python scripts/2_train_laq.py ...`
+  - this is common on workstation and sometimes in cluster interactive sessions
+
+## Dual-Queue Strategy (Faster Start)
+Submit the same run to both clusters:
+- LRZ broad queue:
+  - `cluster=lrz_x100` (partitions include H100/A100 pools)
+- MCML broad queue:
+  - `cluster=mcml_x100` (partitions include H100/A100 pools)
+
+Typical sequence:
+1. Submit LRZ job (`cluster=lrz_x100`)
+2. Submit MCML job (`cluster=mcml_x100`)
+3. Watch both job IDs in `squeue`
+4. When one switches to `RUNNING`, cancel the other:
+   - `scancel <other_job_id>`
+
+## Container/Image Notes
+- Current state: two separate containers are used.
+  - Container A: latent action model (stage-1) and VLA/stage-2 training.
+  - Container B: LeRobot/stage-3 environment.
+  - This is work in progress and may be unified later.
+- Main image used for Stage 3:
+  - `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/enroot/hlrp_libero.sqsh`
+- If image import/build is needed:
+  - Run Enroot import on a compute node (not login node if Enroot unavailable there).
+  - Enroot import can OOM; request enough memory.
+
+## Testing
+- Run tests with `pytest` (user may call this "pi test").
+- Prefer targeted tests for fast iteration before broader test suites.
+
+## Run + Cache Paths
+- Runs (timestamped):
+  - `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/runs/<timestamp>_<experiment>`
+- Cache root:
+  - `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/cache`
+- `submit_job.py` mounts repo/runs/cache into container automatically.
+
+## W&B and Hugging Face Auth
+- W&B:
+  - Enable with `logging.use_wandb=true lerobot.wandb_enable=true`
+  - In current setup, auth works from user credentials on cluster (e.g. `~/.netrc`) when accessible in runtime environment.
+- Hugging Face:
+  - `submit_job.py` looks for `~/.huggingface/token` and wires `HF_TOKEN` / `HUGGINGFACE_HUB_TOKEN` for jobs.
+
+## Known Stage 3 Installer Behavior
+- `scripts/6_train_lerobot.py` editable policy install fallback order:
+  1. `python -m pip install --no-deps -e ...`
+  2. `uv pip install --python <current_python> --no-deps -e ...`
+  3. `pip install --no-deps -e ...`
+- This is to support different container layouts (with/without pip in active venv).
+
+## Useful Stage 3 Smoke Command Pattern
+Example via submit script:
+- `python scripts/submit_job.py experiment=lerobot_hlrp_smoke cluster=lrz_x100 experiment.name=lerobot_hlrp_smoke_retry`
+
+With W&B enabled:
+- `python scripts/submit_job.py experiment=lerobot_hlrp_smoke cluster=lrz_x100 experiment.name=lerobot_hlrp_smoke_wandb logging.use_wandb=true lerobot.wandb_enable=true`

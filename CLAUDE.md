@@ -1,87 +1,111 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Research Engineering Principles
+
+This is a research codebase. Priorities:
+- Keep code clean, DRY, minimal.
+- Prefer fail-fast behavior over defensive fallback-heavy logic.
+- Avoid excessive input validation; it is acceptable for code to fail so issues surface quickly.
+- Keep defaults in Hydra config, not in Python code.
+- If a required value is missing from config, prefer explicit failure over silent code defaults.
+- Continuously remove unnecessary, bloated, or overly verbose adjacent code when editing.
+
+Comment/documentation policy:
+- Do not add process-comments in code.
+- Add comments only when they document the final state and help future readers understand the code.
+- Document process, rationale, failed alternatives, and migration history in `docs/` instead of inline code comments.
+
+Experiment workflow policy:
+- Always prefer an implement-run-analyze iteration loop.
+- Make small changes, run intermediate checks, and build incrementally.
+- Avoid large untested changes unless unavoidable.
+- For experiment tasks, check `docs/` first to avoid repeating already-tested ideas.
+- After experiments, document outcomes in `docs/`.
+
+Experiment tracking standard:
+- Use metrics-driven comparisons.
+- Record each run with config/settings + target metric(s).
+- Maintain compact result tables for iterative sweeps (one row per run).
+- Use these tables to guide next iterations and decisions.
 
 ## Project Overview
 
-Our project is a three-stage robot learning system that learns policies from videos without action labels.
-
-**Three Training Stages:**
+Three-stage robot learning system that learns policies from videos without action labels:
 1. **Stage 1 (LAQ)**: VQ-VAE compressing frame-to-frame transitions into discrete latent codes
-2. **Stage 2 (Foundation)**: Vision-Language model predicting latent actions from images + text
-3. **Stage 3 (Finetuning)**: Adapting the foundation model to output continuous robot commands
+2. **Stage 2 (Foundation/VLA)**: Vision-Language model predicting latent actions from images + text
+3. **Stage 3 (LeRobot finetuning)**: Adapting the foundation model to output continuous robot commands
 
-**Infrastructure:**
-- **Local Development:** RTX 5090 (24GB VRAM) for single-GPU training and debugging
-- **Production:** LRZ AI cluster (H100 GPUs, GPFS storage, Slurm scheduler) for multi-node training
+## Repo Map
 
-## Development Commands
+- `scripts/`: runnable entrypoints (environment setup, stage training, job submission).
+- `config/`: Hydra configs (experiments, model/data/training components, cluster presets).
+- `packages/`: core Python modules:
+  - `packages/laq`: stage-1 latent action training + validation logic.
+  - `packages/foundation`: stage-2 foundation/VLA model code.
+  - `packages/common`: shared data adapters, logging, utilities.
+  - `packages/low_level`: low-level/action-decoder related modules.
+- `lerobot_policy_hlrp/`: installable LeRobot policy plugin package used in stage-3 runs.
+- `containers/`: container build definitions.
+- `docs/`: experiment notes, workflows, and technical documentation.
+- `tests/`: pytest-based tests.
 
-### Quick Start
-```bash
-# Create conda environment
-conda env create -f environment.yml
+## Primary Scripts
 
-# Activate and install
-conda activate hlrp
-# install pytorch 2.9.1
+- Stage 1 (LAQ): `scripts/2_train_laq.py`
+- Stage 2 (VLA): `scripts/4_train_foundation.py`
+- Stage 3 (LeRobot): `scripts/6_train_lerobot.py`
+- Job submission: `scripts/submit_job.py`
 
-# Verify setup
-python scripts/0_setup_environment.py
-```
+## Repository Locations
 
-### Testing
-```bash
-# Run all tests
-pytest tests/
+- Local: `/mnt/data/workspace/code/high-level-robot-planner`
+- Cluster: `~/workspace/code/high-level-robot-planner` (reachable via `ssh ai`)
+- DSS root (runs/cache/images): `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay`
 
-# Specific test file
-pytest tests/test_hydra_configs.py -v
+## Execution Context
 
-# With coverage
-pytest --cov=packages --cov-report=html tests/
-```
+Before deciding how to run anything, check `pwd` and `hostname` to determine if on cluster or workstation.
 
-### Code Quality
-```bash
-# Format code
-black packages/ scripts/ tests/
+- If already on cluster and job needs cluster resources, run on cluster.
+- If on workstation, decide whether workstation is sufficient; otherwise submit/run on cluster via `ssh ai`.
+- Sometimes code is launched directly (without Slurm), both on workstation and on cluster (interactive/debug runs).
 
-# Lint
-ruff check packages/ scripts/ tests/
-```
+### Workstation (Local)
 
-## Project Architecture
+- GPU: RTX 5090 (32 GB VRAM), System RAM: 64 GB
+- Use for smaller/short LAQ or low-scale training/debug runs.
+- For larger runs, long runs, or shared reproducible jobs, prefer cluster.
+- Conda envs:
+  - `hlrp` for LAQ (stage-1) and VLA (stage-2) training
+  - `lerobot` for LeRobot (stage-3) training
 
-### Repository Structure
-- **packages/**: Installable Python packages with shared code
-  - `common/` - Shared utilities, logging, data interfaces
-  - `laq/` - Stage 1: Latent action quantization (VQ-VAE)
-  - `foundation/` - Stage 2: Vision-Language-Action model
-  - `low_level/` - Stage 3: Action decoding
-- **config/**: Hydra YAML configurations (modular, composable)
-  - `experiment/` - Complete experiment setups (laq_debug, laq_full, vla_7b)
-  - `model/`, `data/`, `training/`, `cluster/` - Config components
-- **scripts/**: Training entry points (numbered 0-5 for each stage)
-- **slurm/**: LRZ job submission templates
-- **containers/**: Enroot/Docker definitions for LRZ
+### Cluster (LRZ/MCML)
 
-### Key Architectural Decisions
+- Connect: `ssh ai`
+- Never run training on login nodes. Use login nodes only for submission, monitoring, code sync, and lightweight ops. Launch compute allocations/jobs for any actual training.
+- Check queue: `squeue --me`
+- Monitor job: `squeue -j <JOBID> -o "%.18i %.30P %.20j %.8T %.10M %.9l %R"`
+- Tail logs: `tail -f <RUN_DIR>/<JOBID>.out` / `.err`
+- Job status: `sacct -j <JOBID> --format=JobID,State,ExitCode,Partition,Elapsed -n`
 
-**Modular Monorepo:** Single repository with installable packages for tight coupling between stages (LAQ vocabulary changes cascade to Foundation and Low-Level). Enables atomic commits and simplified dependency management.
+#### Dual-Queue Strategy
 
-**Hybrid Training Framework:**
-- **Stage 1 & 3 (LAQ, Finetuning):** PyTorch Lightning for standard supervised learning with automatic distributed training (DDP) and checkpointing
-- **Stage 2 (Foundation):** Lightning Fabric for multi-node FSDP training with fine control over training loops (raw loop control while keeping ecosystem consistent)
+Submit same run to both clusters for faster start:
+1. Submit to LRZ: `cluster=lrz_x100` (partitions include H100/A100 pools)
+2. Submit to MCML: `cluster=mcml_x100` (partitions include H100/A100 pools)
+3. Watch both with `squeue`, cancel the slower one with `scancel <JOBID>`
 
-**Data Pipeline:** WebDataset with TAR shards for offline preprocessing. Critical for LRZ's GPFS filesystem which is optimized for large sequential reads, not millions of small files. Pattern: Raw Videos → Preprocessing → Sharded TARs → WebDataset Loader → Training.
+#### Run + Cache Paths
 
-### Configuration System
+- Runs: `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/runs/<timestamp>_<experiment>`
+- Cache: `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/cache`
+- `submit_job.py` mounts repo/runs/cache into container automatically.
 
-Uses **Hydra** (1.3+) for composable, modular configuration. Experiments compose components with explicit package paths:
+## Configuration System
+
+Uses Hydra (1.3+) for composable config. Experiments compose components with package paths:
 
 ```yaml
-# config/experiment/laq_debug.yaml
 defaults:
   - /model@model: laq
   - /data@data: laq_multi_dataset
@@ -89,347 +113,83 @@ defaults:
   - /cluster@cluster: local_dev
 ```
 
-Package paths (`@model:`, `@data:`, etc.) explicitly place configs under their keys. Component configs are clean without package directives. Override from CLI:
+Override from CLI:
 ```bash
 python scripts/2_train_laq.py experiment=laq_full data.batch_size=512 training.optimizer.lr=5e-5
 ```
 
-## Infrastructure
+## Submit Workflow
 
-**LRZ Cluster (H100 multi-node training):**
-- See `docs/job_submission.md` for job submission and sweeps
-- See `docs/lrz_workflow.md` for cluster setup and monitoring
-
-**Local RTX 5090 (single-GPU development):**
-- 24GB VRAM: Use batch size 8-16, enable `mixed_precision=bf16` via Hydra config
-- Stage 1 (LAQ) and Stage 3 (Finetuning) fully trainable on RTX 5090
-- Stage 2 (Foundation) requires gradient checkpointing for larger models
-
-## Testing
-
-Add unit and integration tests as features are implemented. Current tests focus on configuration validation. Run tests with:
 ```bash
-pytest tests/
-pytest tests/test_hydra_configs.py -v
-pytest --cov=packages --cov-report=html tests/
+# Submit job
+python scripts/submit_job.py experiment=<experiment_name> [overrides...]
+
+# Dry-run
+python scripts/submit_job.py submit.dry_run=true experiment=<experiment_name>
+
+# Sweep (define sweep.params in experiment config)
+python scripts/submit_job.py experiment=<sweep_experiment>
 ```
 
-## Training Script Pattern
-
-Each training script follows this template:
-
-```python
-import hydra
-from omegaconf import DictConfig
-
-@hydra.main(version_base=None, config_path="../config", config_name="config")
-def main(cfg: DictConfig):
-    print(OmegaConf.to_yaml(cfg))
-    # TODO: Implement training
-```
-
-Scripts use Hydra decorators to automatically load and compose configurations. CLI arguments become Hydra overrides (e.g., `experiment=laq_debug` loads `config/experiment/laq_debug.yaml`).
-
-## Dependencies
-
-Python 3.12 with PyTorch 2.9.1. Install via:
+Local non-Slurm runs (common on workstation and cluster interactive sessions):
 ```bash
-conda env create -f environment.yml
-pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu130
-```
-
-Key dependencies: pytorch-lightning, transformers, webdataset, hydra-core, wandb, accelerate, timm. See `environment.yml` for complete list.
-
-## Common Workflows
-
-### Running a Single Training Stage
-```bash
-# Stage 1: LAQ on local machine
 python scripts/2_train_laq.py experiment=laq_debug
-
-# Stage 1: LAQ on LRZ cluster
-python scripts/submit_job.py experiment=laq_full
-
-# Stage 2: Foundation on LRZ (multi-node)
-python scripts/submit_job.py experiment=vla_7b
-```
-
-### Submitting Sweeps (Multiple Jobs)
-```bash
-# Define sweep in experiment config with sweep.params
-# See config/experiment/laq_lr_sweep.yaml for example
-
-# Submit sweep (one job per parameter combination)
-python scripts/submit_job.py experiment=laq_lr_sweep
-
-# Dry run to preview jobs
-python scripts/submit_job.py submit.dry_run=true experiment=laq_lr_sweep
 ```
 
 See `docs/job_submission.md` for full documentation.
 
-### Modifying Configuration
-Edit YAML files in `config/` hierarchy or override via CLI:
-```bash
-python scripts/2_train_laq.py experiment=laq_debug data.batch_size=16 training.epochs=10
-```
-
-### Debugging Training Scripts
-Before running full training:
-1. Test config loads: `pytest tests/test_hydra_configs.py -v`
-2. Verify setup: `python scripts/0_setup_environment.py`
-3. Check configuration: `python scripts/2_train_laq.py experiment=laq_debug --help`
-
-### Data Loading (LAQ Training)
-
-LAQ training supports two data loading modes:
-
-#### 1. Local Multi-Dataset Loading (Bridge, YouTube)
-
-Uses multi-dataset loading with adapters. Configure datasets via the `sources` list:
+## Testing
 
 ```bash
-# Debug mode - small subset for quick iteration
-python scripts/2_train_laq.py experiment=laq_debug
-
-# Normal training - full dataset
-python scripts/2_train_laq.py experiment=laq_normal
+pytest tests/                              # all tests
+pytest tests/test_hydra_configs.py -v      # specific file
+pytest --cov=packages --cov-report=html tests/  # with coverage
 ```
 
-Key parameters:
-- `max_pairs`: Limit frame pairs for debugging
-- `offsets`: Frame offsets for pair generation (e.g., `offsets=[15, 30, 60]`)
-- `val_split`: Train/val split ratio (default 0.1)
+Prefer targeted tests for fast iteration before broader test suites. User may call this "pi test".
 
-Data loading pre-computes all valid frame pairs across datasets for deterministic training.
-
-#### 2. OXE Streaming (Open X-Embodiment)
-
-Stream data from Google Cloud Storage using TensorFlow Datasets:
+## Code Quality
 
 ```bash
-# Language Table from OXE
-python scripts/2_train_laq.py experiment=laq_oxe
-
-# Bridge from OXE
-python scripts/2_train_laq.py data=laq_oxe_bridge training.epochs=100
-
-# RT-1 from OXE
-python scripts/2_train_laq.py data=laq_oxe_rt1 training.epochs=100
-
-# RoboNet from OXE
-python scripts/2_train_laq.py data=laq_oxe_robonet training.epochs=100
-
-# All OXE datasets combined
-python scripts/2_train_laq.py data=laq_oxe_all training.epochs=100
+black packages/ scripts/ tests/
+ruff check packages/ scripts/ tests/
 ```
 
-**Available OXE Datasets**:
-- `language_table` - 442k episodes, 2D tabletop manipulation
-- `language_table_blocktorelative_oracle_sim` - 200k episodes, oracle agent
-- `bridge` - 25,460 train episodes, WidowX kitchen manipulation
-- `rt1` - 87k episodes, Google Robot mobile manipulator, pick/place tasks
-- `robonet` - 83k episodes, multi-robot (widowx, franka, baxter, sawyer), random interactions
+## Dependencies
 
-**OXE Config Example** (`config/data/laq_oxe_bridge.yaml`):
-```yaml
-dataset_name: bridge
-train_split: "train[:90%]"
-val_split: "train[90%:]"
-offset: 5  # Frame offset (steps)
-image_size: 256
-batch_size: 32
-return_metadata: true  # Required for validation strategies
-```
-
-**Key Differences**:
-- **Streaming**: OXE data streams from GCS, no local storage needed
-- **TFDS splits**: Use TensorFlow Datasets split syntax (e.g., `train[:1000]`, `train[90%:]`)
-- **Metadata**: OXE provides `action`, `initial_state`, and `instruction` automatically
-
-### Multi-Dataset Training
-
-Train on multiple datasets using adapters:
-```yaml
-sources:
-  - type: youtube
-    root: /mnt/data/datasets/youtube_new
-    filters:
-      contains_hand_sam3: true
-
-  - type: bridge
-    root: /mnt/data/datasets/bridgev2/raw/bridge_data_v2
-    filters:
-      environment: toykitchen1
-```
-
-### Metadata-Based Train/Val Splits
-
-Hold out specific data for validation (distribution shift analysis):
-```yaml
-split_mode: metadata
-val_scene_filters:
-  video_id: "holdout_video"  # Hold out specific video
-  # OR: dataset_type: "bridge"  # Hold out entire dataset
-  # OR: environment: "toykitchen7"  # Leave-one-out
-```
-
-### Validation Buckets
-
-Create named validation subsets for analysis:
-```yaml
-val_buckets:
-  youtube_only:
-    dataset_type: "youtube"
-  unseen_robot:
-    robot: "minsky"
-```
-
-### Data Filtering
-
-Filter scenes by metadata (YAML-compatible):
-```yaml
-filters:
-  # Comparison operators (use lists for YAML)
-  max_trans: [">", 10.0]
-  label: ["!=", "static"]
-
-  # Multiple allowed values
-  task_category: ["pnp_push_sweep", "stack_blocks"]
-
-  # Boolean and equality
-  contains_hand_sam3: true
-  environment: toykitchen1
-```
-
-### Performance Profiling
-
-Enable profiling to debug slow training:
+Python 3.12, PyTorch 2.9.1. Install via:
 ```bash
-# Low overhead (~5%), always safe to use
-python scripts/2_train_laq.py experiment=laq_debug \
-    training.profiler.enabled=true \
-    training.profiler.type=simple
-
-# High overhead (~20-50%), detailed GPU analysis
-python scripts/2_train_laq.py experiment=laq_debug \
-    training.profiler.enabled=true \
-    training.profiler.type=pytorch \
-    training.epochs=2
+conda env create -f environment.yml
+conda activate hlrp
+pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu130
 ```
 
-**See:** `docs/profiling.md` for detailed profiling guide
+## Key Architectural Decisions
 
-### Validation Configuration
+- **Modular monorepo**: installable packages for tight coupling between stages.
+- **Hybrid training framework**: PyTorch Lightning for stages 1 & 3 (DDP), Lightning Fabric for stage 2 (FSDP multi-node).
+- **Data pipeline**: WebDataset with TAR shards for GPFS-optimized sequential reads.
+- **LAQ data loading**: two modes — local multi-dataset (`LAQDataModule`) and OXE streaming (`OXEDataModule`, auto-detected by `dataset_name` field).
+- **Validation**: bucket-strategy binding via `ValidationStrategyCallback`. See config examples in `config/` and implementation in `packages/laq/`.
 
-The validation system uses **bucket-strategy binding** for flexible, multi-dataset validation:
+## Auth
 
-```yaml
-validation:
-  # Validate 100 times per epoch (important for large datasets)
-  check_interval: 0.01
+- W&B: enable with `logging.use_wandb=true lerobot.wandb_enable=true`. Auth via `~/.netrc`.
+- Hugging Face: `submit_job.py` reads `~/.huggingface/token` and wires `HF_TOKEN` / `HUGGINGFACE_HUB_TOKEN`.
 
-  # Fixed samples: diverse across datasets, tracked every validation
-  num_fixed_samples: 8
-  # Random samples: different each time for diversity
-  num_random_samples: 8
-  max_cached_samples: 1024  # Per-bucket cache limit
+## Stage 3 Notes
 
-  # Define validation buckets (data subsets with filters)
-  buckets:
-    youtube_iid:
-      filters: {dataset_type: "youtube"}
-      max_samples: 100
-    bridge_iid:
-      filters: {dataset_type: "bridge", environment: ["!=", "toykitchen7"]}
-      max_samples: 100
-    bridge_holdout:
-      filters: {dataset_type: "bridge", environment: "toykitchen7"}
-      max_samples: 100
-      is_holdout: true  # Distribution shift data
-    language_table:
-      filters: {dataset_type: "oxe", dataset_name: "language_table"}
-      max_samples: 200
+- Smoke config: `config/experiment/lerobot_hlrp_smoke.yaml`
+- Uses LeRobot policy plugin from `lerobot_policy_hlrp/` (editable install).
+- Installer fallback order: `python -m pip` → `uv pip` → `pip` (all `--no-deps -e`). Supports different container layouts (with/without pip in active venv).
+- Example smoke command: `python scripts/submit_job.py experiment=lerobot_hlrp_smoke cluster=lrz_x100 experiment.name=lerobot_hlrp_smoke_retry`
+- With W&B: `python scripts/submit_job.py experiment=lerobot_hlrp_smoke cluster=lrz_x100 experiment.name=lerobot_hlrp_smoke_wandb logging.use_wandb=true lerobot.wandb_enable=true`
 
-  # Strategies with embedded bucket bindings
-  strategies:
-    basic:
-      enabled: true
-      visualize_train: true
-      visualize_val: true
+## Containers
 
-    # Per-bucket latent transfer (separate instances for comparison)
-    transfer_bridge_iid:
-      type: latent_transfer
-      buckets: ["bridge_iid"]
-      every_n_validations: 10
-      num_pairs: 256
-    transfer_bridge_holdout:
-      type: latent_transfer
-      buckets: ["bridge_holdout"]
-      every_n_validations: 10
-      num_pairs: 256
-
-    # Action visualization (requires action metadata)
-    action_scatter_lt:
-      type: action_token_scatter
-      buckets: ["language_table"]
-      every_n_validations: 3
-      num_samples: 1000
-
-    # Clustering (runs on all data when no buckets specified)
-    clustering:
-      enabled: true
-      every_n_validations: 20
-      num_clusters: 16
-```
-
-**Key Features**:
-- **Bucket-aware routing**: Samples routed to matching buckets based on filters
-- **Strategy-bucket binding**: Strategies declare which buckets they operate on via `buckets` field
-- **Named instances**: Create multiple strategy instances (e.g., `transfer_bridge_iid`, `transfer_bridge_holdout`) for per-bucket metrics
-- **Automatic applicability checks**: Strategies skip execution if insufficient data
-- **Metadata requirements**: Strategies declare required metadata (e.g., `action`, `initial_state`)
-
-**Validation Strategy Compatibility**:
-
-| Strategy | Requires | Compatible Datasets |
-|----------|----------|---------------------|
-| `basic_visualization` | frames | All |
-| `latent_transfer` | frames | All |
-| `clustering` | codes | All |
-| `codebook_histogram` | codes | All |
-| `action_token_scatter` | codes + `action` metadata | language_table, bridge |
-| `state_sequence_scatter` | codes + `initial_state` metadata | language_table, bridge |
-
-## Implementation Notes
-
-- **LAQ Training** (Stage 1): Implemented in `scripts/2_train_laq.py`. Uses PyTorch Lightning for standard supervised learning with DDP.
-- **Foundation Training** (Stage 2): Implement in `scripts/4_train_foundation.py`. Use Lightning Fabric for FSDP multi-node training with fine training loop control.
-- **Data Loading**:
-  - **Local datasets** (Bridge, YouTube): Uses `LAQDataModule` with multi-source adapters (`MultiSourcePairDataset`). Pre-computes all valid frame pairs for deterministic training.
-  - **OXE datasets** (language_table, bridge): Uses `OXEDataModule` with `OXEFramePairDataset`. Streams from GCS using TensorFlow Datasets with `tf.data` pipelines.
-  - **Auto-detection**: Training script automatically selects `OXEDataModule` if `dataset_name` field present in config.
-  - Stage 2/3: Implement WebDataset-based loaders in `packages/common/` for streaming TAR shards.
-- **Validation**: Uses `ValidationStrategyCallback` with bucket-strategy binding:
-  - **Architecture**: Bucket-aware routing where samples are filtered to named buckets based on metadata
-  - **Strategies**: Each strategy declares metadata requirements (e.g., `action`, `initial_state`) and bucket bindings
-  - **Applicability checks**: Strategies automatically skip execution if insufficient data via `can_run()` method
-  - **Compare mode**: Strategies can run separately on each bucket for distribution shift analysis
-  - **Implementations**: Basic visualization, latent transfer, clustering, action/state scatter plots
-- **OXE Adapters**: Located in `packages/common/adapters/oxe.py`:
-  - Handles dict-based actions (Bridge, RT-1) vs flat arrays (language_table, RoboNet)
-  - Handles string instructions (Bridge, RT-1) vs encoded tensors (language_table)
-  - Handles step-level instructions (RoboNet) vs observation-level (others)
-  - Extracts robot metadata for multi-robot datasets (RoboNet: widowx, franka, baxter, sawyer)
-  - Configurable via `OXEDatasetConfig` registry with `instruction_in_step` and `robot_key` fields
-- **Logging**: Use `packages/common/logging.py` for consistent logging across stages.
-- **Checkpointing**: Lightning handles checkpoint saving; configure paths via Hydra config.
-
-## References
-
-- **Hydra Documentation**: Configuration system for composable configs
-- **PyTorch Lightning**: Framework for Stages 1 and 3
-- **Lightning Fabric**: Framework for Stage 2 multi-node training
-- **WebDataset**: Streaming loader for TAR-based datasets
-- **LRZ Cluster**: See `docs/lrz_workflow.md` for cluster-specific guidance
+- Two separate containers currently:
+  - Container A: LAQ (stage-1) and VLA (stage-2)
+  - Container B: LeRobot (stage-3)
+- This is work in progress and may be unified later.
+- Main stage-3 image: `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/enroot/hlrp_libero.sqsh`
+- Run Enroot import on compute nodes (not login), request enough memory to avoid OOM.

@@ -1,0 +1,43 @@
+FROM nvcr.io/nvidia/pytorch:25.10-py3
+
+# Configure environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    MUJOCO_GL=egl
+
+# Install system dependencies (as root)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git curl \
+    libglib2.0-0 \
+    libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev \
+    libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev \
+    libswscale-dev libswresample-dev libavfilter-dev \
+    ffmpeg \
+    pkg-config cmake ninja-build \
+    && useradd --create-home --shell /bin/bash user_lerobot \
+    && usermod -aG sudo user_lerobot \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace/high-level-robot-planner
+RUN chown -R user_lerobot:user_lerobot /workspace
+
+# Let LeRobot resolve and install its own compatible Python stack (including torch).
+# Policy plugin is installed at runtime from the mounted repo.
+RUN python -m pip install --no-build-isolation egl_probe && \
+    python -m pip install "lerobot[libero]==0.4.3" "hf-libero>=0.1.3" && \
+    python -m pip uninstall -y torchao || true && \
+    python -m pip install nvidia-ml-py && \
+    python -c "import importlib.util as iu; import torch, transformers, diffusers, lerobot, libero, accelerate, datasets; print('ok', torch.__version__, transformers.__version__, diffusers.__version__, datasets.__version__, 'torchao=', iu.find_spec('torchao'))"
+
+# Switch to the non-root user for runtime
+USER user_lerobot
+
+# Runtime cache locations for the non-root user
+ENV HOME=/home/user_lerobot \
+    HF_HOME=/home/user_lerobot/.cache/huggingface \
+    HF_LEROBOT_HOME=/home/user_lerobot/.cache/huggingface/lerobot \
+    TORCH_HOME=/home/user_lerobot/.cache/torch \
+    TRITON_CACHE_DIR=/home/user_lerobot/.cache/triton
+
+
+# Set the default command
+CMD ["/bin/bash"]
