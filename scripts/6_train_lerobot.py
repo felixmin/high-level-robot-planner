@@ -70,7 +70,7 @@ def _install_editable_policy(
 
     # 1) Prefer the current interpreter's pip module.
     ok, err = _run_install_command(
-        [python, "-m", "pip", "install", "-e", str(editable_path)],
+        [python, "-m", "pip", "install", "--no-deps", "-e", str(editable_path)],
         logger=logger,
         cwd=cwd,
         env=env,
@@ -90,7 +90,7 @@ def _install_editable_policy(
         )
         if boot_ok:
             ok, err = _run_install_command(
-                [python, "-m", "pip", "install", "-e", str(editable_path)],
+                [python, "-m", "pip", "install", "--no-deps", "-e", str(editable_path)],
                 logger=logger,
                 cwd=cwd,
                 env=env,
@@ -101,26 +101,20 @@ def _install_editable_policy(
         else:
             attempted_errors.append(boot_err)
 
-    # 2) Try pip executable on PATH.
-    pip_bin = shutil.which("pip", path=env.get("PATH"))
-    if pip_bin is not None:
-        ok, err = _run_install_command(
-            [pip_bin, "install", "-e", str(editable_path)],
-            logger=logger,
-            cwd=cwd,
-            env=env,
-        )
-        if ok:
-            return
-        attempted_errors.append(err)
-    else:
-        attempted_errors.append("pip executable not found on PATH")
-
-    # 3) Try uv pip with explicit interpreter.
+    # 2) Prefer uv pip with explicit interpreter (installs into the active env).
     uv_bin = shutil.which("uv", path=env.get("PATH"))
     if uv_bin is not None:
         ok, err = _run_install_command(
-            [uv_bin, "pip", "install", "--python", python, "-e", str(editable_path)],
+            [
+                uv_bin,
+                "pip",
+                "install",
+                "--python",
+                python,
+                "--no-deps",
+                "-e",
+                str(editable_path),
+            ],
             logger=logger,
             cwd=cwd,
             env=env,
@@ -130,6 +124,21 @@ def _install_editable_policy(
         attempted_errors.append(err)
     else:
         attempted_errors.append("uv executable not found on PATH")
+
+    # 3) Last resort: pip executable on PATH (may target user/system site).
+    pip_bin = shutil.which("pip", path=env.get("PATH"))
+    if pip_bin is not None:
+        ok, err = _run_install_command(
+            [pip_bin, "install", "--no-deps", "-e", str(editable_path)],
+            logger=logger,
+            cwd=cwd,
+            env=env,
+        )
+        if ok:
+            return
+        attempted_errors.append(err)
+    else:
+        attempted_errors.append("pip executable not found on PATH")
 
     details = "\n".join(f"- {msg}" for msg in attempted_errors)
     raise RuntimeError(
