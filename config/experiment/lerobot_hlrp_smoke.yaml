@@ -1,0 +1,58 @@
+# @package _global_
+
+# Stage 3: LeRobot smoke fine-tuning with HLRP plugin policy.
+
+defaults:
+  - /cluster@cluster: mcml_h100
+  - optional /user_config: local
+
+experiment:
+  name: lerobot_hlrp_smoke
+  description: "Stage 3 smoke run (LeRobot + HLRP plugin policy)"
+
+submit:
+  script: 6_train_lerobot
+
+cluster:
+  compute:
+    gpus_per_node: 1
+    cpus_per_task: 8
+    mem_gb: 32
+    time_limit: "00:30:00"
+  container:
+    image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/enroot/hlrp_libero.sqsh
+
+logging:
+  use_wandb: false
+  tags: ["stage3", "lerobot", "smoke", "hlrp-policy"]
+
+lerobot:
+  command: lerobot-train
+  # Editable-install plugin policy package inside the container before training.
+  install_policy_editable: lerobot_policy_hlrp
+
+  policy_type: hlrp_smoke
+  policy_repo_id: felixmin/hlrp_smoke_libero_stage3
+  policy_device: cuda
+  push_to_hub: false
+  wandb_enable: false
+
+  dataset_repo_id: HuggingFaceVLA/libero
+  dataset_episodes: "[0]"
+
+  env_type: null
+  env_task: null
+  output_dir: ${logging.runs_dir}/lerobot_smoke
+  job_name: ${experiment.name}
+
+  steps: 50
+  batch_size: 2
+  num_workers: 2
+  eval_freq: 0
+  log_freq: 10
+  save_freq: 1000
+
+  env:
+    MUJOCO_GL: egl
+
+  extra_args: []
