@@ -58,11 +58,12 @@ Optional Stage-2 checkpoint handoff:
 - Default output path: `<run_dir>/artifacts/smolvla_shared_stage2_artifact.pt`
 - Payload:
   - `manifest`: model/flow metadata (`model_name`, `torch_dtype`, `image_size`, `action_dim`, `latent_vector_dim`, flow params, source metadata)
-  - `core_state_dict`: Stage-2 shared core weights
+  - `core_state_dict`: Stage-2 shared core weights (private cache keys dropped)
 - Consumer: `HLRPSmolVLASharedPolicy` in Stage 3
   - Loads `policy.stage2_artifact` only
   - Invalid/mismatched artifact schema fails fast
-  - Core shape/key mismatches fail fast (`strict=True`)
+  - Manifest/config mismatches fail fast
+  - Key mismatches fail fast except optional missing `action_head.*` (latent-only Stage-2 runs)
 
 Example:
 
