@@ -159,6 +159,7 @@ def _command_from_cfg(cfg: DictConfig) -> list[str]:
     batch_size = OmegaConf.select(cfg, "lerobot.batch_size")
     num_workers = OmegaConf.select(cfg, "lerobot.num_workers")
     eval_freq = OmegaConf.select(cfg, "lerobot.eval_freq")
+    eval_batch_size = OmegaConf.select(cfg, "lerobot.eval_batch_size")
     log_freq = OmegaConf.select(cfg, "lerobot.log_freq")
     save_freq = OmegaConf.select(cfg, "lerobot.save_freq")
 
@@ -195,6 +196,9 @@ def _command_from_cfg(cfg: DictConfig) -> list[str]:
         f"--save_freq={int(save_freq)}",
         f"--wandb.enable={_to_bool_flag(OmegaConf.select(cfg, 'lerobot.wandb_enable') is True)}",
     ]
+
+    if eval_batch_size is not None:
+        cmd.append(f"--eval.batch_size={int(eval_batch_size)}")
 
     policy_device = OmegaConf.select(cfg, "lerobot.policy_device")
     if policy_device is not None:
