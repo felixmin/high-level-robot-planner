@@ -165,6 +165,7 @@ Typical sequence:
 
 ## Testing
 - Run tests with `pytest` (user may call this "pi test").
+- On workstation/local shells, run tests in `hlrp` env (e.g. `conda run -n hlrp pytest ...`).
 - Prefer targeted tests for fast iteration before broader test suites.
 
 ## Run + Cache Paths

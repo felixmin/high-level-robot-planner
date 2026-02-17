@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import torch
+import pytest
+
+from foundation.backends.smolvla_shared.artifact import (
+    SMOLVLA_SHARED_ARTIFACT_SCHEMA_VERSION,
+    SmolVLASharedArtifactManifest,
+    load_smolvla_shared_artifact,
+    save_smolvla_shared_artifact,
+)
+
+
+def _manifest(*, schema_version: str = SMOLVLA_SHARED_ARTIFACT_SCHEMA_VERSION) -> SmolVLASharedArtifactManifest:
+    return SmolVLASharedArtifactManifest(
+        schema_version=schema_version,
+        model_name="dummy",
+        torch_dtype="bf16",
+        image_size=(384, 384),
+        action_dim=32,
+        latent_vector_dim=128,
+        flow_hidden_dim=1024,
+        flow_steps=8,
+        min_period=4e-3,
+        max_period=4.0,
+        time_beta_alpha=1.5,
+        time_beta_beta=1.0,
+        source_run_dir="/tmp/run",
+    )
+
+
+def test_manifest_validation_rejects_schema_mismatch() -> None:
+    with pytest.raises(ValueError, match="Unsupported smolvla_shared artifact schema_version"):
+        _manifest(schema_version="smolvla_shared.v0").validate()
+
+
+def test_save_and_load_artifact_roundtrip(tmp_path) -> None:
+    path = tmp_path / "artifact.pt"
+    core_state_dict = {
+        "latent_in_proj.weight": torch.randn(4, 8),
+        "latent_in_proj.bias": torch.randn(4),
+    }
+    save_smolvla_shared_artifact(path=path, manifest=_manifest(), core_state_dict=core_state_dict)
+
+    loaded_manifest, loaded_core = load_smolvla_shared_artifact(path=path)
+    assert loaded_manifest.schema_version == SMOLVLA_SHARED_ARTIFACT_SCHEMA_VERSION
+    assert loaded_manifest.model_name == "dummy"
+    assert set(loaded_core.keys()) == set(core_state_dict.keys())
+    for key, expected in core_state_dict.items():
+        assert torch.equal(loaded_core[key], expected)
+
+
+def test_load_fails_on_invalid_artifact_schema(tmp_path) -> None:
+    artifact_path = tmp_path / "bad_artifact.pt"
+    manifest = _manifest().to_dict()
+    manifest["schema_version"] = "smolvla_shared.v0"
+    torch.save(
+        {
+            "schema_version": "smolvla_shared.v0",
+            "manifest": manifest,
+            "core_state_dict": {"latent_in_proj.weight": torch.randn(4, 8)},
+        },
+        artifact_path,
+    )
+
+    with pytest.raises(ValueError, match="Unsupported smolvla_shared artifact schema_version"):
+        load_smolvla_shared_artifact(path=artifact_path)

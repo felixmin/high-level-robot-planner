@@ -200,9 +200,9 @@ def _command_from_cfg(cfg: DictConfig) -> list[str]:
     if policy_device is not None:
         cmd.append(f"--policy.device={policy_device}")
 
-    stage2_checkpoint = OmegaConf.select(cfg, "lerobot.stage2_checkpoint")
-    if stage2_checkpoint:
-        cmd.append(f"--policy.stage2_checkpoint={stage2_checkpoint}")
+    stage2_artifact = OmegaConf.select(cfg, "lerobot.stage2_artifact")
+    if stage2_artifact:
+        cmd.append(f"--policy.stage2_artifact={stage2_artifact}")
 
     episodes = _episodes_arg(OmegaConf.select(cfg, "lerobot.dataset_episodes"))
     if episodes is not None:

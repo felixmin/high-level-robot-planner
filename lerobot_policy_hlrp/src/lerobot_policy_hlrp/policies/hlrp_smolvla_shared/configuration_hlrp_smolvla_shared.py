@@ -29,7 +29,7 @@ class HLRPSmolVLASharedConfig(PreTrainedConfig):
     time_beta_alpha: float = 1.5
     time_beta_beta: float = 1.0
 
-    stage2_checkpoint: Path | None = None
+    stage2_artifact: Path | None = None
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
