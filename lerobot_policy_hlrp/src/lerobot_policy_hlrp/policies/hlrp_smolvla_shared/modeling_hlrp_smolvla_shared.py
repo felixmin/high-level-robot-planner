@@ -255,7 +255,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         foundation_batch = self._to_foundation_batch(batch)
         pred_action = self.core.predict_actions(batch=foundation_batch)
         pred_action = pred_action[:, : self._action_dim]
-        return pred_action.unsqueeze(1).expand(-1, self.config.n_action_steps, -1)
+        return pred_action.to(dtype=torch.float32).unsqueeze(1).expand(-1, self.config.n_action_steps, -1)
 
     @torch.no_grad()
     def select_action(self, batch: dict[str, torch.Tensor], **kwargs) -> torch.Tensor:
