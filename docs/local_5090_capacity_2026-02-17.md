@@ -52,6 +52,10 @@ Results:
 Notes:
 - On real data, local Stage 2 is stable up to `batch_size=64` and OOMs at `80`.
 - Compared to synthetic-data sweeps, real-data memory is higher and close to device ceiling at `64`.
+- For this smoke dataset shape, one train epoch is `62` batches at `batch_size=64`.
+- Lightning enforces `training.validation.check_interval <= epoch_length` in this setup.
+  - `check_interval=100` failed (`100 > 62`).
+  - `check_interval=50` worked.
 
 ### Important Stage 2 control detail (`max_steps` vs `max_epochs`)
 - A run with:
@@ -66,6 +70,25 @@ Practical implication:
 - For local/cluster step-targeted Stage 2 runs where you want exact step counts across epoch boundaries, set:
   - `training.max_epochs=-1`
   - plus desired `training.max_steps=<N>`.
+
+### Latest Stage 2 “real” local run (W&B enabled)
+Run:
+- `experiment=vla_smol_flow_shared`
+- `batch_size=64`
+- `training.max_steps=500`
+- `training.max_epochs=-1`
+- `training.validation.check_interval=50`
+- `logging.use_wandb=true`
+
+Result:
+- success
+- elapsed: `560.07s`
+- peak VRAM: `31063 MiB`
+- final `val/loss`: `1.20995`
+- artifact:
+  - `/mnt/data/workspace/runs/hlrp/2026-02-17_19-44-07_local_s2_real_bs64_steps500_fixval_194403/artifacts/smolvla_shared_stage2_artifact.pt`
+- W&B:
+  - `https://wandb.ai/felixmin/hlrp/runs/676kzhjy`
 
 ## Stage 3 Sweep (LeRobot + Stage2 Artifact, CUDA)
 Artifact used:
@@ -123,6 +146,25 @@ Result:
 - wall time: `37.41s`
 - peak VRAM: `16183 MiB`
 - artifact loading reported compatible manifest and expected optional missing keys only (`action_head.weight`, `action_head.bias`).
+
+### Latest Stage 3 “real” local run from Stage 2 artifact (W&B enabled)
+Artifact used:
+- `/mnt/data/workspace/runs/hlrp/2026-02-17_19-44-07_local_s2_real_bs64_steps500_fixval_194403/artifacts/smolvla_shared_stage2_artifact.pt`
+
+Run:
+- `experiment=lerobot_hlrp_smolvla_shared_smoke`
+- `lerobot.steps=500`
+- `lerobot.batch_size=32`
+- `lerobot.wandb_enable=true`
+- `logging.use_wandb=true`
+
+Result:
+- success
+- elapsed: `162.44s`
+- peak VRAM: `16028 MiB`
+- reached and checkpointed at step 500
+- W&B:
+  - `https://wandb.ai/felixmin/lerobot/runs/16nokzcu`
 
 ## Integration sanity checks completed
 - Stage 2 exports artifact successfully.
