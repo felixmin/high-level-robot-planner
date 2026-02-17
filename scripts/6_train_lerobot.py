@@ -260,6 +260,11 @@ def main(cfg: DictConfig) -> None:
         configure_cache_env(cache_dir=cache_dir, logger=logger)
 
     env = os.environ.copy()
+    packages_path = str(workspace_root / "packages")
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        packages_path if not existing_pythonpath else f"{packages_path}:{existing_pythonpath}"
+    )
     env_overrides = OmegaConf.select(cfg, "lerobot.env") or {}
     if not OmegaConf.is_dict(env_overrides):
         raise ValueError("lerobot.env must be a mapping of environment variables")
