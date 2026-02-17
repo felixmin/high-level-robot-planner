@@ -36,8 +36,8 @@ lerobot:
   push_to_hub: false
   wandb_enable: false
 
-  # Optional Stage-2 checkpoint produced by scripts/4_train_foundation.py
-  stage2_checkpoint: null
+  # Optional Stage-2 contract artifact.
+  stage2_artifact: null
 
   dataset_repo_id: HuggingFaceVLA/libero
   dataset_episodes: "[0]"

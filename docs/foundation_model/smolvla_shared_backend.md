@@ -49,7 +49,20 @@ Config:
 
 Optional Stage-2 checkpoint handoff:
 
-- `lerobot.stage2_checkpoint=/path/to/stage2.ckpt`
+- `lerobot.stage2_artifact=/path/to/smolvla_shared_stage2_artifact.pt`
+
+### Stage 2 -> Stage 3 Artifact Contract
+
+- Schema version: `smolvla_shared.v1`
+- Producer: `scripts/4_train_foundation.py` when `model.backend=smolvla_shared`
+- Default output path: `<run_dir>/artifacts/smolvla_shared_stage2_artifact.pt`
+- Payload:
+  - `manifest`: model/flow metadata (`model_name`, `torch_dtype`, `image_size`, `action_dim`, `latent_vector_dim`, flow params, source metadata)
+  - `core_state_dict`: Stage-2 shared core weights
+- Consumer: `HLRPSmolVLASharedPolicy` in Stage 3
+  - Loads `policy.stage2_artifact` only
+  - Invalid/mismatched artifact schema fails fast
+  - Core shape/key mismatches fail fast (`strict=True`)
 
 Example:
 
@@ -57,7 +70,7 @@ Example:
 python scripts/submit_job.py \
   experiment=lerobot_hlrp_smolvla_shared_smoke \
   cluster=lrz_x100 \
-  lerobot.stage2_checkpoint=/dss/.../stage2.ckpt \
+  lerobot.stage2_artifact=/dss/.../artifacts/smolvla_shared_stage2_artifact.pt \
   experiment.name=lerobot_hlrp_smolvla_shared_smoke
 ```
 

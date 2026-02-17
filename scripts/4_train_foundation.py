@@ -51,6 +51,12 @@ from foundation.legacy.backends.smol_latent_head_backend import (
     SmolLatentHeadBackend,
     SmolLatentHeadBackendConfig,
 )
+from foundation.backends.smolvla_shared.artifact import (
+    SMOLVLA_SHARED_ARTIFACT_FILENAME,
+    SMOLVLA_SHARED_ARTIFACT_SCHEMA_VERSION,
+    SmolVLASharedArtifactManifest,
+    save_smolvla_shared_artifact,
+)
 from foundation.backends.smolvla_shared.config import SmolVLASharedBackendConfig
 from foundation.backends.smolvla_shared_backend import SmolVLASharedBackend
 from foundation.online_laq import LAQTaskCodeProvider
@@ -618,6 +624,34 @@ def main(cfg: DictConfig):
     if ckpt_path:
         logger.info(f"Resuming from checkpoint: {ckpt_path}")
     trainer.fit(module, datamodule=datamodule, ckpt_path=ckpt_path)
+
+    if backend_type == "smolvla_shared" and trainer.is_global_zero:
+        backend_cfg = module.backend.cfg
+        artifact_path = output_dir / "artifacts" / SMOLVLA_SHARED_ARTIFACT_FILENAME
+        manifest = SmolVLASharedArtifactManifest(
+            schema_version=SMOLVLA_SHARED_ARTIFACT_SCHEMA_VERSION,
+            model_name=str(backend_cfg.model_name),
+            torch_dtype=torch_dtype,
+            image_size=(int(backend_cfg.image_size[0]), int(backend_cfg.image_size[1])),
+            action_dim=(None if backend_cfg.action_dim is None else int(backend_cfg.action_dim)),
+            latent_vector_dim=int(backend_cfg.latent_vector_dim),
+            flow_hidden_dim=int(backend_cfg.flow_hidden_dim),
+            flow_steps=int(backend_cfg.flow_steps),
+            min_period=float(backend_cfg.min_period),
+            max_period=float(backend_cfg.max_period),
+            time_beta_alpha=float(backend_cfg.time_beta_alpha),
+            time_beta_beta=float(backend_cfg.time_beta_beta),
+            source_backend="smolvla_shared",
+            source_training_mode=backend_mode.value,
+            source_run_dir=str(output_dir),
+            source_global_step=int(trainer.global_step),
+        )
+        save_smolvla_shared_artifact(
+            path=artifact_path,
+            manifest=manifest,
+            core_state_dict=module.backend.core.state_dict(),
+        )
+        logger.info("Exported smolvla_shared stage2 artifact: %s", artifact_path)
 
     if wandb.run:
         wandb.finish()

@@ -61,6 +61,120 @@ noise trajectory x_T -> conditional denoiser (UNet/Transformer) + scheduler step
 
 ## Language Conditioning Comparison
 
+## LeRobot Policy File Roles (`configuration`, `modeling`, `processor`)
+
+For LeRobot policies, the three files have different responsibilities:
+
+- `configuration_*.py`
+  - Declares feature requirements, hyperparameters, normalization mapping, rollout horizons, optimizer presets.
+  - Does not run data transforms directly.
+- `processor_*.py`
+  - Builds pre/post pipelines (`make_<policy>_pre_post_processors`).
+  - Converts canonical batch dictionaries into model-ready tensors (rename, batch dim, tokenization, normalization, device move).
+  - Converts policy action output back to environment-facing action tensor space (unnormalize + CPU move).
+- `modeling_*.py`
+  - Consumes preprocessed tensors and runs the actual network forward/sampling.
+  - Performs heavy encoding (vision backbone, language embedding layers, action denoising network).
+
+---
+
+## Processor I/O Contract (What Goes In / Out)
+
+All policy preprocessors run through `PolicyProcessorPipeline`:
+
+1. Input to preprocessor:
+   - canonical LeRobot batch dict (for example keys like `observation.*`, `action`, `task`, padding flags).
+2. Internal conversion:
+   - batch dict -> `EnvTransition` (`observation`, `action`, `complementary_data`, etc.).
+3. Step execution:
+   - processor steps mutate the transition (observation/action/complementary data).
+4. Output of preprocessor:
+   - transition -> batch dict, now model-ready.
+5. Input to model:
+   - this preprocessed batch dict is passed to `policy.forward(...)` / `policy.select_action(...)`.
+6. Output postprocessing:
+   - policy action tensor -> transition -> unnormalize action -> move to CPU -> final action tensor.
+
+So the model sees preprocessed tensors, not raw dataloader dictionaries.
+
+---
+
+## What Preprocessors Do for PI / SmolVLA / Diffusion / HLRP Smoke
+
+### PI (`pi0`) preprocessor
+
+Steps:
+1. Rename observation keys (identity map placeholder).
+2. Add batch dimension.
+3. Ensure `task` ends with newline.
+4. Tokenize text task -> `observation.language.tokens` + `observation.language.attention_mask`.
+5. Move tensors to device.
+6. Normalize configured input/output features.
+
+Model receives:
+- images (still images, not pre-embedded),
+- state tensors,
+- token IDs + attention mask tensors,
+- normalized numeric features.
+
+Language embedding happens in model code (`embed_language_tokens`), not in processor.
+
+### SmolVLA (`smolvla`) preprocessor
+
+Same pattern as PI:
+1. rename
+2. add batch dim
+3. newline fix
+4. tokenizer step
+5. device step
+6. normalizer step
+
+Model receives token IDs + masks and embeds them internally (`embed_language_tokens` in SmolVLA model stack).
+
+### Diffusion (`diffusion`) preprocessor
+
+Steps:
+1. rename
+2. add batch dim
+3. device
+4. normalize
+
+No tokenizer step by default. Model conditioning is state/image/env tensors only.
+Image features are encoded inside model (`_prepare_global_conditioning`), not in processor.
+
+### HLRP smoke plugin (`hlrp_smoke`) preprocessor in this repo
+
+Current smoke processor mirrors diffusion-style numeric preprocessing:
+1. rename
+2. add batch dim
+3. device
+4. normalize
+
+No text tokenization in smoke processor today.
+
+---
+
+## Important Clarification: Is Processor Doing "Encoding"?
+
+For PI/SmolVLA/Diffusion in current LeRobot:
+
+- Processor handles structural and numeric preprocessing:
+  - key mapping, shape/batching, tokenization (text -> token IDs), normalization, device placement.
+- Processor does **not** run the policy's learned vision/language encoders.
+- Modeling code performs learned encoding and fusion.
+
+So your intuition is correct:
+- Images are still image tensors when entering the model (possibly normalized/resized by policy-side prep), not pre-encoded latent vectors from processor.
+- For language, processor usually outputs token IDs + masks; embedding into hidden vectors is inside the model.
+- Processor changes representation format and scale, but not the policy-specific semantic encoding.
+
+---
+
+## Where Augmentation Usually Lives
+
+Policy preprocessors above are not doing image augmentation.
+Augmentation is typically configured in dataset/image transform configs, upstream of policy preprocessing.
+
 ## PI (`pi0`)
 
 - Language is tokenized in preprocessor with `TokenizerProcessorStep`.

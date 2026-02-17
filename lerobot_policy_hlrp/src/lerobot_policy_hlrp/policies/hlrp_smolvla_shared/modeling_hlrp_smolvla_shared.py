@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 
 from foundation.backends.interfaces import FoundationBatch
+from foundation.backends.smolvla_shared.artifact import load_smolvla_shared_artifact
 from foundation.backends.smolvla_shared.config import SmolVLASharedCoreConfig
 from foundation.backends.smolvla_shared.model import SmolVLASharedCore
 from foundation.backends.smolvla_shared.preprocess import pad_vector
@@ -80,7 +81,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         )
 
         self.core.setup(device=torch.device(str(self.config.device)))
-        self._try_load_stage2_checkpoint(self.config.stage2_checkpoint)
+        self._try_load_stage2_artifact(stage2_artifact_path=self.config.stage2_artifact)
 
         self._queues: dict[str, deque[torch.Tensor]] = {}
         self.reset()
@@ -150,36 +151,25 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         instructions = self._extract_instructions(batch, batch_size=int(frames.shape[0]))
         return FoundationBatch(frames=frames, instructions=instructions)
 
-    def _try_load_stage2_checkpoint(self, checkpoint_path: Path | None) -> None:
-        if checkpoint_path is None:
+    def _try_load_stage2_artifact(
+        self,
+        *,
+        stage2_artifact_path: Path | None,
+    ) -> None:
+        if stage2_artifact_path is None:
             return
 
-        path = Path(checkpoint_path)
-        if not path.exists():
-            raise FileNotFoundError(f"stage2_checkpoint not found: {path}")
-
-        payload = torch.load(str(path), map_location="cpu")
-        if isinstance(payload, dict) and "state_dict" in payload and isinstance(payload["state_dict"], dict):
-            state_dict = payload["state_dict"]
-        elif isinstance(payload, dict):
-            state_dict = payload
-        else:
-            raise TypeError(f"Unsupported checkpoint payload type: {type(payload)}")
-
-        remapped: dict[str, torch.Tensor] = {}
-        for key, value in state_dict.items():
-            if key.startswith("backend.core."):
-                remapped[key[len("backend.") :]] = value
-            elif key.startswith("core."):
-                remapped[key] = value
-
-        load_source = remapped if remapped else state_dict
-        missing, unexpected = self.load_state_dict(load_source, strict=False)
+        artifact_path = Path(stage2_artifact_path)
+        manifest, core_state_dict = load_smolvla_shared_artifact(
+            path=artifact_path,
+        )
+        self.core.load_state_dict(core_state_dict, strict=True)
         logger.info(
-            "Loaded stage2 checkpoint %s (missing=%d, unexpected=%d)",
-            path,
-            len(missing),
-            len(unexpected),
+            "Loaded stage2 artifact %s (schema=%s, source_run=%s, source_step=%s)",
+            artifact_path,
+            manifest.schema_version,
+            manifest.source_run_dir,
+            manifest.source_global_step,
         )
 
     def get_optim_params(self):

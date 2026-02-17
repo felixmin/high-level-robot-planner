@@ -1,0 +1,20 @@
+# big artifacts
+runs/
+*.ckpt
+*.pt
+*.pth
+*.npz
+*.npy
+
+# caches
+__pycache__/
+*.pyc
+.cache/
+cache/
+outputs/
+wandb/
+logs/
+
+# git
+.git/
+
