@@ -21,7 +21,7 @@ class HLRPSmolVLASharedConfig(PreTrainedConfig):
     use_gpu_preprocessing: bool = True
     image_size: tuple[int, int] = (384, 384)
 
-    latent_vector_dim: int = 32
+    latent_vector_dim: int = 128
     flow_hidden_dim: int = 1024
     flow_steps: int = 8
     min_period: float = 4e-3

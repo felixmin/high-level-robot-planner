@@ -9,7 +9,8 @@ Current handoff from Stage 2 to Stage 3 is **artifact-only**.
 - Stage 3 (`scripts/6_train_lerobot.py`) forwards:
   - `--policy.stage2_artifact=...`
 - LeRobot policy (`HLRPSmolVLASharedPolicy`) loads the artifact and applies:
-  - `self.core.load_state_dict(core_state_dict, strict=True)`
+  - manifest compatibility checks (model/dtype/image/latent/flow params)
+  - controlled state load where only `action_head.*` may be missing
 
 There is no legacy Stage-2 checkpoint fallback in this path.
 
@@ -47,7 +48,9 @@ Fail-fast behavior:
 - Missing artifact path -> `FileNotFoundError`
 - Bad schema/version -> `ValueError`
 - Malformed payload/state dict -> `TypeError`/`KeyError`
-- Stage-3 core mismatch -> `RuntimeError` from strict `load_state_dict`
+- Stage-3 config/manifest mismatch -> `ValueError`
+- Unexpected model key mismatch -> `RuntimeError`
+- Missing keys other than `action_head.*` -> `RuntimeError`
 
 ## Minimal Flow
 

@@ -39,14 +39,18 @@ def test_save_and_load_artifact_roundtrip(tmp_path) -> None:
     core_state_dict = {
         "latent_in_proj.weight": torch.randn(4, 8),
         "latent_in_proj.bias": torch.randn(4),
+        "_private_cache.weight": torch.randn(4, 8),
     }
     save_smolvla_shared_artifact(path=path, manifest=_manifest(), core_state_dict=core_state_dict)
 
     loaded_manifest, loaded_core = load_smolvla_shared_artifact(path=path)
     assert loaded_manifest.schema_version == SMOLVLA_SHARED_ARTIFACT_SCHEMA_VERSION
     assert loaded_manifest.model_name == "dummy"
-    assert set(loaded_core.keys()) == set(core_state_dict.keys())
-    for key, expected in core_state_dict.items():
+    assert "_private_cache.weight" not in loaded_core
+    expected_keys = {"latent_in_proj.weight", "latent_in_proj.bias"}
+    assert set(loaded_core.keys()) == expected_keys
+    for key in expected_keys:
+        expected = core_state_dict[key]
         assert torch.equal(loaded_core[key], expected)
 
 

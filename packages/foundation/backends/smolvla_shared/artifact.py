@@ -140,6 +140,11 @@ def _validate_tensor_state_dict(name: str, state_dict: Mapping[str, Any]) -> dic
     return clean
 
 
+def _filter_export_state_dict(core_state_dict: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    # Keep stable module parameters only; drop private cache mirrors (keys prefixed with "_").
+    return {k: v for k, v in core_state_dict.items() if not k.startswith("_")}
+
+
 def save_smolvla_shared_artifact(
     *,
     path: Path,
@@ -147,7 +152,9 @@ def save_smolvla_shared_artifact(
     core_state_dict: Mapping[str, torch.Tensor],
 ) -> Path:
     manifest.validate()
-    state = _validate_tensor_state_dict("core_state_dict", core_state_dict)
+    state = _filter_export_state_dict(
+        _validate_tensor_state_dict("core_state_dict", core_state_dict),
+    )
 
     payload = {
         "schema_version": manifest.schema_version,

@@ -9,7 +9,10 @@ import torch
 import torch.nn.functional as F
 
 from foundation.backends.interfaces import FoundationBatch
-from foundation.backends.smolvla_shared.artifact import load_smolvla_shared_artifact
+from foundation.backends.smolvla_shared.artifact import (
+    SmolVLASharedArtifactManifest,
+    load_smolvla_shared_artifact,
+)
 from foundation.backends.smolvla_shared.config import SmolVLASharedCoreConfig
 from foundation.backends.smolvla_shared.model import SmolVLASharedCore
 from foundation.backends.smolvla_shared.preprocess import pad_vector
@@ -163,14 +166,75 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         manifest, core_state_dict = load_smolvla_shared_artifact(
             path=artifact_path,
         )
-        self.core.load_state_dict(core_state_dict, strict=True)
+        self._assert_manifest_compatible(manifest=manifest)
+
+        missing_allowed = {"action_head.weight", "action_head.bias"}
+        missing, unexpected = self.core.load_state_dict(core_state_dict, strict=False)
+        missing_disallowed = [k for k in missing if k not in missing_allowed]
+        if unexpected:
+            raise RuntimeError(
+                f"Unexpected keys while loading stage2 artifact {artifact_path}: {list(unexpected)}"
+            )
+        if missing_disallowed:
+            raise RuntimeError(
+                f"Missing required keys while loading stage2 artifact {artifact_path}: {missing_disallowed}"
+            )
         logger.info(
-            "Loaded stage2 artifact %s (schema=%s, source_run=%s, source_step=%s)",
+            "Loaded stage2 artifact %s (schema=%s, source_run=%s, source_step=%s, missing_optional=%s)",
             artifact_path,
             manifest.schema_version,
             manifest.source_run_dir,
             manifest.source_global_step,
+            sorted(list(missing)),
         )
+
+    def _assert_manifest_compatible(self, *, manifest: SmolVLASharedArtifactManifest) -> None:
+        mismatches: list[str] = []
+        if str(self.config.model_name) != str(manifest.model_name):
+            mismatches.append(
+                f"model_name config={self.config.model_name!r} artifact={manifest.model_name!r}"
+            )
+        if str(self.config.torch_dtype).lower() != str(manifest.torch_dtype).lower():
+            mismatches.append(
+                f"torch_dtype config={self.config.torch_dtype!r} artifact={manifest.torch_dtype!r}"
+            )
+        if tuple(self.config.image_size) != tuple(manifest.image_size):
+            mismatches.append(
+                f"image_size config={tuple(self.config.image_size)!r} artifact={tuple(manifest.image_size)!r}"
+            )
+        if int(self.config.latent_vector_dim) != int(manifest.latent_vector_dim):
+            mismatches.append(
+                f"latent_vector_dim config={self.config.latent_vector_dim} artifact={manifest.latent_vector_dim}"
+            )
+        if int(self.config.flow_hidden_dim) != int(manifest.flow_hidden_dim):
+            mismatches.append(
+                f"flow_hidden_dim config={self.config.flow_hidden_dim} artifact={manifest.flow_hidden_dim}"
+            )
+        if int(self.config.flow_steps) != int(manifest.flow_steps):
+            mismatches.append(
+                f"flow_steps config={self.config.flow_steps} artifact={manifest.flow_steps}"
+            )
+        if float(self.config.min_period) != float(manifest.min_period):
+            mismatches.append(
+                f"min_period config={self.config.min_period} artifact={manifest.min_period}"
+            )
+        if float(self.config.max_period) != float(manifest.max_period):
+            mismatches.append(
+                f"max_period config={self.config.max_period} artifact={manifest.max_period}"
+            )
+        if float(self.config.time_beta_alpha) != float(manifest.time_beta_alpha):
+            mismatches.append(
+                f"time_beta_alpha config={self.config.time_beta_alpha} artifact={manifest.time_beta_alpha}"
+            )
+        if float(self.config.time_beta_beta) != float(manifest.time_beta_beta):
+            mismatches.append(
+                f"time_beta_beta config={self.config.time_beta_beta} artifact={manifest.time_beta_beta}"
+            )
+        if mismatches:
+            raise ValueError(
+                "Stage2 artifact manifest is incompatible with policy config: "
+                + "; ".join(mismatches)
+            )
 
     def get_optim_params(self):
         return self.parameters()
