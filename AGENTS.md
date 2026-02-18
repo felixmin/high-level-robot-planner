@@ -83,6 +83,8 @@ Workstation capability reference (for local non-Slurm runs):
 - GPU: RTX 5090 (32 GB VRAM)
 - System RAM: 64 GB
 - Use local workstation for smaller/short LAQ or low-scale training/debug runs when resources are sufficient.
+- Local workstation training against GCS-backed OXE data (`source=auto` resolving to `gs://...` or explicit `source=gcs`) is a valid training path, not just tuning/debug.
+- "Not representative for cluster behavior" is not, by itself, a reason to reject local training runs when the goal is local training.
 - For larger runs, long runs, or shared reproducible jobs, prefer cluster.
 - Conda env selection on workstation:
   - Use `hlrp` conda env for latent action model (LAQ) and VLA/stage-2 training.
