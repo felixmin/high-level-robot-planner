@@ -321,13 +321,19 @@ class VLASampleVisualizationCallback(Callback):
         gen_debug = sample.get("gen_debug")
         episode_id = sample.get("episode_id")
         frame_idx = sample.get("frame_idx")
+        dataset_name = sample.get("dataset_name")
+        vector_stats = sample.get("vector_stats")
+        action_stats = sample.get("action_stats")
+        dataset_mix = sample.get("dataset_mix")
         if frames is None or instructions is None:
             return
 
-        has_codes = isinstance(gt_codes, list) and isinstance(pred_codes, list)
+        has_gt_codes = isinstance(gt_codes, list)
+        has_pred_codes = isinstance(pred_codes, list)
+        has_codes = has_gt_codes and has_pred_codes
         has_vectors = isinstance(gt_vectors, list) and isinstance(pred_vectors, list)
         has_actions = isinstance(gt_actions, list) and isinstance(pred_actions, list)
-        if not (has_codes or has_vectors or has_actions):
+        if not (has_gt_codes or has_pred_codes or has_vectors or has_actions):
             return
 
         try:
@@ -337,8 +343,10 @@ class VLASampleVisualizationCallback(Callback):
             return
 
         num = min(self.cfg.num_samples, len(instructions), len(images))
-        if has_codes:
-            num = min(num, len(pred_codes), len(gt_codes))
+        if has_gt_codes:
+            num = min(num, len(gt_codes))
+        if has_pred_codes:
+            num = min(num, len(pred_codes))
         if has_vectors:
             num = min(num, len(pred_vectors), len(gt_vectors))
         if has_actions:
@@ -347,7 +355,7 @@ class VLASampleVisualizationCallback(Callback):
             return
 
         indices: list[int] = []
-        if has_codes and isinstance(gt_codes, list) and gt_codes:
+        if has_gt_codes and isinstance(gt_codes, list) and gt_codes:
             indices = _select_code_diverse_indices(gt_codes=gt_codes, max_items=num)
         if len(indices) < num:
             extra = _select_diverse_indices(
@@ -430,15 +438,20 @@ class VLASampleVisualizationCallback(Callback):
                 gt_str = f"action_gt: {_vector_summary(gt_actions[i])}"
                 pred_str = f"action_pred: {_vector_summary(pred_actions[i])}"
             freeform = freeform_texts[j] if freeform_texts is not None and j < len(freeform_texts) else None
+            meta_parts: list[str] = []
+            if (
+                isinstance(episode_id, list)
+                and isinstance(frame_idx, list)
+                and i < len(episode_id)
+                and i < len(frame_idx)
+            ):
+                meta_parts.append(f"episode_id: {episode_id[i]}  frame_idx: {frame_idx[i]}")
+            if isinstance(dataset_name, list) and i < len(dataset_name):
+                meta_parts.append(f"dataset: {dataset_name[i]}")
             panels.append(
                 _render_panel(
                     image=images[i],
-                    meta=f"episode_id: {episode_id[i]}  frame_idx: {frame_idx[i]}"
-                    if isinstance(episode_id, list)
-                    and isinstance(frame_idx, list)
-                    and i < len(episode_id)
-                    and i < len(frame_idx)
-                    else "",
+                    meta="  ".join(meta_parts),
                     instruction=str(instructions[i]),
                     gt=gt_str,
                     pred=pred_str,
@@ -452,8 +465,8 @@ class VLASampleVisualizationCallback(Callback):
                     "index": int(i),
                     "rank": int(j),
                     "instruction": str(instructions[i]),
-                    "gt_codes": gt_codes[i] if has_codes else None,
-                    "pred_codes": pred_codes[i] if has_codes else None,
+                    "gt_codes": gt_codes[i] if has_gt_codes else None,
+                    "pred_codes": pred_codes[i] if has_pred_codes else None,
                     "gt_vector": gt_vectors[i] if has_vectors else None,
                     "pred_vector": pred_vectors[i] if has_vectors else None,
                     "gt_action": gt_actions[i] if has_actions else None,
@@ -464,6 +477,12 @@ class VLASampleVisualizationCallback(Callback):
                     else None,
                     "episode_id": episode_id[i] if isinstance(episode_id, list) and i < len(episode_id) else None,
                     "frame_idx": frame_idx[i] if isinstance(frame_idx, list) and i < len(frame_idx) else None,
+                    "dataset_name": dataset_name[i]
+                    if isinstance(dataset_name, list) and i < len(dataset_name)
+                    else None,
+                    "vector_stats": vector_stats if isinstance(vector_stats, dict) else None,
+                    "action_stats": action_stats if isinstance(action_stats, dict) else None,
+                    "dataset_mix": dataset_mix if isinstance(dataset_mix, dict) else None,
                 }
             )
 
@@ -633,6 +652,8 @@ class VLATrainSampleVisualizationCallback(Callback):
 
         frame_idx = batch.get("frame_idx")
         frame_idx_list = frame_idx if isinstance(frame_idx, list) else None
+        dataset_name = batch.get("dataset_name")
+        dataset_name_list = dataset_name if isinstance(dataset_name, list) else None
 
         # Select diverse samples from this batch.
         max_items = min(self.cfg.num_samples, len(instructions))
@@ -800,16 +821,23 @@ class VLATrainSampleVisualizationCallback(Callback):
                 if freeform_texts is not None and rank < len(freeform_texts)
                 else None
             )
+            meta_parts: list[str] = []
+            if (
+                episode_id_list is not None
+                and frame_idx_list is not None
+                and original_idx < len(episode_id_list)
+                and original_idx < len(frame_idx_list)
+            ):
+                meta_parts.append(
+                    f"episode_id: {episode_id_list[original_idx]}  frame_idx: {frame_idx_list[original_idx]}"
+                )
+            if dataset_name_list is not None and original_idx < len(dataset_name_list):
+                meta_parts.append(f"dataset: {dataset_name_list[original_idx]}")
 
             panels.append(
                 _render_panel(
                     image=images_sel[rank],
-                    meta=f"episode_id: {episode_id_list[original_idx]}  frame_idx: {frame_idx_list[original_idx]}"
-                    if episode_id_list is not None
-                    and frame_idx_list is not None
-                    and original_idx < len(episode_id_list)
-                    and original_idx < len(frame_idx_list)
-                    else "",
+                    meta="  ".join(meta_parts),
                     instruction=str(instructions[original_idx]),
                     gt=gt_str,
                     pred=pred_str,
@@ -838,6 +866,9 @@ class VLATrainSampleVisualizationCallback(Callback):
                     else None,
                     "frame_idx": frame_idx_list[original_idx]
                     if frame_idx_list and original_idx < len(frame_idx_list)
+                    else None,
+                    "dataset_name": dataset_name_list[original_idx]
+                    if dataset_name_list and original_idx < len(dataset_name_list)
                     else None,
                 }
             )

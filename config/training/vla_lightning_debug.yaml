@@ -46,6 +46,7 @@ dataset_usage_logger:
   enabled: true
   log_on_validation_end: true
   log_every_n_steps: null
+  log_batch_composition_every_n_steps: 20
   key: dataset_name
   top_k: 12
 

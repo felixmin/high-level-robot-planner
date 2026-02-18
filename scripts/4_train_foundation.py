@@ -535,11 +535,15 @@ def main(cfg: DictConfig):
     # Recommended to align with step-based validation cadence by logging on validation end.
     usage_cfg = cfg.training.dataset_usage_logger
     if usage_cfg and bool(usage_cfg.enabled):
+        log_batch_mix_every = OmegaConf.select(
+            usage_cfg, "log_batch_composition_every_n_steps", default=None
+        )
         callbacks.append(
             DatasetUsageLoggerCallback(
                 enabled=True,
                 log_on_validation_end=bool(usage_cfg.log_on_validation_end),
                 log_every_n_steps=usage_cfg.log_every_n_steps,
+                log_batch_composition_every_n_steps=log_batch_mix_every,
                 key=str(usage_cfg.key),
                 top_k=int(usage_cfg.top_k),
             )
