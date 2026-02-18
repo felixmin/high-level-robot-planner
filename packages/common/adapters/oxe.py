@@ -3071,7 +3071,7 @@ class MultiOXEFramePairDataset(IterableDataset):
         """
 
         import time as _time
-        from queue import Empty, Queue
+        from queue import Empty, Full, Queue
         from threading import Event, Thread
 
         self._init_datasets()
@@ -3118,7 +3118,12 @@ class MultiOXEFramePairDataset(IterableDataset):
                 it = iter(pipe)
                 while not stop.is_set():
                     item = next(it)
-                    queues[i].put(item)
+                    while not stop.is_set():
+                        try:
+                            queues[i].put(item, timeout=0.1)
+                            break
+                        except Full:
+                            continue
             except StopIteration:
                 # Finite split exhausted for this dataset (common during val/sanity checks).
                 # Do not fail the whole mixer; mark this worker as done.
