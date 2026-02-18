@@ -54,3 +54,31 @@ def test_dataset_usage_logger_can_log_every_n_steps(capsys):
     assert "[Train][DatasetUsage]" in out
     assert "interval_total=3" in out
 
+
+def test_dataset_usage_logger_can_print_batch_mix(capsys):
+    cb = DatasetUsageLoggerCallback(
+        enabled=True,
+        log_on_validation_end=False,
+        log_batch_composition_every_n_steps=2,
+    )
+    trainer = SimpleNamespace(global_step=0)
+    cb.on_train_batch_end(
+        trainer,
+        None,
+        outputs=None,
+        batch={"dataset_name": ["bridge", "bridge", "robonet"]},
+        batch_idx=0,
+    )
+    assert capsys.readouterr().out == ""
+
+    trainer.global_step = 1
+    cb.on_train_batch_end(
+        trainer,
+        None,
+        outputs=None,
+        batch={"dataset_name": ["bridge", "language_table", "language_table"]},
+        batch_idx=0,
+    )
+    out = capsys.readouterr().out
+    assert "[Train][BatchMix]" in out
+    assert "batch_total=3" in out

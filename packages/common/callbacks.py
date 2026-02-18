@@ -82,6 +82,7 @@ class DatasetUsageLoggerCallback(Callback):
         enabled: bool = True,
         log_on_validation_end: bool = True,
         log_every_n_steps: Optional[int] = None,
+        log_batch_composition_every_n_steps: Optional[int] = None,
         key: str = "dataset_name",
         top_k: int = 12,
     ):
@@ -89,6 +90,11 @@ class DatasetUsageLoggerCallback(Callback):
         self.enabled = bool(enabled)
         self.log_on_validation_end = bool(log_on_validation_end)
         self.log_every_n_steps = int(log_every_n_steps) if log_every_n_steps else None
+        self.log_batch_composition_every_n_steps = (
+            int(log_batch_composition_every_n_steps)
+            if log_batch_composition_every_n_steps
+            else None
+        )
         self.key = str(key)
         self.top_k = int(top_k)
 
@@ -114,6 +120,11 @@ class DatasetUsageLoggerCallback(Callback):
             if self.log_every_n_steps > 0 and (step + 1) % self.log_every_n_steps == 0:
                 self._print_summary(trainer, prefix="Train", reset_since_last=True)
 
+        if self.log_batch_composition_every_n_steps is not None:
+            step = int(getattr(trainer, "global_step", 0))
+            if self.log_batch_composition_every_n_steps > 0 and (step + 1) % self.log_batch_composition_every_n_steps == 0:
+                self._print_batch_mix(step=step + 1, items=items)
+
     def on_validation_end(self, trainer, pl_module) -> None:
         if not self.enabled or not self.log_on_validation_end:
             return
@@ -135,3 +146,17 @@ class DatasetUsageLoggerCallback(Callback):
 
         if reset_since_last:
             self._since_last.clear()
+
+    def _print_batch_mix(self, *, step: int, items: list[Any]) -> None:
+        if not items:
+            return
+        counts = collections.Counter(str(x) if x is not None else "None" for x in items)
+        total = len(items)
+        parts = []
+        for name, count in counts.most_common(max(1, self.top_k)):
+            pct = 100.0 * float(count) / float(total)
+            parts.append(f"{name}={count} ({pct:.1f}%)")
+        print(
+            f"[Train][BatchMix] step={step} batch_total={total} unique={len(counts)} "
+            + ", ".join(parts)
+        )

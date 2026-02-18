@@ -9,6 +9,7 @@ Flow:
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -95,6 +96,53 @@ class VLATokenBackendLightningModule(pl.LightningModule):
         core = getattr(self.backend, "core", None)
         return getattr(core, "frames_to_images", None)
 
+    @staticmethod
+    def _sanitize_metric_suffix(name: str) -> str:
+        out = []
+        for ch in name:
+            if ch.isalnum() or ch in "_":
+                out.append(ch.lower())
+            else:
+                out.append("_")
+        suffix = "".join(out).strip("_")
+        return suffix or "unknown"
+
+    def _log_vector_stats(self, *, prefix: str, pred: torch.Tensor, gt: torch.Tensor) -> dict[str, float]:
+        if pred.shape != gt.shape or pred.numel() == 0:
+            return {}
+        diff = pred - gt
+        pred_flat = pred.reshape(pred.shape[0], -1)
+        gt_flat = gt.reshape(gt.shape[0], -1)
+        diff_flat = diff.reshape(diff.shape[0], -1)
+        eps = 1.0e-8
+
+        pred_norm = torch.linalg.norm(pred_flat, dim=1)
+        gt_norm = torch.linalg.norm(gt_flat, dim=1)
+        cos_sim = torch.sum(pred_flat * gt_flat, dim=1) / (pred_norm * gt_norm + eps)
+        pred_q = torch.round(pred_flat * 1.0e3).to(torch.int32)
+        gt_q = torch.round(gt_flat * 1.0e3).to(torch.int32)
+        pred_unique = torch.unique(pred_q, dim=0).shape[0]
+        gt_unique = torch.unique(gt_q, dim=0).shape[0]
+
+        stats = {
+            "pred_mean": float(pred_flat.mean().item()),
+            "gt_mean": float(gt_flat.mean().item()),
+            "pred_std": float(pred_flat.std(unbiased=False).item()),
+            "gt_std": float(gt_flat.std(unbiased=False).item()),
+            "pred_l2_mean": float(pred_norm.mean().item()),
+            "gt_l2_mean": float(gt_norm.mean().item()),
+            "mse": float(torch.mean(diff_flat**2).item()),
+            "mae": float(torch.mean(torch.abs(diff_flat)).item()),
+            "cosine_mean": float(cos_sim.mean().item()),
+            "pred_unique": float(pred_unique),
+            "gt_unique": float(gt_unique),
+            "pred_unique_frac": float(pred_unique) / float(pred_flat.shape[0]),
+            "gt_unique_frac": float(gt_unique) / float(gt_flat.shape[0]),
+        }
+        for key, value in stats.items():
+            self.log(f"{prefix}/{key}", value, prog_bar=False, sync_dist=True)
+        return stats
+
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         out, _codes, _vectors, _actions, _frames, _instructions = self._loss_and_targets_from_oxe_batch(batch)
         self.log("train/loss", out.loss, prog_bar=True, sync_dist=True)
@@ -137,18 +185,24 @@ class VLATokenBackendLightningModule(pl.LightningModule):
                     )
 
             pred_vector = latent.vector
+            vector_stats: dict[str, float] | None = None
             if pred_vector is not None and vectors is not None:
                 gt_vec = vectors.reshape(vectors.shape[0], -1).to(device=pred_vector.device, dtype=pred_vector.dtype)
                 if pred_vector.shape == gt_vec.shape and pred_vector.numel() > 0:
                     vec_mse = torch.mean((pred_vector - gt_vec) ** 2)
                     self.log("val/latent_vector_mse", vec_mse.to(self.device), prog_bar=True, sync_dist=True)
+                    vector_stats = self._log_vector_stats(prefix="val/latent_vector_stats", pred=pred_vector, gt=gt_vec)
 
             pred_actions = latent.actions
+            action_stats: dict[str, float] | None = None
             if pred_actions is not None and actions is not None:
                 gt_actions = actions.to(device=pred_actions.device, dtype=pred_actions.dtype)
                 if pred_actions.shape == gt_actions.shape and pred_actions.numel() > 0:
                     act_mse = torch.mean((pred_actions - gt_actions) ** 2)
                     self.log("val/action_mse", act_mse.to(self.device), prog_bar=True, sync_dist=True)
+                    action_stats = self._log_vector_stats(
+                        prefix="val/action_stats", pred=pred_actions, gt=gt_actions
+                    )
 
             meta = latent.meta if isinstance(latent.meta, dict) else {}
             gen_debug = meta.get("parse_debug") if isinstance(meta.get("parse_debug"), list) else None
@@ -175,6 +229,44 @@ class VLATokenBackendLightningModule(pl.LightningModule):
                 self.log("val/gen_has_action_end_frac", end_frac, prog_bar=False, sync_dist=True)
                 self.log("val/gen_num_codes_parsed_mean", mean_codes, prog_bar=False, sync_dist=True)
 
+            dataset_mix: dict[str, int] | None = None
+            dataset_names = batch.get("dataset_name") if isinstance(batch, dict) else None
+            if isinstance(dataset_names, list) and dataset_names:
+                counts = Counter(str(x) if x is not None else "None" for x in dataset_names)
+                total = float(len(dataset_names))
+                top = counts.most_common(8)
+                dataset_mix = {name: int(count) for name, count in top}
+                self.log("val/dataset_mix_unique", float(len(counts)), prog_bar=False, sync_dist=True)
+                self.log(
+                    "val/dataset_mix_top1_frac",
+                    float(top[0][1]) / total,
+                    prog_bar=False,
+                    sync_dist=True,
+                )
+                probs = torch.tensor(
+                    [float(count) / total for _, count in counts.items()],
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                if probs.numel() > 1:
+                    entropy = -torch.sum(probs * torch.log(probs + 1.0e-8))
+                    max_entropy = torch.log(torch.tensor(float(probs.numel()), device=self.device))
+                    entropy_norm = entropy / (max_entropy + 1.0e-8)
+                    self.log("val/dataset_mix_entropy_norm", entropy_norm, prog_bar=False, sync_dist=True)
+                for name, count in top:
+                    suffix = self._sanitize_metric_suffix(name)
+                    self.log(
+                        f"val/dataset_mix_frac_{suffix}",
+                        float(count) / total,
+                        prog_bar=False,
+                        sync_dist=True,
+                    )
+                details = ", ".join(f"{name}={count}" for name, count in top)
+                print(
+                    f"[Val][BatchMix] step={int(getattr(self.trainer, 'global_step', 0))} "
+                    f"batch_total={int(total)} unique={len(counts)} {details}"
+                )
+
             # Save a small sample for visualization callbacks.
             try:
                 max_items = min(64, len(instructions))
@@ -186,6 +278,7 @@ class VLATokenBackendLightningModule(pl.LightningModule):
                     max_items = min(max_items, int(actions.shape[0]))
                 episode_id = batch.get("episode_id") if isinstance(batch, dict) else None
                 frame_idx = batch.get("frame_idx") if isinstance(batch, dict) else None
+                dataset_name = batch.get("dataset_name") if isinstance(batch, dict) else None
                 pred_list: list[list[int]] | None = None
                 if isinstance(pred, torch.Tensor):
                     pred_list = pred[:max_items].detach().cpu().tolist()
@@ -216,6 +309,10 @@ class VLATokenBackendLightningModule(pl.LightningModule):
                     "gen_debug": gen_debug[:max_items] if isinstance(gen_debug, list) else None,
                     "episode_id": list(episode_id[:max_items]) if episode_id is not None else None,
                     "frame_idx": list(frame_idx[:max_items]) if frame_idx is not None else None,
+                    "dataset_name": list(dataset_name[:max_items]) if dataset_name is not None else None,
+                    "vector_stats": vector_stats,
+                    "action_stats": action_stats,
+                    "dataset_mix": dataset_mix,
                 }
             except Exception:
                 self._last_val_sample = None
