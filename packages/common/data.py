@@ -1308,3 +1308,85 @@ class OXEDataModule(pl.LightningDataModule):
                     setattr(self, attr_name, None)
                 except BaseException:
                     pass
+
+
+class OXEDataModuleV2(pl.LightningDataModule):
+    """
+    V2 OXE DataModule using gather-based pairs, tf.data mixing, and deferred decode.
+    """
+
+    def __init__(
+        self,
+        *,
+        datasets: List[Dict[str, Any]],
+        preprocess: Dict[str, Any],
+        loader: Dict[str, Any],
+        adapter: Dict[str, Any],
+    ):
+        super().__init__()
+        self.datasets = datasets
+        self.preprocess = preprocess
+        self.loader = loader
+        self.adapter = adapter
+        self.train_dataset = None
+        self.val_dataset = None
+
+    def setup(self, stage: Optional[str] = None):
+        from common.adapters.oxe_v2 import OXEFramePairDatasetV2
+
+        image_size = int(self.preprocess["image_size"])
+        batch_size = int(self.loader["batch_size"])
+        v2 = self.adapter["tf_v2"]
+
+        common_kwargs = dict(
+            dataset_entries=list(self.datasets),
+            image_size=image_size,
+            batch_size=batch_size,
+            pair_frames_mode=str(v2["pair_frames"]["mode"]),
+            pair_frames_stride=int(v2["pair_frames"]["stride"]),
+            pair_frames_n=int(v2["pair_frames"]["n"]),
+            total_threads=int(v2["pipeline"]["total_threads"]),
+            ram_budget_gb=int(v2["pipeline"]["ram_budget_gb"]),
+            tfds_source=str(v2["tfds"]["source"]),
+            tfds_local_root=v2["tfds"]["local_root"],
+            seed=v2["sampling"]["seed"],
+            use_synthetic_data=bool(v2["debug"]["use_synthetic_data"]),
+            synthetic_num_samples=int(v2["debug"]["synthetic_num_samples"]),
+        )
+
+        self.train_dataset = OXEFramePairDatasetV2(
+            **common_kwargs,
+            shuffle_sample_buffer=int(v2["shuffle"]["sample_buffer"]),
+            train=True,
+        )
+
+        self.val_dataset = OXEFramePairDatasetV2(
+            **common_kwargs,
+            shuffle_sample_buffer=0,
+            train=False,
+        )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=None,
+            num_workers=0,
+            pin_memory=bool(self.loader.get("pin_memory", False)),
+        )
+
+    def val_dataloader(self):
+        if self.val_dataset is None:
+            return None
+        return DataLoader(
+            self.val_dataset,
+            batch_size=None,
+            num_workers=0,
+            pin_memory=bool(self.loader.get("pin_memory", False)),
+        )
+
+    def teardown(self, stage: Optional[str] = None):
+        for attr_name in ("train_dataset", "val_dataset"):
+            dataset = getattr(self, attr_name, None)
+            if dataset is not None:
+                dataset.cleanup()
+            setattr(self, attr_name, None)

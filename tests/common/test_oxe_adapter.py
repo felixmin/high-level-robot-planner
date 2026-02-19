@@ -414,6 +414,107 @@ class TestMultiOXEFramePairDataset:
         assert seeds[0] != seeds[1], "Expected different derived seeds per dataset"
         ds.cleanup()
 
+    def test_guard_skip_decode_with_sample_mixing(self):
+        """Known-bad combo should fail fast with explicit guidance."""
+        from common.adapters.oxe import MultiOXEFramePairDataset
+
+        with pytest.raises(ValueError, match="Known-bad adapter combination"):
+            MultiOXEFramePairDataset(
+                datasets=[
+                    {"name": "language_table", "train_split": "train[:20]", "val_split": "train[20:30]", "weight": 1.0, "pair_offset_steps": 5, "approx_num_pairs": 1000},
+                ],
+                final_stream_prefetch_buffer=0,
+                episode_queue_prefetch_buffer=0,
+                image_size=64,
+                episode_queue_shuffle_buffer=0,
+                intra_episode_sample_shuffle_buffer=0,
+                global_stream_shuffle_buffer=0,
+                return_metadata=True,
+                is_train=True,
+                output_batch_size=4,
+                persistent_iterator=True,
+                samples_per_episode=0,
+                seed=123,
+                debug_use_synthetic_data=False,
+                debug_synthetic_num_samples=1000,
+                pipeline_episode_concurrency_total=1,
+                pipeline_transform_parallelism=1,
+                pipeline_interleave_parallelism=1,
+                mix_block_length=1,
+                parallelism_mode="divide",
+                per_dataset_stream_prefetch_buffer=0,
+                mixing_strategy="sample",
+                python_prefetch_queue_size=2,
+                python_prefetch_min_ready_datasets=1,
+                python_prefetch_wait_timeout_s=600,
+                per_dataset_private_threadpool_size=0,
+                tfds_read_cycle_length=1,
+                tfds_read_block_length=1,
+                tfds_read_decode_parallelism=-1,
+                tfds_read_interleave_parallelism=-1,
+                mix_selector_run_length=1,
+                tfds_read_skip_steps_decoding=True,
+                emit_encoded_pairs=True,
+                post_mix_decode_resize=False,
+            )
+
+    @pytest.mark.parametrize("mixing_strategy,mix_block_length", [("sample", 1), ("choose", 1), ("python", 2)])
+    def test_batch_contract_consistent_across_mixing_strategies(self, mixing_strategy, mix_block_length):
+        """All supported mixing strategies should yield Stage-2 compatible batch contract."""
+        from common.adapters.oxe import MultiOXEFramePairDataset
+
+        ds = MultiOXEFramePairDataset(
+            datasets=[
+                {"name": "language_table", "train_split": "train[:20]", "val_split": "train[20:30]", "weight": 0.5, "pair_offset_steps": 5, "approx_num_pairs": 1000},
+                {"name": "bridge", "train_split": "train[:20]", "val_split": "train[20:30]", "weight": 0.5, "pair_offset_steps": 5, "approx_num_pairs": 1000},
+            ],
+            final_stream_prefetch_buffer=0,
+            episode_queue_prefetch_buffer=0,
+            image_size=64,
+            episode_queue_shuffle_buffer=0,
+            intra_episode_sample_shuffle_buffer=0,
+            global_stream_shuffle_buffer=0,
+            return_metadata=True,
+            is_train=True,
+            output_batch_size=4,
+            persistent_iterator=True,
+            samples_per_episode=0,
+            seed=123,
+            debug_use_synthetic_data=False,
+            debug_synthetic_num_samples=1000,
+            pipeline_episode_concurrency_total=1,
+            pipeline_transform_parallelism=1,
+            pipeline_interleave_parallelism=1,
+            mix_block_length=mix_block_length,
+            parallelism_mode="divide",
+            per_dataset_stream_prefetch_buffer=0,
+            mixing_strategy=mixing_strategy,
+            python_prefetch_queue_size=2,
+            python_prefetch_min_ready_datasets=1,
+            python_prefetch_wait_timeout_s=600,
+            per_dataset_private_threadpool_size=0,
+            tfds_read_cycle_length=1,
+            tfds_read_block_length=1,
+            tfds_read_decode_parallelism=-1,
+            tfds_read_interleave_parallelism=-1,
+            mix_selector_run_length=1,
+            tfds_read_skip_steps_decoding=False,
+            emit_encoded_pairs=False,
+            post_mix_decode_resize=False,
+        )
+
+        item = next(iter(ds))
+        assert isinstance(item, dict)
+        assert set(["frames", "language", "dataset_name"]).issubset(item.keys())
+        assert isinstance(item["frames"], torch.Tensor)
+        assert item["frames"].ndim == 5
+        bsz = int(item["frames"].shape[0])
+        assert bsz == 4
+        assert isinstance(item["language"], list) and len(item["language"]) == bsz
+        assert isinstance(item["dataset_name"], list) and len(item["dataset_name"]) == bsz
+
+        ds.cleanup()
+
 
 class TestMemoryStability:
     """Test memory stability across multiple epochs."""

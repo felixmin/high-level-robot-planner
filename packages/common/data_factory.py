@@ -85,6 +85,18 @@ def create_datamodule(cfg_data: Any):
             adapter=adapter,
         )
 
+    if backend == "oxe_tf_v2":
+        from common.data import OXEDataModuleV2
+
+        adapter = data["adapter"]
+        oxe = dataset["oxe"]
+        return OXEDataModuleV2(
+            datasets=list(oxe["datasets"]),
+            preprocess=preprocess,
+            loader=loader,
+            adapter=adapter,
+        )
+
     if backend == "oxe_hf":
         from common.adapters.huggingface_oxe import HFOXEDataModule
 
