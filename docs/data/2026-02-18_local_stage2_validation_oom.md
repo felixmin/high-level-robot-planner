@@ -110,7 +110,46 @@
 1. Disable python-mixer locally (`data.adapter.tf.mixing.strategy=sample`) and retest short runs with validation.
 2. Keep python-mixer only on cluster/high-RAM runs.
 3. For local python-mixer debug, reduce dataset count (small subset preset) before scaling back up.
-4. Add explicit local run guardrail:
+4. Use a dataset-count ladder for local tests:
+   - very small OXE subset -> medium subset -> full 29 datasets
+   - only scale up after each level passes train+val stability checks.
+5. Add explicit local run guardrail:
    - larger `validation.check_interval`
    - `validation.limit_batches` very small
    - monitor RSS every N seconds in `unified.log`.
+
+## 2026-02-19 Follow-up Isolation (4 cases, sequential)
+
+Setup used for all cases:
+- `model.laq.checkpoint=/mnt/data/workspace/code/high-level-robot-planner/laq-stepstep052500.ckpt`
+- `data=oxe_local_spe0`, `batch_size=8`, 29 datasets, `samples_per_episode=0`
+- low-memory adapter knobs (`queue_size=1`, `min_ready=1`, `final_stream_buffer=2`)
+
+Results:
+- Case 1 (`train-only`, val effectively disabled):
+  - Run: `/mnt/data/workspace/runs/hlrp/2026-02-18_23-59-59_local_s2_oomdiag1_trainonly_bs8_235957`
+  - Status: pass (500 steps)
+  - Max RSS: `25,215,528 kB` (~25.2 GB)
+  - Throughput: ~`7.72 step/s`
+- Case 2 (`val-minimal`, val every 200, `limit_batches=1`):
+  - Run: `/mnt/data/workspace/runs/hlrp/2026-02-19_00-02-52_local_s2_oomdiag2_valmin_bs8_000251`
+  - Status: pass (500 steps + validation)
+  - Max RSS: `37,616,764 kB` (~37.6 GB)
+  - Throughput: ~`8.35 step/s`
+- Case 3 (`sample` mixer):
+  - Run: `/mnt/data/workspace/runs/hlrp/2026-02-19_00-09-14_local_s2_oomdiag3_val_sample_bs8_000912`
+  - Status: fail-fast (expected guard)
+  - Error: `Known-bad adapter combination` for `skip_steps_decoding=true` with `mixing.strategy in {sample,choose}` and metadata enabled.
+  - Compatibility retry:
+    - Run: `/mnt/data/workspace/runs/hlrp/2026-02-19_00-10-07_local_s2_oomdiag3c_val_sample_bs8_001006`
+    - `skip_steps_decoding=false`, `emit_encoded_pairs=false`
+    - Outcome: prolonged startup with no train-step logs; RSS climbed to ~25.4 GB; manually terminated.
+- Case 4 (`python` mixer + `iterator.persistent=false`):
+  - Run: `/mnt/data/workspace/runs/hlrp/2026-02-19_00-15-44_local_s2_oomdiag4_val_persistfalse_bs8_001543`
+  - Status: startup/re-init stall; repeated full train/val TFDS initialization + queue-fill cycles; no train-step logs during observation window.
+  - RSS observed up to ~25.4 GB before manual termination.
+
+Takeaway from this isolation pass:
+- Validation materially increases host RAM (~+12 GB vs train-only in this bs8 setup).
+- `sample` mixer is not a drop-in replacement for current skip-decoding metadata path.
+- `iterator.persistent=false` increases expensive restart behavior and is not a local fix for the current OOM pattern.

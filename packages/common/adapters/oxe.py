@@ -2504,6 +2504,20 @@ class MultiOXEFramePairDataset(IterableDataset):
         self.emit_encoded_pairs = bool(emit_encoded_pairs)
         self.post_mix_decode_resize = bool(post_mix_decode_resize)
 
+        # Guardrail for a known unstable tf.data path observed in local 29-dataset
+        # Stage-2 runs: sample/choose mixing with SkipDecoding can crash the process
+        # (SIGABRT) and/or produce inconsistent metadata contracts downstream.
+        if (
+            self.return_metadata
+            and self.tfds_read_skip_steps_decoding
+            and self.mixing_strategy in {"sample", "choose"}
+        ):
+            raise ValueError(
+                "Known-bad adapter combination: return_metadata=true with "
+                "tfds_read.skip_steps_decoding=true and mixing.strategy in {'sample','choose'}. "
+                "Use mixing.strategy='python' for skip-decoding metadata streams, or disable skip_steps_decoding."
+            )
+
         self.tfds_source = str(tfds_source)
         self.tfds_local_root = tfds_local_root
 
@@ -3460,27 +3474,52 @@ class MultiOXEFramePairDataset(IterableDataset):
 
         tf_iter = self._get_or_create_iterator()
 
+        def _pair_tf_to_torch(pair_tf):
+            pair_np = pair_tf.numpy()
+            if getattr(pair_np, "dtype", None) == np.object_:
+                # Some sample-mixing paths can surface object-typed numpy arrays
+                # (e.g. array of per-sample ndarrays). Normalize to numeric ndarray.
+                pair_np = np.stack(list(pair_np), axis=0)
+            return torch.from_numpy(pair_np).permute(0, 4, 1, 2, 3)
+
+        def _meta_field_to_list(meta_tf, key: str, batch_n: int, *, decode_str: bool = False, default: Any = "") -> list[Any]:
+            if key not in meta_tf:
+                return [default for _ in range(batch_n)]
+            arr = meta_tf[key].numpy()
+            if getattr(arr, "ndim", 0) == 0:
+                arr = np.asarray([arr])
+            vals = list(arr)
+            if len(vals) < batch_n:
+                vals = vals + [default for _ in range(batch_n - len(vals))]
+            elif len(vals) > batch_n:
+                vals = vals[:batch_n]
+            if decode_str:
+                return [_decode_str(x) for x in vals]
+            return vals
+
         for item in tf_iter:
             if self.return_metadata:
                 pair_tf, meta_tf = item
-                pair_np = pair_tf.numpy()
-                pair_pt = torch.from_numpy(pair_np).permute(0, 4, 1, 2, 3)
+                pair_pt = _pair_tf_to_torch(pair_tf)
 
-                episode_ids = [_decode_str(x) for x in meta_tf["episode_id"].numpy()]
-                frame_idxs = [int(x) for x in meta_tf["frame_idx"].numpy()]
+                batch_n = int(pair_pt.shape[0]) if pair_pt.ndim >= 1 else 0
 
-                offsets = meta_tf["offset"].numpy()
+                episode_ids = _meta_field_to_list(meta_tf, "episode_id", batch_n, decode_str=True, default="")
+                frame_idxs_raw = _meta_field_to_list(meta_tf, "frame_idx", batch_n, decode_str=False, default=0)
+                frame_idxs = [int(x) for x in frame_idxs_raw]
+
+                offsets = meta_tf["offset"].numpy() if "offset" in meta_tf else np.asarray([0], dtype=np.int32)
                 offset = int(offsets[0]) if len(offsets) else 0
 
-                languages = [_decode_str(x) for x in meta_tf["language"].numpy()]
-                dataset_types = [_decode_str(x) for x in meta_tf["dataset_type"].numpy()]
-                dataset_names = [_decode_str(x) for x in meta_tf["dataset_name"].numpy()]
-                robots = [_decode_str(x) for x in meta_tf["robot"].numpy()]
+                languages = _meta_field_to_list(meta_tf, "language", batch_n, decode_str=True, default="")
+                dataset_types = _meta_field_to_list(meta_tf, "dataset_type", batch_n, decode_str=True, default="")
+                dataset_names = _meta_field_to_list(meta_tf, "dataset_name", batch_n, decode_str=True, default="")
+                robots = _meta_field_to_list(meta_tf, "robot", batch_n, decode_str=True, default="")
 
-                actions_np = meta_tf["action"].numpy()
-                initial_states_np = meta_tf["initial_state"].numpy()
-                actions = list(actions_np)
-                initial_states = list(initial_states_np)
+                actions = _meta_field_to_list(meta_tf, "action", batch_n, decode_str=False, default=np.zeros((0,), dtype=np.float32))
+                initial_states = _meta_field_to_list(
+                    meta_tf, "initial_state", batch_n, decode_str=False, default=np.zeros((0,), dtype=np.float32)
+                )
 
                 yield {
                     "frames": pair_pt,
@@ -3501,6 +3540,8 @@ class MultiOXEFramePairDataset(IterableDataset):
                     ).permute(0, 4, 1, 2, 3)
                 except Exception:
                     pair_np = item.numpy()
+                    if getattr(pair_np, "dtype", None) == np.object_:
+                        pair_np = np.stack(list(pair_np), axis=0)
                     yield torch.from_numpy(pair_np).permute(0, 4, 1, 2, 3)
 
 
