@@ -153,9 +153,9 @@ def main(cfg: DictConfig):
     )
 
     # Data: frame pairs + language (OXE backends only).
-    if cfg.data.backend not in ("oxe_tf", "oxe_hf"):
+    if cfg.data.backend not in ("oxe_tf", "oxe_tf_v2", "oxe_hf"):
         raise ValueError(
-            f"Stage 2 expects an OXE backend (oxe_tf/oxe_hf), got {cfg.data.backend!r}"
+            f"Stage 2 expects an OXE backend (oxe_tf/oxe_tf_v2/oxe_hf), got {cfg.data.backend!r}"
         )
 
     datamodule = create_datamodule(cfg.data)

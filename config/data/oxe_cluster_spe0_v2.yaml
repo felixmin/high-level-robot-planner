@@ -1,0 +1,24 @@
+# @package data
+
+# V2 cluster preset: same 29 datasets, gather-based pipeline.
+# Cluster has more RAM so we can increase shuffle buffers.
+
+defaults:
+  - dataset: oxe_cluster_mirror_large_no_aloha_mimic
+  - adapter: oxe_tf_v2
+  - loader: oxe_streaming
+  - preprocess: pair_256
+  - _self_
+
+backend: oxe_tf_v2
+
+adapter:
+  tf_v2:
+    tfds:
+      source: local
+      local_root: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/cache/oxe
+    pipeline:
+      total_threads: 48
+      ram_budget_gb: 2
+    shuffle:
+      sample_buffer: 10000

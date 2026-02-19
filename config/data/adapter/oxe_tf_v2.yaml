@@ -1,0 +1,20 @@
+# @package data.adapter
+
+tf_v2:
+  pair_frames:
+    mode: endpoints
+    stride: 1
+    n: 2
+  sampling:
+    seed: 42
+  pipeline:
+    total_threads: 48
+    ram_budget_gb: 1
+  shuffle:
+    sample_buffer: 5000
+  tfds:
+    source: auto
+    local_root: null
+  debug:
+    use_synthetic_data: false
+    synthetic_num_samples: 1000
