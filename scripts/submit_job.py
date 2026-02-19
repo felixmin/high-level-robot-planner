@@ -503,18 +503,23 @@ def main():
     # When absent, OXE will fall back to GCS (for source=auto) but will not be able
     # to see the local filesystem path.
     tfds_local_root_path: Path | None = None
-    tfds_local_root = OmegaConf.select(cfg, "data.adapter.tf.tfds_read.local_root")
-    if tfds_local_root:
-        candidate_root = Path(str(tfds_local_root))
-        if candidate_root.is_absolute():
-            if candidate_root.exists():
-                extra_mounts.append(candidate_root)
-                tfds_local_root_path = candidate_root
-            else:
-                print(
-                    "WARNING: data.adapter.tf.tfds_read.local_root does not exist on the submit host; "
-                    f"skipping container mount: {candidate_root}"
-                )
+    for tfds_cfg_key in [
+        "data.adapter.tf.tfds_read.local_root",  # v1 adapter
+        "data.adapter.tf_v2.tfds.local_root",     # v2 adapter
+    ]:
+        tfds_local_root = OmegaConf.select(cfg, tfds_cfg_key)
+        if tfds_local_root:
+            candidate_root = Path(str(tfds_local_root))
+            if candidate_root.is_absolute():
+                if candidate_root.exists():
+                    extra_mounts.append(candidate_root)
+                    if tfds_local_root_path is None:
+                        tfds_local_root_path = candidate_root
+                else:
+                    print(
+                        f"WARNING: {tfds_cfg_key} does not exist on the submit host; "
+                        f"skipping container mount: {candidate_root}"
+                    )
 
     # Build container mounts: always mount the project root, plus any external run/cache roots.
     # Mount runs_dir.parent to include all sweep job directories (which are siblings).
