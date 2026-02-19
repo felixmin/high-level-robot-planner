@@ -16,7 +16,7 @@ adapter:
   tf_v2:
     tfds:
       source: local
-      local_root: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/cache/oxe
+      local_root: /dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment
     pipeline:
       total_threads: 48
       ram_budget_gb: 2
