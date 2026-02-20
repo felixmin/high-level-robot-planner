@@ -35,7 +35,7 @@ Guide for profiling LAQ training performance to identify bottlenecks.
 
 ```bash
 # Enable via CLI
-python scripts/2_train_laq.py experiment=laq_debug \
+python scripts/2_train_laq.py experiment=laq_oxe_local \
     training.profiler.enabled=true \
     training.profiler.type=simple
 
@@ -55,7 +55,7 @@ Action                              | Total Time (s)
 
 ```bash
 # For GPU bottleneck analysis
-python scripts/2_train_laq.py experiment=laq_debug \
+python scripts/2_train_laq.py experiment=laq_oxe_local \
     training.profiler.enabled=true \
     training.profiler.type=pytorch \
     training.epochs=2  # Keep short - high overhead!
@@ -72,7 +72,7 @@ python scripts/2_train_laq.py experiment=laq_debug \
 ### Customize Output Location
 
 ```bash
-python scripts/2_train_laq.py experiment=laq_debug \
+python scripts/2_train_laq.py experiment=laq_oxe_local \
     training.profiler.enabled=true \
     training.profiler.dirpath=./debug_profiles \
     training.profiler.filename=laq_bottleneck
@@ -92,7 +92,7 @@ python scripts/2_train_laq.py experiment=laq_debug \
 **How to check:**
 ```bash
 # Enable SimpleProfiler
-python scripts/2_train_laq.py experiment=laq_debug \
+python scripts/2_train_laq.py experiment=laq_oxe_local \
     training.profiler.enabled=true \
     training.epochs=2
 
@@ -104,12 +104,12 @@ python scripts/2_train_laq.py experiment=laq_debug \
 **Quick fixes:**
 ```bash
 # Disable visualization
-python scripts/2_train_laq.py experiment=laq_debug \
+python scripts/2_train_laq.py experiment=laq_oxe_local \
     training.validation.visualize_train=false \
     training.validation.visualize_val=false
 
 # Or reduce frequency
-python scripts/2_train_laq.py experiment=laq_debug \
+python scripts/2_train_laq.py experiment=laq_oxe_local \
     training.validation.interval_epochs=10
 ```
 
@@ -123,7 +123,7 @@ python scripts/2_train_laq.py experiment=laq_debug \
 **How to check:**
 ```bash
 # Use PyTorchProfiler for GPU details
-python scripts/2_train_laq.py experiment=laq_debug \
+python scripts/2_train_laq.py experiment=laq_oxe_local \
     training.profiler.enabled=true \
     training.profiler.type=pytorch \
     training.epochs=1 \
@@ -145,11 +145,11 @@ python scripts/2_train_laq.py experiment=laq_debug \
 **How to check:**
 ```bash
 # Enable SimpleProfiler and vary workers
-python scripts/2_train_laq.py experiment=laq_debug \
+python scripts/2_train_laq.py experiment=laq_oxe_local \
     training.profiler.enabled=true \
     data.loader.num_workers=0  # CPU-bound
 
-python scripts/2_train_laq.py experiment=laq_debug \
+python scripts/2_train_laq.py experiment=laq_oxe_local \
     training.profiler.enabled=true \
     data.loader.num_workers=4  # Should be faster
 ```

@@ -31,7 +31,7 @@ The high-level idea mirrors LAPA Stage 2, but implemented in PyTorch/Lightning a
   - Stage 2 expects a LAQ checkpoint that matches the current `LAQTask` module structure.
   - If you have older LAQ checkpoints, they may fail to load (missing/unexpected keys). Use a fresh LAQ run from this codebase.
 - **Incremental development + tests first**:
-  - We built small, unit-testable utilities (token formatting, masking logic, constrained decoding) before wiring real HF models and OpenX streaming.
+  - We built small, unit-testable utilities (token formatting, masking logic, constrained decoding) before wiring real HF models and the local indexed-full OpenX path.
 
 ## Where the pieces live
 
@@ -102,6 +102,6 @@ These tests protect the tricky parts:
 1) **Ensure you have a compatible LAQ checkpoint**
    - If Stage 2 fails loading LAQ, retrain LAQ (Stage 1) with the current code and point `model.laq.checkpoint` to the new `.ckpt`.
 2) **First real local run**
-   - Confirm OpenX streaming works, Cosmos weights download/caching works, and a few steps complete.
+   - Confirm local indexed-full OpenX data works, Cosmos weights download/caching works, and a few steps complete.
 3) **Scale-up**
    - Add PEFT/LoRA knobs (if desired), tune batch size/accumulation, and then move to H100 via your preferred submission workflow (`submit_job.py`).

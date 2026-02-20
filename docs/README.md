@@ -16,12 +16,9 @@ This index is intentionally short and points to the current active docs.
 
 - `job_submission.md` - LRZ job submission workflow.
 - `general/lrz_workflow.md` - LRZ setup/ops notes.
-- `normal_training_guide.md` - local and cluster training reference.
 - `profiling.md` - profiling and throughput debugging.
 
 ## Data docs
 
-- `data/oxe_datasets.md` - OXE dataset integration details.
-- `data/dataset_adapter_plan.md` - adapter behavior and schema notes.
-- `data/dataset_metadata.md` - metadata fields and filtering reference.
+- `data_openx_local_indexed_full.md` - current indexed-full local OpenX data path.
 - `validation_system.md` - validation architecture and buckets.

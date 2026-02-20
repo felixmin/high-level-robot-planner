@@ -11,16 +11,16 @@ This guide explains how to submit training jobs to the LRZ cluster using `script
 
 ```bash
 # Submit a single job
-python scripts/submit_job.py experiment=laq_oxe_debug cluster=lrz_h100
+python scripts/submit_job.py experiment=laq_oxe_local cluster=lrz_h100
 
 # Submit with custom time limit
-python scripts/submit_job.py cluster.compute.time_limit=04:00:00 experiment=laq_full
+python scripts/submit_job.py cluster.compute.time_limit=04:00:00 experiment=laq_oxe_cluster
 
 # Dry run (preview without submitting)
-python scripts/submit_job.py submit.dry_run=true experiment=laq_oxe_debug cluster=lrz_h100
+python scripts/submit_job.py submit.dry_run=true experiment=laq_oxe_local cluster=lrz_h100
 
 # Submit a sweep (multiple jobs)
-python scripts/submit_job.py experiment=laq_lr_sweep cluster=lrz_h100
+python scripts/submit_job.py experiment=laq_oxe_local_sweep cluster=lrz_h100
 ```
 
 ---
@@ -41,7 +41,7 @@ This approach bypasses Hydra's submitit launcher (which requires torch imports) 
 For local development/training, run the training script directly (no `sbatch`, no container directives):
 
 ```bash
-python scripts/2_train_laq.py experiment=laq_debug
+python scripts/2_train_laq.py experiment=laq_oxe_local
 ```
 
 Use `scripts/submit_job.py` only when you want Slurm scheduling + enroot container execution on the cluster.
@@ -53,13 +53,13 @@ Use `scripts/submit_job.py` only when you want Slurm scheduling + enroot contain
 ### Basic Usage
 
 ```bash
-python scripts/submit_job.py experiment=laq_oxe_debug cluster=lrz_h100
+python scripts/submit_job.py experiment=laq_oxe_local cluster=lrz_h100
 ```
 
 ### With Overrides
 
 ```bash
-python scripts/submit_job.py experiment=laq_full \
+python scripts/submit_job.py experiment=laq_oxe_cluster \
     training.epochs=50 \
     data.loader.batch_size=64
 ```
@@ -72,14 +72,14 @@ python scripts/submit_job.py \
     cluster.compute.time_limit=08:00:00 \
     cluster.compute.mem_gb=128 \
     cluster.compute.cpus_per_task=16 \
-    experiment=laq_full
+    experiment=laq_oxe_cluster
 ```
 
 ### Different Training Script
 
 ```bash
 # Run foundation training instead of LAQ
-python scripts/submit_job.py experiment=vla_7b
+python scripts/submit_job.py experiment=vla_smol_flow_shared
 ```
 
 ---
@@ -91,12 +91,12 @@ Sweeps submit multiple jobs with different parameter combinations.
 ### Define Sweep in Experiment Config
 
 ```yaml
-# config/experiment/laq_lr_sweep.yaml
+# config/experiment/laq_oxe_local_sweep.yaml
 # @package _global_
 
 defaults:
   - /model@model: laq
-  - /data@data: laq_oxe
+  - /data@data: oxe_local_indexed
   - /training@training: laq_optimizer
   - /cluster@cluster: local_dev
 
@@ -107,7 +107,7 @@ sweep:
     seed: 42, 123
 
 experiment:
-  name: laq_lr_sweep
+  name: laq_oxe_local_sweep
   description: "Learning rate sweep for LAQ"
 
 # ... rest of config
@@ -116,7 +116,7 @@ experiment:
 ### Submit Sweep
 
 ```bash
-python scripts/submit_job.py experiment=laq_lr_sweep cluster=lrz_h100
+python scripts/submit_job.py experiment=laq_oxe_local_sweep cluster=lrz_h100
 ```
 
 **Output:**
@@ -144,7 +144,7 @@ Job IDs:
 2. **Split comma-separated values** into lists
 3. **Generate Cartesian product** of all combinations
 4. **Submit separate job** for each combination
-5. **Unique job names** include parameter values (e.g., `hlrp_laq_lr_sweep_lr1e4_seed42`)
+5. **Unique job names** include parameter values (e.g., `hlrp_laq_oxe_local_sweep_lr1e4_seed42`)
 
 ### Sweep Parameter Syntax
 
@@ -225,7 +225,7 @@ container:
 
 ```bash
 # Via Hydra override
-python scripts/submit_job.py cluster.container.image=/path/to/custom.sqsh experiment=laq_debug
+python scripts/submit_job.py cluster.container.image=/path/to/custom.sqsh experiment=laq_oxe_local
 ```
 
 ---
@@ -290,7 +290,7 @@ Each job generates a script like:
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=hlrp_laq_lr_sweep_lr1e4_seed42
+#SBATCH --job-name=hlrp_laq_oxe_local_sweep_lr1e4_seed42
 #SBATCH --partition=lrz-hgx-h100-94x4
 #SBATCH --qos=mcml
 #SBATCH --gres=gpu:1
@@ -311,7 +311,7 @@ export NCCL_DEBUG=WARN
 nvidia-smi
 
 # Run training with overrides
-python scripts/2_train_laq.py experiment=laq_lr_sweep cluster=lrz_h100 training.optimizer.lr=1e-4 seed=42
+python scripts/2_train_laq.py experiment=laq_oxe_local_sweep cluster=lrz_h100 training.optimizer.lr=1e-4 seed=42
 ```
 
 ---
@@ -321,7 +321,7 @@ python scripts/2_train_laq.py experiment=laq_lr_sweep cluster=lrz_h100 training.
 ### Learning Rate Sweep
 
 ```yaml
-# config/experiment/laq_lr_sweep.yaml
+# config/experiment/laq_oxe_local_sweep.yaml
 sweep:
   params:
     training.optimizer.lr: 1e-4, 5e-5, 1e-5

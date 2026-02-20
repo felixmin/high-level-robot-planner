@@ -1,6 +1,6 @@
 # Paths and caching (local + cluster)
 
-This repo writes *run artifacts* (logs/checkpoints/profiles/viz) into a run directory, and uses a separate *cache directory* for large downloaded artifacts (HF weights, torch hub, TFDS cache, etc.).
+This repo writes *run artifacts* (logs/checkpoints/profiles/viz) into a run directory, and uses a separate *cache directory* for large downloaded artifacts (HF weights, torch hub, etc.).
 
 ## Run output directory
 
@@ -26,7 +26,6 @@ Configured via `paths.cache_dir` (relative paths resolve against `logging.root_d
 - HuggingFace hub weights: `HF_HUB_CACHE=<cache_dir>/huggingface/hub`
 - HuggingFace datasets cache: `HF_DATASETS_CACHE=<cache_dir>/huggingface/datasets`
 - torch hub cache: `TORCH_HOME=<cache_dir>/torch`
-- TFDS cache: `TFDS_DATA_DIR=<cache_dir>/tfds`
 - W&B cache: `WANDB_CACHE_DIR=<cache_dir>/wandb_cache`
 
 Important: we intentionally **do not** set `HF_HOME` in code, to avoid breaking Hugging Face auth/token discovery.
@@ -43,4 +42,3 @@ If a model is gated and downloads fail (401/403), run `huggingface-cli login` an
 ## Hydra output directory
 
 Hydra creates a `.hydra/` snapshot directory per run. We configure Hydra to write its output into the same run directory as `unified.log` so you don’t get an extra `runs/output/hydra/...` tree.
-
