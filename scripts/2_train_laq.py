@@ -270,7 +270,12 @@ def main(cfg: DictConfig):
         logger.info("✓ Dataset usage logger added")
 
     # Setup validation strategies
-    val_config = training_config.validation
+    val_config = cfg.get("validation")
+    if val_config is None:
+        raise ValueError(
+            "Missing top-level `validation` config. "
+            "Compose a validation preset via `/validation@validation: ...`."
+        )
     strategies_config = val_config.get("strategies", {})
     if strategies_config:
         strategies_config = OmegaConf.to_container(strategies_config, resolve=True)
@@ -388,12 +393,12 @@ def main(cfg: DictConfig):
     logger.info("=" * 80)
 
     # Get validation check interval from config
-    if training_config.validation.get("check_interval") is None:
-        raise ValueError("Missing `training.validation.check_interval` config.")
-    if training_config.validation.get("limit_batches") is None:
-        raise ValueError("Missing `training.validation.limit_batches` config.")
-    val_check_interval = training_config.validation.check_interval
-    limit_val_batches = training_config.validation.limit_batches
+    if val_config.get("check_interval") is None:
+        raise ValueError("Missing `validation.check_interval` config.")
+    if val_config.get("limit_batches") is None:
+        raise ValueError("Missing `validation.limit_batches` config.")
+    val_check_interval = val_config.check_interval
+    limit_val_batches = val_config.limit_batches
 
     if training_config.get("log_every_n_steps") is None:
         raise ValueError("Missing `training.log_every_n_steps` config.")

@@ -22,7 +22,7 @@ class BasicVisualizationStrategy(ValidationStrategy):
     - Per-bucket samples: separate grids for each configured bucket (via filters)
     - Training samples: reconstructions from training data
 
-    Bucket filters are configured in `training.validation.buckets` and are passed
+    Bucket filters are configured in `validation.buckets` and are passed
     to this strategy via `bucket_filters` (bucket_name -> filter dict).
     """
 

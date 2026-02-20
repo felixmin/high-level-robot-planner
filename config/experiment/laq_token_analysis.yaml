@@ -4,6 +4,7 @@ defaults:
   - /model@model: laq
   - /data@data: oxe_local_indexed
   - /training@training: laq_optimizer
+  - /validation@validation: laq_local_rich
   - /cluster@cluster: local_dev
   - optional /user_config: local
 

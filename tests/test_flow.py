@@ -7,7 +7,14 @@ Tests FlowConfig validation, FlowDecoder architecture, and integration with LAQ.
 import pytest
 import torch
 
-from laq.models.flow import FlowConfig, FlowDecoder, RAFTTeacher, compute_flow_loss
+from laq.models.flow import (
+    FlowConfig,
+    FlowDecoder,
+    RAFTTeacher,
+    compute_flow_loss,
+    compute_flow_summary_loss,
+    compute_weighted_mean_flow,
+)
 
 
 class TestFlowConfig:
@@ -110,6 +117,36 @@ class TestFlowConfig:
         )
         assert config.get_weight(0) == 0.5
         assert config.get_weight(100) == 0.5
+
+    def test_summary_defaults_disabled(self):
+        """Test summary loss defaults."""
+        config = FlowConfig(
+            model="raft_small",
+            loss_weight=0.5,
+            decoder_depth=4,
+        )
+        assert config.summary_loss_weight == 0.0
+        assert config.summary_static_eps == 1e-6
+
+    def test_invalid_summary_loss_weight_negative(self):
+        """Test that negative summary loss weight raises error."""
+        with pytest.raises(ValueError, match="summary_loss_weight must be non-negative"):
+            FlowConfig(
+                model="raft_small",
+                loss_weight=0.1,
+                decoder_depth=4,
+                summary_loss_weight=-0.01,
+            )
+
+    def test_invalid_summary_static_eps_non_positive(self):
+        """Test that non-positive summary epsilon raises error."""
+        with pytest.raises(ValueError, match="summary_static_eps must be positive"):
+            FlowConfig(
+                model="raft_small",
+                loss_weight=0.1,
+                decoder_depth=4,
+                summary_static_eps=0.0,
+            )
 
 
 class TestFlowDecoder:
@@ -231,6 +268,50 @@ class TestComputeFlowLoss:
         assert loss_norm < loss_unnorm / 1000
 
 
+class TestFlowSummaryLoss:
+    """Test weighted mean flow extraction and summary loss."""
+
+    def test_weighted_mean_prefers_moving_pixels(self):
+        flow = torch.zeros(1, 2, 2, 2)
+        flow[:, 0] = torch.tensor([[[10.0, 10.0], [0.0, 0.0]]])
+
+        mean_dx, mean_dy = compute_weighted_mean_flow(flow)
+
+        assert torch.allclose(mean_dx, torch.tensor([10.0]), atol=1e-5)
+        assert torch.allclose(mean_dy, torch.tensor([0.0]), atol=1e-6)
+
+    def test_weighted_mean_static_fallback_uses_plain_mean(self):
+        flow = torch.zeros(1, 2, 2, 2)
+        flow[:, 0] = torch.tensor([[[1.0, 3.0], [5.0, 7.0]]])
+
+        mean_dx, mean_dy = compute_weighted_mean_flow(flow, static_eps=1e6)
+
+        assert torch.allclose(mean_dx, torch.tensor([4.0]), atol=1e-6)
+        assert torch.allclose(mean_dy, torch.tensor([0.0]), atol=1e-6)
+
+    def test_summary_loss_zero_for_identical_flows(self):
+        flow = torch.randn(2, 2, 32, 32)
+        loss = compute_flow_summary_loss(flow, flow)
+        assert loss.item() == 0.0
+
+    def test_summary_loss_penalizes_direction_mismatch(self):
+        pred_flow = torch.zeros(1, 2, 16, 16)
+        gt_flow = torch.zeros(1, 2, 16, 16)
+        pred_flow[:, 0] = 1.0
+        gt_flow[:, 0] = -1.0
+
+        loss = compute_flow_summary_loss(pred_flow, gt_flow, normalize=False)
+        assert loss.item() > 1.9
+
+    def test_summary_normalization_reduces_scale(self):
+        pred_flow = torch.ones(1, 2, 256, 256) * 10.0
+        gt_flow = torch.zeros(1, 2, 256, 256)
+
+        loss_unnorm = compute_flow_summary_loss(pred_flow, gt_flow, normalize=False)
+        loss_norm = compute_flow_summary_loss(pred_flow, gt_flow, normalize=True)
+        assert loss_norm < loss_unnorm / 1000
+
+
 class TestLAQWithFlow:
     """Integration tests for LAQ with flow supervision."""
 
@@ -274,6 +355,8 @@ class TestLAQWithFlow:
                 "model": "raft_small",
                 "loss_weight": 0.1,
                 "decoder_depth": 2,
+                "summary_loss_weight": 0.2,
+                "summary_static_eps": 1e-5,
             }
         })
 
@@ -330,6 +413,8 @@ class TestLAQWithFlow:
 
         assert task.model.flow_config is not None
         assert task.model.flow_config.model == "raft_small"
+        assert task.model.flow_config.summary_loss_weight == 0.2
+        assert task.model.flow_config.summary_static_eps == pytest.approx(1e-5)
         assert task.model.flow_decoder is not None
         assert task.model.flow_teacher is not None
 
@@ -390,7 +475,7 @@ class TestHydraConfigWithFlow:
             assert cfg.model.use_aux_decoder is True
 
             # Validate flow visualization strategy
-            assert cfg.training.validation.strategies.flow_visualization.enabled is True
+            assert cfg.validation.strategies.flow_visualization.enabled is True
 
 
 if __name__ == "__main__":

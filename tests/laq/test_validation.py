@@ -10,6 +10,7 @@ from laq.validation import (
     ValidationCache,
     ValidationStrategy,
     BasicVisualizationStrategy,
+    FlowVisualizationStrategy,
     LatentTransferStrategy,
     CodebookEmbeddingStrategy,
     SequenceExamplesStrategy,
@@ -192,6 +193,40 @@ class TestBasicVisualizationStrategy:
 
         metrics = strategy.run(cache, pl_module, trainer)
         assert metrics == {}
+
+
+class TestFlowVisualizationStrategy:
+    """Test FlowVisualizationStrategy helpers."""
+
+    def test_direction_panel_shape_and_range(self):
+        strategy = FlowVisualizationStrategy()
+        panel = strategy._create_direction_panel(
+            gt_dx=3.0,
+            gt_dy=-1.5,
+            pred_dx=-2.0,
+            pred_dy=0.5,
+            height=64,
+            width=64,
+        )
+
+        assert panel.shape == (3, 64, 64)
+        assert torch.isfinite(panel).all()
+        assert panel.min() >= 0.0
+        assert panel.max() <= 1.0
+
+    def test_direction_panel_handles_static_vectors(self):
+        strategy = FlowVisualizationStrategy()
+        panel = strategy._create_direction_panel(
+            gt_dx=0.0,
+            gt_dy=0.0,
+            pred_dx=0.0,
+            pred_dy=0.0,
+            height=48,
+            width=80,
+        )
+
+        assert panel.shape == (3, 48, 80)
+        assert torch.isfinite(panel).all()
 
 
 class TestLatentTransferStrategy:
@@ -570,6 +605,7 @@ class TestCompositionPattern:
             "action_sequence_scatter",
             "top_sequences_scatter",
             "state_sequence_scatter",
+            "flow_visualization",
         ]
         for strategy_type in expected_types:
             assert strategy_type in STRATEGY_REGISTRY, f"Missing: {strategy_type}"

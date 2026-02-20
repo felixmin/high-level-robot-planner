@@ -40,6 +40,9 @@ class FlowConfig:
     # RAFT teacher performance knobs
     teacher_num_flow_updates: int = 12  # RAFT refinement iterations (smaller = faster)
     teacher_chunk_size: int = 64  # Teacher batch chunking (larger = faster, more memory)
+    # Optional global flow-summary auxiliary loss (off by default)
+    summary_loss_weight: float = 0.0
+    summary_static_eps: float = 1e-6
 
     def __post_init__(self):
         if self.model not in ("raft_small", "raft_large"):
@@ -56,6 +59,12 @@ class FlowConfig:
             )
         if self.teacher_chunk_size <= 0:
             raise ValueError(f"flow.teacher_chunk_size must be positive, got {self.teacher_chunk_size}")
+        if self.summary_loss_weight < 0:
+            raise ValueError(
+                f"flow.summary_loss_weight must be non-negative, got {self.summary_loss_weight}"
+            )
+        if self.summary_static_eps <= 0:
+            raise ValueError(f"flow.summary_static_eps must be positive, got {self.summary_static_eps}")
 
     def get_weight(self, step: int) -> float:
         """Get effective loss weight at given training step.
@@ -324,16 +333,93 @@ def compute_flow_loss(
     Returns:
         loss: Scalar MSE loss
     """
-    if normalize:
-        # Normalize flow by image dimensions to get ~[-1, 1] range
-        # Flow channel 0 = dx (horizontal), normalize by W
-        # Flow channel 1 = dy (vertical), normalize by H
-        _, _, H, W = gt_flow.shape
-
-        # Create normalization tensor [1, 2, 1, 1] for broadcasting
-        norm = gt_flow.new_tensor([W, H]).view(1, 2, 1, 1)
-
-        pred_flow = pred_flow / norm
-        gt_flow = gt_flow / norm
+    pred_flow, gt_flow = _normalize_flow_for_loss(
+        pred_flow=pred_flow,
+        gt_flow=gt_flow,
+        normalize=normalize,
+    )
 
     return F.mse_loss(pred_flow, gt_flow)
+
+
+def compute_weighted_mean_flow(
+    flow_b2hw: torch.Tensor,
+    static_eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute per-sample magnitude-weighted average flow direction.
+
+    Args:
+        flow_b2hw: Optical flow [B, 2, H, W]
+        static_eps: Threshold for static fallback and denominator stability
+
+    Returns:
+        (mean_dx, mean_dy): Each shape [B]
+    """
+    if static_eps <= 0:
+        raise ValueError(f"static_eps must be positive, got {static_eps}")
+
+    fx = flow_b2hw[:, 0]
+    fy = flow_b2hw[:, 1]
+    mag = torch.sqrt(fx * fx + fy * fy)
+    total_mag = mag.flatten(1).sum(dim=1)
+    weights = mag / (total_mag[:, None, None] + static_eps)
+
+    mean_dx = (fx * weights).flatten(1).sum(dim=1)
+    mean_dy = (fy * weights).flatten(1).sum(dim=1)
+
+    is_static = total_mag <= static_eps
+    if is_static.any():
+        fallback_dx = fx.flatten(1).mean(dim=1)
+        fallback_dy = fy.flatten(1).mean(dim=1)
+        mean_dx = torch.where(is_static, fallback_dx, mean_dx)
+        mean_dy = torch.where(is_static, fallback_dy, mean_dy)
+
+    return mean_dx, mean_dy
+
+
+def compute_flow_summary_loss(
+    pred_flow: torch.Tensor,
+    gt_flow: torch.Tensor,
+    static_eps: float = 1e-6,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """
+    Compute MSE between magnitude-weighted global flow vectors.
+
+    Args:
+        pred_flow: Predicted flow [B, 2, H, W]
+        gt_flow: Ground-truth flow [B, 2, H, W]
+        static_eps: Threshold for static fallback and denominator stability
+        normalize: If True, normalize flow by image size before summary extraction
+
+    Returns:
+        loss: Scalar MSE over [mean_dx, mean_dy]
+    """
+    pred_flow, gt_flow = _normalize_flow_for_loss(
+        pred_flow=pred_flow,
+        gt_flow=gt_flow,
+        normalize=normalize,
+    )
+
+    pred_mean_dx, pred_mean_dy = compute_weighted_mean_flow(pred_flow, static_eps=static_eps)
+    gt_mean_dx, gt_mean_dy = compute_weighted_mean_flow(gt_flow, static_eps=static_eps)
+
+    pred_mean = torch.stack((pred_mean_dx, pred_mean_dy), dim=1)
+    gt_mean = torch.stack((gt_mean_dx, gt_mean_dy), dim=1)
+    return F.mse_loss(pred_mean, gt_mean)
+
+
+def _normalize_flow_for_loss(
+    pred_flow: torch.Tensor,
+    gt_flow: torch.Tensor,
+    normalize: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if not normalize:
+        return pred_flow, gt_flow
+
+    # Flow channel 0 = dx (horizontal), normalize by W
+    # Flow channel 1 = dy (vertical), normalize by H
+    _, _, h, w = gt_flow.shape
+    norm = gt_flow.new_tensor([w, h]).view(1, 2, 1, 1)
+    return pred_flow / norm, gt_flow / norm

@@ -673,10 +673,15 @@ class LatentActionQuantization(nn.Module):
         # --- 4. Flow Decoder Path (Training) ---
         # Predict optical flow with gradients flowing to encoder
         if self.flow_decoder is not None:
-            from laq.models.flow import compute_flow_loss
+            from laq.models.flow import (
+                compute_flow_loss,
+                compute_flow_summary_loss,
+                compute_weighted_mean_flow,
+            )
 
             flow_weight = self.flow_config.get_weight(step)
             metrics["flow_weight"] = flow_weight
+            metrics["flow_summary_weight"] = self.flow_config.summary_loss_weight
 
             # If flow loss is effectively disabled (e.g. warmup at step=0),
             # skip the expensive RAFT teacher + decoder forward entirely.
@@ -700,6 +705,28 @@ class LatentActionQuantization(nn.Module):
             flow_loss = compute_flow_loss(pred_flow, gt_flow)
             total_loss = total_loss + flow_weight * flow_loss
             metrics["flow_loss"] = flow_loss.detach()
+
+            if self.flow_config.summary_loss_weight > 0.0:
+                flow_summary_loss = compute_flow_summary_loss(
+                    pred_flow=pred_flow,
+                    gt_flow=gt_flow,
+                    static_eps=self.flow_config.summary_static_eps,
+                )
+                total_loss = total_loss + (
+                    flow_weight * self.flow_config.summary_loss_weight * flow_summary_loss
+                )
+                metrics["flow_summary_loss"] = flow_summary_loss.detach()
+
+                pred_mean_dx, pred_mean_dy = compute_weighted_mean_flow(
+                    pred_flow,
+                    static_eps=self.flow_config.summary_static_eps,
+                )
+                gt_mean_dx, gt_mean_dy = compute_weighted_mean_flow(
+                    gt_flow,
+                    static_eps=self.flow_config.summary_static_eps,
+                )
+                metrics["flow_mean_dx_abs_err"] = (pred_mean_dx - gt_mean_dx).abs().mean().detach()
+                metrics["flow_mean_dy_abs_err"] = (pred_mean_dy - gt_mean_dy).abs().mean().detach()
 
         return total_loss, metrics
         

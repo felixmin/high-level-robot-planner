@@ -6,8 +6,8 @@ name: laq_vit
 # Model architecture (matches LAPA's LatentActionQuantization)
 dim: 1024                # Transformer embedding dimension
 quant_dim: 32           # Quantization dimension
-codebook_size: 8        # Number of codebook entries
-code_seq_len: 4         # Length of quantized action sequence
+codebook_size: 2048        # Number of codebook entries
+code_seq_len: 1         # Length of quantized action sequence
 vq_discarding_threshold: 0.1  # Replacement cutoff as fraction of average usage (see NSVQ.replace_unused_codebooks)
 image_size: 256         # Input image size
 patch_size: 32          # Patch size for ViT
@@ -34,12 +34,14 @@ use_pixel_decoder: false # Predict next frame's pixels with gradients to encoder
 
 flow:
   enabled: true
-  model: raft_small    # "raft_small" or "raft_large"
-  loss_weight: 1.0     # Weight for flow loss in total loss
-  decoder_depth: 2     # Transformer depth for flow decoder
+  model: raft_large    # "raft_small" or "raft_large"
+  loss_weight: 5.0     # Weight for flow loss in total loss
+  decoder_depth: 8     # Transformer depth for flow decoder
   warmup_steps: 0
-  teacher_num_flow_updates: 6
+  teacher_num_flow_updates: 4
   teacher_chunk_size: 64
+  summary_loss_weight: 1.0  # Optional global mean-flow auxiliary loss (off by default)
+  summary_static_eps: 1e-6  # Static fallback threshold for summary flow statistics
 
 # Interpretability decoder (optional, for visualization only)
 use_aux_decoder: true   # Predict pixels for visualization (gradients detached from encoder)
@@ -72,3 +74,5 @@ codebook_replace_schedule:
 #   # Performance knobs (optional)
 #   teacher_num_flow_updates: 12  # RAFT refinement iterations (smaller = faster)
 #   teacher_chunk_size: 64        # Larger = faster, more GPU memory
+#   summary_loss_weight: 0.0      # Additional weight on mean-flow summary loss
+#   summary_static_eps: 1e-6      # Static fallback threshold in summary loss

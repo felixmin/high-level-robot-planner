@@ -99,6 +99,8 @@ class LAQTask(pl.LightningModule):
                         warmup_steps=flow_cfg.get("warmup_steps", 0),
                         teacher_num_flow_updates=flow_cfg.get("teacher_num_flow_updates", 12),
                         teacher_chunk_size=flow_cfg.get("teacher_chunk_size", 64),
+                        summary_loss_weight=flow_cfg.get("summary_loss_weight", 0.0),
+                        summary_static_eps=flow_cfg.get("summary_static_eps", 1e-6),
                     )
                 except Exception as exc:
                     raise ValueError(
@@ -113,6 +115,8 @@ class LAQTask(pl.LightningModule):
                         "    warmup_steps: <int, optional>\n"
                         "    teacher_num_flow_updates: <int, optional>\n"
                         "    teacher_chunk_size: <int, optional>\n"
+                        "    summary_loss_weight: <float, optional>\n"
+                        "    summary_static_eps: <float, optional>\n"
                     ) from exc
 
         # Build codebook replacement schedule if specified

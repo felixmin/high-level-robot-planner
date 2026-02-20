@@ -61,72 +61,6 @@ gradient:
   clip_val: 1.0
   clip_algorithm: norm  # 'norm' or 'value'
 
-# Loss configuration
-loss_weights:
-  reconstruction: 1.0
-  vq: 1.0  # Combined codebook + commitment
-
-# Validation settings
-validation:
-  # How often to run validation (can be float for percentage of epoch, or int for steps)
-  check_interval: 5000
-
-  # Limit validation batches to save time (0.1 = 10% of val set, or int for exact batches)
-  # Set to 1.0 to run full validation.
-  limit_batches: 500
-
-  # Limit validation batches to save time (0.1 = 10% of val set, or int for exact batches)
-  # With 6300 val frame pairs, 0.1 = ~630 pairs = ~160 batches at batch_size 4
-  # limit_batches: 1.0
-
-  # Fixed pairs: diverse across datasets, tracked every validation
-  num_fixed_samples: 8
-
-  # Random pairs: different each time for diversity
-  num_random_samples: 8
-
-  # Maximum frame pairs to cache in RAM (prevents OOM on large val sets)
-  max_cached_samples: 1024
-
-  # --- Buckets (for per-bucket visualization and analysis) ---
-  # NOTE: Buckets belong to validation (not data). They drive:
-  # - sample routing into per-bucket caches
-  # - per-bucket visualization grids (via filters)
-  # Supports operators: ["!=", value], [">", value], ["not_null", true]
-  buckets:
-    youtube:
-      filters:
-        dataset_name: "youtube"
-      max_samples: 256
-    bridge:
-      filters:
-        dataset_name: "bridge"
-      max_samples: 256
-
-  # --- Validation Strategies ---
-  strategies:
-    # Basic validation (always runs): loss + visualizations
-    basic:
-      enabled: true
-      visualize_train: true
-      visualize_val: true
-      visualize_per_bucket: true  # Separate grids for each bucket
-      samples_per_bucket: 4
-      num_train_samples: 8  # Training samples to visualize
-
-    # Latent transfer analysis: test if latent actions transfer between scenes
-    # latent_transfer:
-    #   enabled: true
-    #   every_n_validations: 2  # Run every 10th validation
-    #   num_pairs: 256  # Number of pairs to test transfer on
-
-    # Sequence examples: visualize frame pairs grouped by exact code sequence
-    sequence_examples:
-      enabled: true
-      every_n_validations: 3
-      top_k_sequences: 16  # Number of most frequent sequences to visualize
-      examples_per_sequence: 4  # Frame pairs to show per sequence
-
 # Dataset usage logging: prints how much of each dataset was *actually consumed*
 # between validations (uses `batch.dataset_name`).
 dataset_usage_logger:
@@ -151,7 +85,7 @@ checkpoint:
 
 # Profiling
 profiler:
-  enabled: true           # Enable Lightning SimpleProfiler
+  enabled: false           # Enable Lightning SimpleProfiler
   type: advanced             # 'simple', 'advanced', or 'pytorch'
   dirpath: ./profiles      # Where to save profile outputs
   filename: profile        # Profile filename

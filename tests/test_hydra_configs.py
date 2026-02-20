@@ -30,7 +30,7 @@ class TestExperimentConfigs:
             assert cfg.experiment.name == "laq_oxe_cluster"
             assert cfg.model.flow.model == "raft_large"
             assert cfg.model.flow.decoder_depth == 2
-            assert bool(cfg.training.validation.strategies.flow_visualization.enabled) is True
+            assert bool(cfg.validation.strategies.flow_visualization.enabled) is True
 
     def test_vla_smol_flow_shared_config(self, config_dir):
         with initialize_config_dir(version_base=None, config_dir=config_dir):
