@@ -1,8 +1,0 @@
-# @package data.subset
-
-# Optional subset settings for debugging on local-file datasets.
-
-max_pairs: null
-strategy: random             # random|sequential
-seed: 42
-

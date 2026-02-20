@@ -7,7 +7,7 @@
 
 defaults:
   - /model@model: laq
-  - /data@data: laq_oxe_cluster_mirror_large_local_python_hot_samples1_no_aloha_mimic
+  - /data@data: oxe_local_indexed
   - /training@training: laq_optimizer
   - /cluster@cluster: lrz_cpu_only
 

@@ -8,7 +8,7 @@
 
 defaults:
   - /model@model: laq
-  - /data@data: laq_oxe_all
+  - /data@data: oxe_local_indexed
   - /training@training: laq_optimizer
   - /cluster@cluster: local_dev
 

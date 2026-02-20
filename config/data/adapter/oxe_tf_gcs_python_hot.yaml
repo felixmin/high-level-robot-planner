@@ -1,9 +1,0 @@
-# @package data.adapter
-
-# Deprecated alias. Keep for backward compatibility with older commands.
-#
-# Use `oxe_tf_cluster_fast` directly for cluster training.
-
-defaults:
-  - oxe_tf_cluster_fast
-  - _self_

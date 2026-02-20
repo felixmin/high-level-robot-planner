@@ -7,7 +7,7 @@
 
 defaults:
   - /model@model: foundation_smol_latent
-  - /data@data: laq_oxe_all_high_ram
+  - /data@data: oxe_local_indexed
   - /training@training: vla_lightning
   - /cluster@cluster: local_dev
   - optional /user_config: local

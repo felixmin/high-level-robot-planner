@@ -12,7 +12,7 @@
 
 defaults:
   - /model@model: foundation_cosmos2_tokens_8_4
-  - /data@data: laq_oxe_all_minimal
+  - /data@data: oxe_local_indexed
   - /training@training: vla_lightning_debug
   - /cluster@cluster: lrz_h100
   - optional /user_config: local

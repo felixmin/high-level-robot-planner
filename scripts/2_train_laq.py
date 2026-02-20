@@ -115,22 +115,7 @@ def main(cfg: DictConfig):
     logger.info(f"  - Batch size: {cfg.data.loader.batch_size}")
     logger.info(f"  - Image size: {cfg.data.preprocess.image_size}")
 
-    if cfg.data.backend == "local_files":
-        source_info = [
-            f"{s.type}: {s.root}" for s in cfg.data.dataset.local_files.sources
-        ]
-        for s in source_info:
-            logger.info(f"  - Source: {s}")
-        logger.info(f"  - Total scenes available: {datamodule.total_available}")
-        logger.info(f"  - Train frame pairs: {len(datamodule.train_dataset)}")
-        logger.info(f"  - Val frame pairs: {len(datamodule.val_dataset)}")
-
-        pairs_per_dataset = datamodule.get_pairs_per_dataset()
-        if pairs_per_dataset["train"]:
-            logger.info(f"  - Train pairs by dataset: {pairs_per_dataset['train']}")
-        if pairs_per_dataset["val"]:
-            logger.info(f"  - Val pairs by dataset: {pairs_per_dataset['val']}")
-    elif cfg.data.backend in ("oxe_tf", "oxe_tf_v2", "oxe_local_indexed"):
+    if cfg.data.backend == "oxe_local_indexed":
         dataset_names = [d.name for d in cfg.data.dataset.oxe.datasets]
         logger.info(f"  - Datasets: {dataset_names}")
         try:
@@ -141,11 +126,10 @@ def main(cfg: DictConfig):
             )
         except TypeError:
             logger.info("  - Train dataset length is not available")
-    elif cfg.data.backend == "oxe_hf":
-        dataset_names = [d.name for d in cfg.data.dataset.hf_oxe.datasets]
-        logger.info(f"  - Datasets: {dataset_names}")
     else:
-        raise ValueError(f"Unknown data.backend: {cfg.data.backend}")
+        raise ValueError(
+            f"Only data.backend='oxe_local_indexed' is supported, got {cfg.data.backend!r}"
+        )
 
     # Initialize LAQ task
     logger.info("\n" + "=" * 80)
