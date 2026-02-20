@@ -130,12 +130,17 @@ def main(cfg: DictConfig):
             logger.info(f"  - Train pairs by dataset: {pairs_per_dataset['train']}")
         if pairs_per_dataset["val"]:
             logger.info(f"  - Val pairs by dataset: {pairs_per_dataset['val']}")
-    elif cfg.data.backend == "oxe_tf":
+    elif cfg.data.backend in ("oxe_tf", "oxe_tf_v2", "oxe_local_indexed"):
         dataset_names = [d.name for d in cfg.data.dataset.oxe.datasets]
         logger.info(f"  - Datasets: {dataset_names}")
-        est_batches = int(len(datamodule.train_dataset))
-        est_pairs = est_batches * int(cfg.data.loader.batch_size)
-        logger.info(f"  - Estimated train batches/epoch: ~{est_batches:,} (~{est_pairs:,} pairs)")
+        try:
+            est_batches = int(len(datamodule.train_dataset))
+            est_pairs = est_batches * int(cfg.data.loader.batch_size)
+            logger.info(
+                f"  - Estimated train batches/epoch: ~{est_batches:,} (~{est_pairs:,} pairs)"
+            )
+        except TypeError:
+            logger.info("  - Train dataset length is not available")
     elif cfg.data.backend == "oxe_hf":
         dataset_names = [d.name for d in cfg.data.dataset.hf_oxe.datasets]
         logger.info(f"  - Datasets: {dataset_names}")

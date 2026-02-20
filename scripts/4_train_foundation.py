@@ -153,13 +153,21 @@ def main(cfg: DictConfig):
     )
 
     # Data: frame pairs + language (OXE backends only).
-    if cfg.data.backend not in ("oxe_tf", "oxe_tf_v2", "oxe_hf"):
+    if cfg.data.backend not in ("oxe_tf", "oxe_tf_v2", "oxe_hf", "oxe_local_indexed"):
         raise ValueError(
-            f"Stage 2 expects an OXE backend (oxe_tf/oxe_tf_v2/oxe_hf), got {cfg.data.backend!r}"
+            "Stage 2 expects an OXE backend "
+            f"(oxe_tf/oxe_tf_v2/oxe_hf/oxe_local_indexed), got {cfg.data.backend!r}"
         )
 
     datamodule = create_datamodule(cfg.data)
     datamodule.setup()
+
+    # V2 pipeline swap callback: frees train pipeline during validation (and vice versa)
+    # to avoid OOM from holding 2×29 dataset pipelines simultaneously.
+    _pipeline_swap_cb = None
+    if cfg.data.backend == "oxe_tf_v2":
+        from common.data import OXEPipelineSwapCallback
+        _pipeline_swap_cb = OXEPipelineSwapCallback()
 
     # LAQ: frozen label generator
     laq_ckpt = cfg.model.laq.checkpoint
@@ -485,6 +493,8 @@ def main(cfg: DictConfig):
             verbose=True,
         ),
     ]
+    if _pipeline_swap_cb is not None:
+        callbacks.append(_pipeline_swap_cb)
 
     viz_cfg = cfg.training.validation.visualization
     if viz_cfg and bool(viz_cfg.enabled):

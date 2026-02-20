@@ -30,7 +30,7 @@ def create_datamodule(cfg_data: Any):
 
     Expected schema:
       data:
-        backend: local_files | oxe_tf | oxe_hf
+        backend: local_files | oxe_tf | oxe_tf_v2 | oxe_hf | oxe_local_indexed
         preprocess: {image_size: int, return_metadata: bool}
         loader: {batch_size: int, num_workers: int, pin_memory: bool, prefetch_factor: int|null}
         dataset: {...}   # backend-specific
@@ -104,6 +104,18 @@ def create_datamodule(cfg_data: Any):
         hf_oxe = dataset["hf_oxe"]
         return HFOXEDataModule(
             datasets=list(hf_oxe["datasets"]),
+            preprocess=preprocess,
+            loader=loader,
+            adapter=adapter,
+        )
+
+    if backend == "oxe_local_indexed":
+        from common.data import OpenXLocalDataModule
+
+        adapter = data["adapter"]
+        oxe = dataset["oxe"]
+        return OpenXLocalDataModule(
+            datasets=list(oxe["datasets"]),
             preprocess=preprocess,
             loader=loader,
             adapter=adapter,

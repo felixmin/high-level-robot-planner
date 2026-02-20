@@ -573,6 +573,8 @@ class OXEFramePairDatasetV2(IterableDataset):
     def cleanup(self):
         self._iterator = None
         self._pipeline = None
+        import gc
+        gc.collect()
 
     def __del__(self):
         self.cleanup()

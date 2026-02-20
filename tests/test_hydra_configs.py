@@ -70,6 +70,37 @@ class TestExperimentConfigs:
             # Validate cluster config (H100 single node)
             assert cfg.cluster.name == "local_dev"
 
+    def test_data_oxe_local_indexed_config(self, config_dir):
+        """Test local indexed OpenX data preset loads correctly."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(
+                config_name="config",
+                overrides=["experiment=laq_oxe_local", "data=oxe_local_indexed"],
+            )
+
+            assert cfg.data.backend == "oxe_local_indexed"
+            assert hasattr(cfg.data.adapter, "openx_local")
+            assert cfg.data.adapter.openx_local.mode == "indexed"
+            assert bool(cfg.data.adapter.openx_local.index_rebuild) is False
+            assert int(cfg.data.adapter.openx_local.index_max_open_shards) >= 1
+            assert bool(cfg.data.adapter.openx_local.weights_by_size) is False
+            assert len(cfg.data.dataset.oxe.datasets) >= 1
+
+    def test_data_oxe_local_indexed_full_override(self, config_dir):
+        """Test indexed_full mode override composes."""
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "experiment=laq_oxe_local",
+                    "data=oxe_local_indexed",
+                    "data.adapter.openx_local.mode=indexed_full",
+                ],
+            )
+
+            assert cfg.data.backend == "oxe_local_indexed"
+            assert cfg.data.adapter.openx_local.mode == "indexed_full"
+
     def test_vla_7b_config(self, config_dir):
         """Test VLA 7B configuration loads correctly."""
         with initialize_config_dir(version_base=None, config_dir=config_dir):

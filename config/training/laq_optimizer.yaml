@@ -152,6 +152,6 @@ checkpoint:
 # Profiling
 profiler:
   enabled: true           # Enable Lightning SimpleProfiler
-  type: simple             # 'simple', 'advanced', or 'pytorch'
+  type: advanced             # 'simple', 'advanced', or 'pytorch'
   dirpath: ./profiles      # Where to save profile outputs
   filename: profile        # Profile filename

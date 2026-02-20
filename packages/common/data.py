@@ -1390,3 +1390,296 @@ class OXEDataModuleV2(pl.LightningDataModule):
             if dataset is not None:
                 dataset.cleanup()
             setattr(self, attr_name, None)
+
+
+class OpenXLocalDataModule(pl.LightningDataModule):
+    """
+    Local OpenX DataModule (no network streaming).
+
+    Reads downloaded HF tar shards from local disk and yields OXE-compatible
+    frame-pair batches for Stage 1 / Stage 2 training.
+    """
+
+    def __init__(
+        self,
+        *,
+        datasets: List[Dict[str, Any]],
+        preprocess: Dict[str, Any],
+        loader: Dict[str, Any],
+        adapter: Dict[str, Any],
+    ):
+        super().__init__()
+        self.datasets = datasets
+        self.preprocess = preprocess
+        self.loader = loader
+        self.adapter = adapter
+        self.train_dataset = None
+        self.val_dataset = None
+        self.train_sampler = None
+        self.val_sampler = None
+        self._resolved_datasets: List[Dict[str, Any]] = []
+        self._mode = ""
+
+    def setup(self, stage: Optional[str] = None):
+        from common.adapters.openx_local import (
+            OpenXLocalFullPairDataset,
+            OpenXLocalIndexedPairIterable,
+            discover_local_subdatasets,
+        )
+        from common.adapters.openx_local_indexed_full import (
+            OpenXLocalIndexedEpisodePairSampler,
+            OpenXLocalIndexedPairMapDataset,
+            prepare_openx_local_episode_index,
+        )
+
+        image_size = int(self.preprocess["image_size"])
+        return_metadata = bool(self.preprocess["return_metadata"])
+
+        local_cfg = self.adapter["openx_local"]
+        root = str(local_cfg["root"])
+        mode = str(local_cfg["mode"]).strip().lower()
+        max_shards_per_dataset = local_cfg["max_shards_per_dataset"]
+        pairs_per_episode = local_cfg["pairs_per_episode"]
+        index_workers = int(local_cfg["index_workers"])
+        index_cache_dir = local_cfg["index_cache_dir"]
+        index_rebuild = bool(local_cfg["index_rebuild"])
+        index_max_open_shards = int(local_cfg["index_max_open_shards"])
+        weights_by_size = bool(local_cfg["weights_by_size"])
+        auto_discover = bool(local_cfg.get("auto_discover", False))
+        auto_train_split = str(local_cfg.get("auto_train_split", "train[:90%]"))
+        auto_val_split = str(local_cfg.get("auto_val_split", "train[90%:]"))
+        auto_pair_offset_steps = int(local_cfg.get("auto_pair_offset_steps", 5))
+        auto_weight = float(local_cfg.get("auto_weight", 1.0))
+        max_pairs = local_cfg["max_pairs"]
+        seed = int(local_cfg["seed"])
+        resample_each_epoch = bool(local_cfg["resample_each_epoch"])
+        stopping_strategy = str(local_cfg["stopping_strategy"])
+        max_shards_opt = (
+            int(max_shards_per_dataset)
+            if max_shards_per_dataset is not None and int(max_shards_per_dataset) > 0
+            else None
+        )
+        pairs_per_episode_opt = (
+            int(pairs_per_episode)
+            if pairs_per_episode is not None and int(pairs_per_episode) > 0
+            else None
+        )
+        if auto_discover:
+            discovered = discover_local_subdatasets(root)
+            if not discovered:
+                raise ValueError(f"No local OpenX datasets discovered under: {root}")
+            resolved_datasets = [
+                {
+                    "name": dataset_name,
+                    "train_split": auto_train_split,
+                    "val_split": auto_val_split,
+                    "pair_offset_steps": auto_pair_offset_steps,
+                    "weight": auto_weight,
+                    "approx_num_pairs": None,
+                }
+                for dataset_name in discovered
+            ]
+            logger.info(
+                "✓ OpenX local auto-discovered %d datasets from %s",
+                len(resolved_datasets),
+                root,
+            )
+        else:
+            resolved_datasets = list(self.datasets)
+        if not resolved_datasets:
+            raise ValueError("OpenX local has no datasets configured or discovered")
+        self._resolved_datasets = resolved_datasets
+
+        if mode not in {"indexed", "full", "indexed_full"}:
+            raise ValueError(
+                f"data.adapter.openx_local.mode must be 'indexed', 'indexed_full', or 'full', got {mode!r}"
+            )
+        self.train_sampler = None
+        self.val_sampler = None
+
+        if mode in {"indexed", "full"}:
+            train_indexed = OpenXLocalIndexedPairIterable(
+                root=root,
+                dataset_entries=list(self._resolved_datasets),
+                split_key="train_split",
+                image_size=image_size,
+                return_metadata=return_metadata,
+                max_shards_per_dataset=max_shards_opt,
+                pairs_per_episode=pairs_per_episode_opt,
+                index_workers=index_workers,
+                index_cache_dir=index_cache_dir,
+                seed=seed,
+                resample_each_epoch=resample_each_epoch,
+                stopping_strategy=stopping_strategy,
+            )
+
+            val_indexed = OpenXLocalIndexedPairIterable(
+                root=root,
+                dataset_entries=list(self._resolved_datasets),
+                split_key="val_split",
+                image_size=image_size,
+                return_metadata=return_metadata,
+                max_shards_per_dataset=max_shards_opt,
+                pairs_per_episode=pairs_per_episode_opt,
+                index_workers=index_workers,
+                index_cache_dir=index_cache_dir,
+                seed=seed + 1,
+                resample_each_epoch=False,
+                stopping_strategy="all_exhausted",
+            )
+
+            if mode == "indexed":
+                self.train_dataset = train_indexed
+                self.val_dataset = val_indexed
+            else:
+                self.train_dataset = OpenXLocalFullPairDataset(
+                    indexed_ds=train_indexed, max_pairs=max_pairs
+                )
+                self.val_dataset = OpenXLocalFullPairDataset(
+                    indexed_ds=val_indexed, max_pairs=max_pairs
+                )
+        else:
+            if index_cache_dir is None or str(index_cache_dir).strip() == "":
+                raise ValueError(
+                    "data.adapter.openx_local.index_cache_dir must be set for mode='indexed_full'"
+                )
+            index_dir = str((Path(str(index_cache_dir)).expanduser().resolve() / "episode_index"))
+
+            train_index = prepare_openx_local_episode_index(
+                root=root,
+                dataset_entries=list(self._resolved_datasets),
+                split_key="train_split",
+                max_shards_per_dataset=max_shards_opt,
+                index_workers=index_workers,
+                index_dir=index_dir,
+                rebuild=index_rebuild,
+            )
+            val_index = prepare_openx_local_episode_index(
+                root=root,
+                dataset_entries=list(self._resolved_datasets),
+                split_key="val_split",
+                max_shards_per_dataset=max_shards_opt,
+                index_workers=index_workers,
+                index_dir=index_dir,
+                rebuild=index_rebuild,
+            )
+
+            self.train_dataset = OpenXLocalIndexedPairMapDataset(
+                index=train_index,
+                image_size=image_size,
+                return_metadata=return_metadata,
+                max_open_shards=index_max_open_shards,
+            )
+            self.val_dataset = OpenXLocalIndexedPairMapDataset(
+                index=val_index,
+                image_size=image_size,
+                return_metadata=return_metadata,
+                max_open_shards=index_max_open_shards,
+            )
+            self.train_sampler = OpenXLocalIndexedEpisodePairSampler(
+                index=train_index,
+                pairs_per_episode=pairs_per_episode_opt,
+                weights_by_size=weights_by_size,
+                num_samples=None,
+                seed=seed,
+                epoch=0,
+                resample_each_epoch=resample_each_epoch,
+            )
+            self.val_sampler = OpenXLocalIndexedEpisodePairSampler(
+                index=val_index,
+                pairs_per_episode=pairs_per_episode_opt,
+                weights_by_size=False,
+                num_samples=None,
+                seed=seed + 1,
+                epoch=0,
+                resample_each_epoch=False,
+            )
+
+        self._mode = mode
+        dataset_names = [d["name"] for d in self._resolved_datasets]
+        logger.info(
+            "✓ OpenX local DataModule initialized (%s mode): %s",
+            mode,
+            ", ".join(dataset_names),
+        )
+
+    def train_dataloader(self):
+        collate_fn = oxe_collate_fn if bool(self.preprocess["return_metadata"]) else None
+        num_workers = int(self.loader["num_workers"])
+        if self._mode == "indexed_full":
+            return DataLoader(
+                self.train_dataset,
+                batch_size=int(self.loader["batch_size"]),
+                sampler=self.train_sampler,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=bool(self.loader["pin_memory"]),
+                prefetch_factor=self.loader["prefetch_factor"] if num_workers > 0 else None,
+                persistent_workers=num_workers > 0,
+                collate_fn=collate_fn,
+            )
+        train_is_iterable = isinstance(self.train_dataset, IterableDataset)
+        return DataLoader(
+            self.train_dataset,
+            batch_size=int(self.loader["batch_size"]),
+            shuffle=not train_is_iterable,
+            num_workers=num_workers,
+            pin_memory=bool(self.loader["pin_memory"]),
+            prefetch_factor=self.loader["prefetch_factor"] if num_workers > 0 else None,
+            persistent_workers=num_workers > 0,
+            collate_fn=collate_fn,
+        )
+
+    def val_dataloader(self):
+        collate_fn = oxe_collate_fn if bool(self.preprocess["return_metadata"]) else None
+        num_workers = int(self.loader["num_workers"])
+        if self._mode == "indexed_full":
+            return DataLoader(
+                self.val_dataset,
+                batch_size=int(self.loader["batch_size"]),
+                sampler=self.val_sampler,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=bool(self.loader["pin_memory"]),
+                prefetch_factor=self.loader["prefetch_factor"] if num_workers > 0 else None,
+                persistent_workers=num_workers > 0,
+                collate_fn=collate_fn,
+            )
+        return DataLoader(
+            self.val_dataset,
+            batch_size=int(self.loader["batch_size"]),
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=bool(self.loader["pin_memory"]),
+            prefetch_factor=self.loader["prefetch_factor"] if num_workers > 0 else None,
+            persistent_workers=num_workers > 0,
+            collate_fn=collate_fn,
+        )
+
+    def teardown(self, stage: Optional[str] = None):
+        self.train_dataset = None
+        self.val_dataset = None
+        self.train_sampler = None
+        self.val_sampler = None
+        self._resolved_datasets = []
+
+
+class OXEPipelineSwapCallback(pl.Callback):
+    """Swaps train/val pipelines to avoid holding both in memory.
+
+    Before validation: tears down the train pipeline (frees ~15-20 GB).
+    After validation: tears down the val pipeline.
+    Train pipeline rebuilds lazily on the next training iteration.
+    """
+
+    def on_validation_start(self, trainer, pl_module):
+        dm = trainer.datamodule
+        if isinstance(dm, OXEDataModuleV2) and dm.train_dataset is not None:
+            dm.train_dataset.cleanup()
+            logger.info("OXEPipelineSwapCallback: released train pipeline before validation")
+
+    def on_validation_end(self, trainer, pl_module):
+        dm = trainer.datamodule
+        if isinstance(dm, OXEDataModuleV2) and dm.val_dataset is not None:
+            dm.val_dataset.cleanup()
+            logger.info("OXEPipelineSwapCallback: released val pipeline after validation")
