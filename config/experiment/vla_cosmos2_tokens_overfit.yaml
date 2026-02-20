@@ -8,7 +8,7 @@
 # - val/tf_code_token_accuracy quickly rises toward 1.0 on the repeated batch
 # - val/tf_code_token_entropy drops (model becomes confident) without collapsing to a wrong token
 #
-# Uses the minimal TF adapter to avoid long shuffle-buffer warmup.
+# Uses standard local indexed-full OXE data with overfit_batches=1.
 
 defaults:
   - /model@model: foundation_cosmos2_tokens_8_4
@@ -27,12 +27,6 @@ submit:
 data:
   loader:
     batch_size: 8
-  adapter:
-    tf:
-      iterator:
-        # Ensure a "true overfit-one-batch" run even with streaming tf.data.
-        persistent: false
-        cache_first_train_batch: true
 
 training:
   max_steps: 300

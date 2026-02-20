@@ -67,8 +67,6 @@ checkpoint:
 train_teacher_forced_metrics_every_n_steps: null
 
 # Optional Lightning debug controls.
-# - For TF streaming backends, set `data.adapter.tf.iterator.cache_first_train_batch=true`
-#   to guarantee the *exact* same batch is replayed each step.
 overfit_batches: null
 limit_train_batches: null
 

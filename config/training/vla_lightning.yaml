@@ -63,8 +63,6 @@ train_teacher_forced_metrics_every_n_steps: null
 
 # Optional Lightning debug controls.
 # - Set `overfit_batches=1` to sanity-check that loss and accuracy improve on a single batch.
-# - For TF streaming backends, also set `data.adapter.tf.iterator.cache_first_train_batch=true`
-#   to guarantee the *exact* same batch is replayed each step.
 # - Use `limit_train_batches` to bound epoch length for non-step-based runs.
 overfit_batches: null
 limit_train_batches: null

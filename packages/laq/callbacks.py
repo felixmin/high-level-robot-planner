@@ -305,9 +305,7 @@ class ValidationStrategyCallback(Callback):
                 except Exception as e:
                     print(f"Warning: Strategy {strategy.name} on {bucket_name} failed: {e}")
 
-        # Run garbage collection after validation to free memory
-        # This helps prevent memory buildup when using tf.data pipelines
-        # Can be disabled on high-memory systems (cluster) via config
+        # Run garbage collection after validation to keep loader + viz memory stable.
         if self.run_gc_after_validation:
             gc.collect()
             torch.cuda.empty_cache() if torch.cuda.is_available() else None

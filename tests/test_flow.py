@@ -369,21 +369,20 @@ class TestHydraConfigWithFlow:
         from pathlib import Path
         return str(Path(__file__).parent.parent / "config")
 
-    def test_laq_oxe_all_val_3_loads(self, config_dir):
-        """Test that laq_oxe_all_val_3 config loads correctly."""
+    def test_laq_oxe_cluster_loads(self, config_dir):
+        """Test that laq_oxe_cluster config loads correctly."""
         from hydra import compose, initialize_config_dir
 
         with initialize_config_dir(version_base=None, config_dir=config_dir):
-            cfg = compose(config_name="config", overrides=["experiment=laq_oxe_all_val_3"])
+            cfg = compose(config_name="config", overrides=["experiment=laq_oxe_cluster"])
 
             # Validate experiment
-            assert cfg.experiment.name == "laq_oxe_all_val_3"
-            assert "flow" in cfg.experiment.description.lower()
+            assert cfg.experiment.name == "laq_oxe_cluster"
 
             # Validate flow config
             assert cfg.model.flow.model == "raft_large"
             assert cfg.model.flow.loss_weight == 1.0
-            assert cfg.model.flow.decoder_depth == 4
+            assert cfg.model.flow.decoder_depth == 2
             assert cfg.model.flow.warmup_steps == 10000
 
             # Validate decoder flags

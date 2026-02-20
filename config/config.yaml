@@ -3,7 +3,7 @@
 
 defaults:
   - _self_
-  - experiment: laq_hf_local  # Default experiment (override with experiment=X)
+  - experiment: laq_oxe_local  # Default experiment (override with experiment=X)
   - override hydra/hydra_logging: disabled  # Disable Hydra's own logging
   - override hydra/job_logging: none        # We handle logging ourselves
 
@@ -64,20 +64,17 @@ submit:
   # Typical use case: editable-install a local LeRobot plugin package.
   pre_commands: []
 
-# Lightweight benchmarking knobs (used by scripts/bench_oxe_dataloader.py)
+# Lightweight benchmarking knobs (kept for optional local profiling scripts)
 benchmark:
   warmup_steps: 20
   steps: 200
-  # Optional: sleep after each batch fetch to simulate model compute time
-  # and let tf.data prefetch overlap (0 disables).
+  # Optional: sleep after each batch fetch to simulate model compute time.
   compute_sleep_s: 0.0
   tf_profile: false
   torch_profile: false
-  # Optional: prime each child dataset pipeline before benchmarking.
-  # This is useful for multi-dataset GCS streaming where the first element from a
-  # dataset can pay a large one-time startup cost.
+  # Optional: prime dataset pipelines before benchmarking.
   prime_each_dataset_samples: 0
   prime_materialize: false
-  # Python-prefetch mixer experiment (scripts/bench_oxe_python_prefetch_mixer.py)
+  # Python-prefetch tuning knobs.
   python_prefetch_queue_size: 1
   python_prefetch_min_ready_datasets: 4

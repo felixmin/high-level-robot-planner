@@ -6,7 +6,7 @@
 #
 # The config is automatically included (as optional) by experiment configs that need it.
 # You can also override via CLI:
-#   python scripts/2_train_laq.py experiment=laq_oxe_all_val_3 logging.root_dir=/my/path
+#   python scripts/2_train_laq.py experiment=laq_oxe_local logging.root_dir=/my/path
 
 # Logging paths (where to store run outputs)
 logging:
@@ -22,16 +22,11 @@ logging:
 paths:
   cache_dir: cache
 
-# Optional: point the TF OXE adapter at a local Open X-Embodiment mirror (falls back to GCS when missing).
-# Common LRZ paths:
-#   - /dss/dssfs04/pn69za/pn69za-dss-0004/datasets/open-x-embodiment
-#   - /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/<your-subdir>/open-x-embodiment
+# Optional: point the local OpenX indexed adapter at your OXE tar mirror root.
 data:
   adapter:
-    tf:
-      tfds_read:
-        source: auto        # gcs|local|auto
-        local_root: null    # e.g. /dss/.../datasets/open-x-embodiment
+    openx_local:
+      root: /mnt/data/oxe
 
 # Optional: override cluster container image per user.
 # Most experiments include this file as optional `/user_config: local`,

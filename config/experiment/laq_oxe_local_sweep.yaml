@@ -3,7 +3,6 @@
 # Minimal local OXE run (RAM-safe):
 # - no shuffle buffers
 # - no prefetching
-# - no tf.data AUTOTUNE
 # - tiny splits + tiny batch size
 
 defaults:
