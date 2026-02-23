@@ -16,7 +16,10 @@ import os
 import pickle
 import random
 import tarfile
+import time
+import fcntl
 from array import array
+from contextlib import contextmanager
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -153,6 +156,49 @@ def _required_files(index_root: Path) -> List[Path]:
 
 def _is_complete_index(index_root: Path) -> bool:
     return all(p.exists() for p in _required_files(index_root))
+
+
+@contextmanager
+def _index_build_lock(index_root: Path) -> Iterator[None]:
+    """
+    Serialize index build/load for a single key across processes.
+
+    Prevents concurrent builders from racing on shared temp files under the same
+    `index_root` (e.g. `<index_root>/_tmp/task_...npy`).
+    """
+    index_root.mkdir(parents=True, exist_ok=True)
+    lock_path = index_root / ".build.lock"
+    # Line-buffered text mode keeps this lightweight and debuggable.
+    lock_fh = open(lock_path, "a+", encoding="utf-8")
+    timeout_sec = float(os.environ.get("OPENX_INDEX_LOCK_TIMEOUT_SEC", "7200"))
+    sleep_sec = float(os.environ.get("OPENX_INDEX_LOCK_POLL_SEC", "0.2"))
+    start = time.monotonic()
+    warned_waiting = False
+    try:
+        while True:
+            try:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                waited = time.monotonic() - start
+                if waited >= timeout_sec:
+                    raise TimeoutError(
+                        f"Timed out acquiring index build lock after {waited:.1f}s: {lock_path}"
+                    )
+                if not warned_waiting and waited >= 5.0:
+                    logger.info(
+                        "Waiting for index build lock: key_dir=%s waited=%.1fs",
+                        str(index_root),
+                        waited,
+                    )
+                    warned_waiting = True
+                time.sleep(sleep_sec)
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_fh.close()
 
 
 def _index_fingerprint(
@@ -583,42 +629,43 @@ def prepare_openx_local_episode_index(
     )
     index_root = Path(index_dir).expanduser().resolve() / key
 
-    index_complete = _is_complete_index(index_root)
-    if rebuild or not index_complete:
-        reason = "rebuild=true" if rebuild else "missing_or_incomplete_cache"
+    with _index_build_lock(index_root):
+        index_complete = _is_complete_index(index_root)
+        if rebuild or not index_complete:
+            reason = "rebuild=true" if rebuild else "missing_or_incomplete_cache"
+            logger.info(
+                "→ Indexed-full index build required: split=%s key=%s reason=%s dir=%s",
+                split_key,
+                key,
+                reason,
+                str(index_root),
+            )
+            build_openx_local_episode_index(
+                root=root,
+                dataset_entries=dataset_entries,
+                split_key=split_key,
+                max_shards_per_dataset=max_shards_per_dataset,
+                index_workers=index_workers,
+                index_root=str(index_root),
+                key=key,
+                fingerprint=fingerprint,
+            )
+        else:
+            logger.info(
+                "✓ Reusing indexed-full episode index: split=%s key=%s dir=%s",
+                split_key,
+                key,
+                str(index_root),
+            )
+        bundle = load_openx_local_episode_index(str(index_root))
         logger.info(
-            "→ Indexed-full index build required: split=%s key=%s reason=%s dir=%s",
+            "✓ Loaded indexed-full episode index: split=%s key=%s datasets=%d episodes=%d",
             split_key,
             key,
-            reason,
-            str(index_root),
+            len(bundle.datasets),
+            len(bundle),
         )
-        build_openx_local_episode_index(
-            root=root,
-            dataset_entries=dataset_entries,
-            split_key=split_key,
-            max_shards_per_dataset=max_shards_per_dataset,
-            index_workers=index_workers,
-            index_root=str(index_root),
-            key=key,
-            fingerprint=fingerprint,
-        )
-    else:
-        logger.info(
-            "✓ Reusing indexed-full episode index: split=%s key=%s dir=%s",
-            split_key,
-            key,
-            str(index_root),
-        )
-    bundle = load_openx_local_episode_index(str(index_root))
-    logger.info(
-        "✓ Loaded indexed-full episode index: split=%s key=%s datasets=%d episodes=%d",
-        split_key,
-        key,
-        len(bundle.datasets),
-        len(bundle),
-    )
-    return bundle
+        return bundle
 
 
 def _load_episode_from_offset(

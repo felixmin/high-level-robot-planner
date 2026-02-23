@@ -45,10 +45,10 @@ flow:
   model: raft_large    # "raft_small" or "raft_large"
   loss_weight: 10.0     # Weight for flow loss in total loss
   decoder_depth: 4     # Transformer depth for flow decoder
-  warmup_steps: 200000
+  warmup_steps: 100000
   teacher_num_flow_updates: 4
   teacher_chunk_size: 64
-  summary_loss_weight: 0.01  # Optional global mean-flow auxiliary loss (off by default)
+  summary_loss_weight: 0.3  # Optional global mean-flow auxiliary loss (off by default)
   summary_static_eps: 1e-6  # Static fallback threshold for summary flow statistics
 
 # Interpretability decoder (optional, for visualization only)
