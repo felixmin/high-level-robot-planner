@@ -354,5 +354,34 @@ class TestLAQPatchProperties:
         print(f"✓ Patch dimensions: {h}×{w}")
 
 
+class TestCodeOnlyPath:
+    """Regression tests for the no-side-effect code-only forward path."""
+
+    def test_return_only_codebook_ids_does_not_update_counter(self, laq_model, device):
+        """forward(return_only_codebook_ids=True) must not increment codebooks_used."""
+        laq_model.vq.codebooks_used.zero_()
+        video = torch.randn(2, 3, 2, 256, 256, device=device)
+        with torch.no_grad():
+            laq_model(video, return_only_codebook_ids=True)
+        assert laq_model.vq.codebooks_used.sum().item() == 0
+
+    def test_return_only_codebook_ids_matches_get_indices(self, laq_model, device):
+        """forward code-only path returns same indices as vq.get_indices directly."""
+        video = torch.randn(2, 3, 2, 256, 256, device=device)
+        with torch.no_grad():
+            indices_forward = laq_model(video, return_only_codebook_ids=True)
+            first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
+            _, _, first_tokens, last_tokens = laq_model._encode_frames(first_frame, rest_frames)
+            indices_direct = laq_model.vq.get_indices(first_tokens, last_tokens)
+        assert torch.equal(indices_forward, indices_direct)
+
+    def test_normal_forward_still_updates_counter(self, laq_model, device):
+        """Standard training forward must still increment codebooks_used."""
+        laq_model.vq.codebooks_used.zero_()
+        video = torch.randn(2, 3, 2, 256, 256, device=device)
+        laq_model(video, step=0)
+        assert laq_model.vq.codebooks_used.sum().item() > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

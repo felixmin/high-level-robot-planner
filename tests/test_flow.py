@@ -338,7 +338,6 @@ class TestLAQWithFlow:
     def laq_config_with_flow(self):
         """Create minimal LAQ config with flow for testing."""
         from omegaconf import OmegaConf
-        # Use image_size=128, patch_size=16 for 8x8 grid (supported by NSVQ)
         return OmegaConf.create({
             "dim": 64,
             "quant_dim": 16,
@@ -350,11 +349,28 @@ class TestLAQWithFlow:
             "dim_head": 16,
             "heads": 4,
             "code_seq_len": 1,
-            "use_aux_loss": False,
+            "channels": 3,
+            "attn_dropout": 0.0,
+            "ff_dropout": 0.0,
+            "vq_discarding_threshold": 0.1,
+            "latent_ablation": "none",
+            "use_dinov3_encoder": False,
+            "dinov3_model_name": "facebook/dinov3-vits16-pretrain-lvd1689m",
+            "dinov3_pool_to_grid": None,
+            "dino": {
+                "enabled": False,
+            },
+            "use_pixel_decoder": False,
+            "use_aux_decoder": False,
+            "codebook_replace_schedule": [[10, 100]],
             "flow": {
+                "enabled": True,
                 "model": "raft_small",
                 "loss_weight": 0.1,
                 "decoder_depth": 2,
+                "warmup_steps": 0,
+                "teacher_num_flow_updates": 4,
+                "teacher_chunk_size": 64,
                 "summary_loss_weight": 0.2,
                 "summary_static_eps": 1e-5,
             }
@@ -364,7 +380,6 @@ class TestLAQWithFlow:
     def laq_config_without_flow(self):
         """Create minimal LAQ config without flow for testing."""
         from omegaconf import OmegaConf
-        # Use image_size=128, patch_size=16 for 8x8 grid (supported by NSVQ)
         return OmegaConf.create({
             "dim": 64,
             "quant_dim": 16,
@@ -376,15 +391,28 @@ class TestLAQWithFlow:
             "dim_head": 16,
             "heads": 4,
             "code_seq_len": 1,
-            "use_aux_loss": False,
-            # No flow config
+            "channels": 3,
+            "attn_dropout": 0.0,
+            "ff_dropout": 0.0,
+            "vq_discarding_threshold": 0.1,
+            "latent_ablation": "none",
+            "use_dinov3_encoder": False,
+            "dinov3_model_name": "facebook/dinov3-vits16-pretrain-lvd1689m",
+            "dinov3_pool_to_grid": None,
+            "dino": {
+                "enabled": True,
+                "loss_weight": 1.0,
+                "warmup_steps": 0,
+            },
+            "use_pixel_decoder": False,
+            "use_aux_decoder": False,
+            "codebook_replace_schedule": [[10, 100]],
         })
 
     @pytest.fixture
     def laq_config_with_flow_disabled(self):
         """Create minimal LAQ config with flow explicitly disabled."""
         from omegaconf import OmegaConf
-        # Use image_size=128, patch_size=16 for 8x8 grid (supported by NSVQ)
         return OmegaConf.create({
             "dim": 64,
             "quant_dim": 16,
@@ -396,7 +424,22 @@ class TestLAQWithFlow:
             "dim_head": 16,
             "heads": 4,
             "code_seq_len": 1,
-            "use_aux_loss": False,
+            "channels": 3,
+            "attn_dropout": 0.0,
+            "ff_dropout": 0.0,
+            "vq_discarding_threshold": 0.1,
+            "latent_ablation": "none",
+            "use_dinov3_encoder": False,
+            "dinov3_model_name": "facebook/dinov3-vits16-pretrain-lvd1689m",
+            "dinov3_pool_to_grid": None,
+            "dino": {
+                "enabled": True,
+                "loss_weight": 1.0,
+                "warmup_steps": 0,
+            },
+            "use_pixel_decoder": False,
+            "use_aux_decoder": False,
+            "codebook_replace_schedule": [[10, 100]],
             "flow": {
                 "enabled": False,
             },
@@ -419,17 +462,15 @@ class TestLAQWithFlow:
         assert task.model.flow_teacher is not None
 
     def test_no_flow_when_not_configured(self, laq_config_without_flow, training_config):
-        """Test that flow is disabled when not configured."""
+        """Test that missing flow config fails fast."""
         from laq.task import LAQTask
+        from omegaconf.errors import ConfigAttributeError
 
-        task = LAQTask(
-            model_config=laq_config_without_flow,
-            training_config=training_config,
-        )
-
-        assert task.model.flow_config is None
-        assert task.model.flow_decoder is None
-        assert task.model.flow_teacher is None
+        with pytest.raises(ConfigAttributeError):
+            LAQTask(
+                model_config=laq_config_without_flow,
+                training_config=training_config,
+            )
 
     def test_no_flow_when_explicitly_disabled(self, laq_config_with_flow_disabled, training_config):
         """Test that flow is disabled when configured with enabled=false."""

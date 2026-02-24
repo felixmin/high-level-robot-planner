@@ -10,13 +10,12 @@ Wraps LatentActionQuantization in a LightningModule with:
 
 from typing import Any, Dict, List, Optional, Tuple
 
-import math
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import lightning.pytorch as pl
-from omegaconf import DictConfig, ListConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig
 
 from laq.models.latent_action_quantization import LatentActionQuantization, DinoConfig
 from laq.models.flow import FlowConfig
@@ -66,14 +65,12 @@ class LAQTask(pl.LightningModule):
     Args:
         model_config: Model configuration (DictConfig or dict)
         training_config: Training configuration (DictConfig or dict)
-        use_ema: Whether to use EMA (handled via callback if True)
     """
 
     def __init__(
         self,
         model_config: DictConfig,
         training_config: DictConfig,
-        use_ema: bool = False,
     ):
         super().__init__()
 
@@ -83,53 +80,34 @@ class LAQTask(pl.LightningModule):
         # Store configs
         self.model_config = model_config
         self.training_config = training_config
-        self.use_ema = use_ema
 
         flow_cfg = model_config.flow
-        if flow_cfg is None:
-            raise ValueError("Missing `model.flow` config.")
-        if flow_cfg.get("enabled") is None:
-            raise ValueError("Missing `model.flow.enabled` config.")
         flow_enabled = bool(flow_cfg.enabled)
         flow_config = None
         if flow_enabled:
-            try:
-                flow_config = FlowConfig(
-                    model=flow_cfg.model,
-                    loss_weight=flow_cfg.loss_weight,
-                    decoder_depth=flow_cfg.decoder_depth,
-                    warmup_steps=flow_cfg.warmup_steps,
-                    teacher_num_flow_updates=flow_cfg.teacher_num_flow_updates,
-                    teacher_chunk_size=flow_cfg.teacher_chunk_size,
-                    summary_loss_weight=flow_cfg.summary_loss_weight,
-                    summary_static_eps=flow_cfg.summary_static_eps,
-                )
-            except Exception as exc:
-                raise ValueError("Invalid flow config") from exc
+            flow_config = FlowConfig(
+                model=flow_cfg.model,
+                loss_weight=flow_cfg.loss_weight,
+                decoder_depth=flow_cfg.decoder_depth,
+                warmup_steps=flow_cfg.warmup_steps,
+                teacher_num_flow_updates=flow_cfg.teacher_num_flow_updates,
+                teacher_chunk_size=flow_cfg.teacher_chunk_size,
+                summary_loss_weight=flow_cfg.summary_loss_weight,
+                summary_static_eps=flow_cfg.summary_static_eps,
+            )
 
         dino_cfg = model_config.dino
-        if dino_cfg is None:
-            raise ValueError("Missing `model.dino` config.")
-        if dino_cfg.get("enabled") is None:
-            raise ValueError("Missing `model.dino.enabled` config.")
         dino_enabled = bool(dino_cfg.enabled)
         dino_config = None
         if dino_enabled:
-            try:
-                dino_config = DinoConfig(
-                    loss_weight=float(dino_cfg.loss_weight),
-                    warmup_steps=int(dino_cfg.warmup_steps),
-                )
-            except Exception as exc:
-                raise ValueError("Invalid dino config") from exc
+            dino_config = DinoConfig(
+                loss_weight=float(dino_cfg.loss_weight),
+                warmup_steps=int(dino_cfg.warmup_steps),
+            )
 
-        # Build codebook replacement schedule if specified
-        codebook_replace_schedule = None
-        if "codebook_replace_schedule" in model_config and model_config.codebook_replace_schedule is not None:
-            # Convert from list of lists to list of tuples
-            codebook_replace_schedule = [
-                tuple(entry) for entry in model_config.codebook_replace_schedule
-            ]
+        codebook_replace_schedule = [
+            tuple(entry) for entry in model_config.codebook_replace_schedule
+        ]
         vq_discarding_threshold_schedule = None
         if (
             "vq_discarding_threshold_schedule" in model_config
@@ -139,9 +117,7 @@ class LAQTask(pl.LightningModule):
                 tuple(entry) for entry in model_config.vq_discarding_threshold_schedule
             ]
 
-        metrics_cfg = training_config.get("metrics")
-        if metrics_cfg is None or metrics_cfg.get("num_unique_codes_every_n_steps") is None:
-            raise ValueError("Missing `training.metrics.num_unique_codes_every_n_steps` config.")
+        metrics_cfg = training_config.metrics
 
         # Initialize LAQ model
         self.model = LatentActionQuantization(
@@ -174,10 +150,6 @@ class LAQTask(pl.LightningModule):
             flow_config=flow_config,
             codebook_replace_schedule=codebook_replace_schedule,
         )
-
-        # Storage for validation and training batches (for visualization)
-        self.validation_batch = None
-        self.training_batch = None
 
         # Flag for one-time batch validation (to catch interface issues early)
         self._batch_validated = False
@@ -288,10 +260,6 @@ class LAQTask(pl.LightningModule):
                 for k, v in metrics.items():
                     self.log(f"train/{k}", v, prog_bar=False, sync_dist=True)
 
-        # Store first batch for visualization
-        if batch_idx == 0 and self.training_batch is None:
-            self.training_batch = frames[:8].detach().cpu()
-
         return loss
 
     def transfer_batch_to_device(
@@ -303,7 +271,7 @@ class LAQTask(pl.LightningModule):
         batch = super().transfer_batch_to_device(batch, device, dataloader_idx)
 
         if isinstance(batch, dict):
-            frames = batch.get("frames")
+            frames = batch["frames"]
             if isinstance(frames, torch.Tensor) and frames.dtype == torch.uint8:
                 batch["frames"] = frames.to(dtype=torch.float32).div_(255.0)
             return batch
@@ -345,93 +313,19 @@ class LAQTask(pl.LightningModule):
             for k, v in metrics.items():
                 self.log(f"val/{k}", v, sync_dist=True)
 
-        # Store first batch for visualization
-        if batch_idx == 0 and self.validation_batch is None:
-            self.validation_batch = frames[:8].detach().cpu()
-
         return loss
 
-    def on_train_epoch_end(self) -> None:
-        """Called at the end of training epoch."""
-        # Reset training batch storage
-        self.training_batch = None
-
-    def on_validation_epoch_end(self) -> None:
-        """Called at the end of validation epoch."""
-        # Reset validation batch storage
-        self.validation_batch = None
-
-    def _resolve_total_training_steps(self, sched_config: DictConfig) -> Optional[int]:
-        """
-        Resolve total optimizer steps for step-based LR scheduling.
-
-        Priority:
-        1) Explicit `training_config.max_steps` when set (>0)
-        2) Trainer `max_steps` when set (>0)
-        3) Trainer `estimated_stepping_batches` when finite
-        """
-        # 1) Training config (Hydra) override
-        cfg_max_steps = self.training_config.get("max_steps")
-        if cfg_max_steps is not None:
-            try:
-                cfg_max_steps_int = int(cfg_max_steps)
-                if cfg_max_steps_int > 0:
-                    return cfg_max_steps_int
-            except (TypeError, ValueError):
-                pass
-
-        # 2/3) Trainer-derived values (preferred when available)
-        trainer = getattr(self, "trainer", None)
-        if trainer is not None:
-            trainer_max_steps = getattr(trainer, "max_steps", None)
-            if trainer_max_steps not in (None, -1):
-                try:
-                    trainer_max_steps_int = int(trainer_max_steps)
-                    if trainer_max_steps_int > 0:
-                        return trainer_max_steps_int
-                except (TypeError, ValueError):
-                    pass
-
-            est = getattr(trainer, "estimated_stepping_batches", None)
-            if est is not None:
-                try:
-                    est_int = int(est)
-                    if est_int > 0:
-                        return est_int
-                except (TypeError, ValueError, OverflowError):
-                    pass
-
-            # Fallback if estimated_stepping_batches isn't available yet.
-            num_batches = getattr(trainer, "num_training_batches", None)
-            max_epochs = getattr(trainer, "max_epochs", None)
-            accumulate = getattr(trainer, "accumulate_grad_batches", 1)
-            if (
-                num_batches not in (None, float("inf"))
-                and max_epochs not in (None, -1)
-            ):
-                try:
-                    num_batches_int = int(num_batches)
-                    max_epochs_int = int(max_epochs)
-                    accumulate_int = int(accumulate) if int(accumulate) > 0 else 1
-                    if num_batches_int > 0 and max_epochs_int > 0:
-                        steps_per_epoch = math.ceil(num_batches_int / accumulate_int)
-                        return steps_per_epoch * max_epochs_int
-                except (TypeError, ValueError, OverflowError):
-                    pass
-
-        return None
+    def _resolve_total_training_steps(self) -> int:
+        total_steps = int(self.training_config.max_steps)
+        if total_steps <= 0:
+            raise ValueError("training.max_steps must be > 0 for cosine scheduler")
+        return total_steps
 
     def _resolve_warmup_steps(self, sched_config: DictConfig) -> int:
-        """
-        Resolve warmup steps.
-        """
-        warmup_steps = sched_config.get("warmup_steps", None)
-        if warmup_steps is not None:
-            try:
-                return max(0, int(warmup_steps))
-            except (TypeError, ValueError):
-                return 0
-        return 0
+        warmup_steps = int(sched_config.warmup_steps)
+        if warmup_steps < 0:
+            raise ValueError("training.scheduler.warmup_steps must be >= 0")
+        return warmup_steps
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """
@@ -478,28 +372,24 @@ class LAQTask(pl.LightningModule):
         )
 
         # Create LR scheduler (optional)
-        if sched_config.get("type") == "none" or sched_config.get("type") is None:
+        if sched_config.type == "none":
             # No scheduler - return optimizer only
             return optimizer
         elif sched_config.type == "cosine":
-            total_steps = self._resolve_total_training_steps(sched_config)
-            if total_steps is None:
-                raise ValueError(
-                    "LAQ cosine scheduler requires total training steps. "
-                    "Set `training.max_steps` (recommended for streaming/variable-length epochs)."
-                )
-
+            total_steps = self._resolve_total_training_steps()
             warmup_steps = self._resolve_warmup_steps(sched_config)
             warmup_steps = min(warmup_steps, total_steps)
 
-            min_lr = float(sched_config.get("min_lr", 0.0) or 0.0)
+            min_lr = float(sched_config.min_lr)
             base_lr = float(opt_config.lr)
-            warmup_start_lr = float(sched_config.get("warmup_start_lr", min_lr) or min_lr)
+            warmup_start_lr = float(sched_config.warmup_start_lr)
 
             if warmup_steps > 0:
-                start_factor = warmup_start_lr / base_lr if base_lr > 0 else 1.0
-                # LinearLR expects multiplicative factor; clamp to avoid negative/zero.
-                start_factor = max(1e-8, start_factor)
+                if base_lr <= 0:
+                    raise ValueError("training.optimizer.lr must be > 0 when warmup is enabled")
+                start_factor = warmup_start_lr / base_lr
+                if start_factor <= 0:
+                    raise ValueError("training.scheduler.warmup_start_lr must be > 0")
                 
                 warmup = LinearLR(
                     optimizer,
@@ -537,43 +427,6 @@ class LAQTask(pl.LightningModule):
         else:
             raise NotImplementedError(f"Scheduler type '{sched_config.type}' not implemented")
 
-    def get_validation_batch(self) -> Optional[torch.Tensor]:
-        """
-        Get stored validation batch for visualization.
-
-        Returns:
-            Validation batch tensor or None
-        """
-        return self.validation_batch
-
-    def get_training_batch(self) -> Optional[torch.Tensor]:
-        """
-        Get stored training batch for visualization.
-
-        Returns:
-            Training batch tensor or None
-        """
-        return self.training_batch
-
-    def generate_reconstructions(
-        self,
-        batch: torch.Tensor,
-    ) -> Optional[torch.Tensor]:
-        """
-        Generate reconstructions for visualization.
-
-        Args:
-            batch: Frame pairs [B, C, 2, H, W]
-
-        Returns:
-            Reconstructions [B, C, H, W], or None if aux_decoder is disabled
-        """
-        self.eval()
-        with torch.no_grad():
-            recons = self.model(batch.to(self.device), return_recons_only=True)
-        self.train()
-        return recons
-
     def encode_latents(
         self,
         batch: torch.Tensor,
@@ -588,6 +441,7 @@ class LAQTask(pl.LightningModule):
             (latent_actions, codebook_indices)
             latent_actions: [B, code_seq_len, dim] projected to transformer dim
         """
+        was_training = self.training
         self.eval()
         with torch.no_grad():
             batch = batch.to(self.device)
@@ -597,7 +451,7 @@ class LAQTask(pl.LightningModule):
             raw_latents = self.model.vq.codebooks[indices]
             # Project from quant_dim to transformer dim [B, code_seq_len, dim]
             latents = self.model.vq.project_out(raw_latents)
-        self.train()
+        self.train(was_training)
         return latents, indices
 
     def decode_with_latents(
@@ -621,6 +475,7 @@ class LAQTask(pl.LightningModule):
         import math
         from einops import rearrange
 
+        was_training = self.training
         self.eval()
         with torch.no_grad():
             first_frames = first_frames.to(self.device)
@@ -654,6 +509,5 @@ class LAQTask(pl.LightningModule):
 
             # Decode
             recon = self.model.decode(first_frame_tokens, latent_actions)
-
-        self.train()
+        self.train(was_training)
         return recon

@@ -26,3 +26,18 @@ def test_unknown_dataset_returns_none() -> None:
     assert resolve_oxe_dataset_key("totally_unknown_dataset") is None
     assert resolve_oxe_dataset_config("totally_unknown_dataset") is None
 
+
+def test_octo_dataset_entries_resolve() -> None:
+    names = [
+        "austin_buds_dataset_converted_externally_to_rlds",
+        "austin_sailor_dataset_converted_externally_to_rlds",
+        "austin_sirius_dataset_converted_externally_to_rlds",
+        "cmu_stretch",
+        "dlr_edan_shared_control_converted_externally_to_rlds",
+        "iamlab_cmu_pickup_insert_converted_externally_to_rlds",
+        "nyu_door_opening_surprising_effectiveness",
+        "nyu_franka_play_dataset_converted_externally_to_rlds",
+    ]
+    for name in names:
+        cfg = resolve_oxe_dataset_config(name)
+        assert cfg is not None, name

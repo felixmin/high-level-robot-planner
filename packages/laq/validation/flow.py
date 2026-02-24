@@ -108,6 +108,7 @@ class FlowVisualizationStrategy(ValidationStrategy):
         model = pl_module.model
         device = pl_module.device
 
+        was_training = model.training
         model.eval()
         with torch.no_grad():
             frames = frames.to(device)
@@ -143,7 +144,7 @@ class FlowVisualizationStrategy(ValidationStrategy):
                 attn_bias,
             )
 
-        model.train()
+        model.train(was_training)
 
         # Convert flow to RGB images using color wheel
         # flow_to_image expects [B, 2, H, W] and returns [B, 3, H, W] in [0, 255]

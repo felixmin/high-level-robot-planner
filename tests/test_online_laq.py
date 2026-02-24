@@ -34,45 +34,42 @@ def test_oxe_frames_to_laq_video_rejects_bad_shape():
         oxe_frames_to_laq_video(torch.zeros((2, 3, 4)))
 
 
-class _FakeLAQModel(torch.nn.Module):
+class _FakeEncoderVQ(torch.nn.Module):
+    codebook_size = 3
+    code_seq_len = 2
+    codebook_dim = 2
+
     def __init__(self):
         super().__init__()
-        self.vq = torch.nn.Module()
-        self.vq.num_embeddings = 3
-        self.vq.codebooks = torch.nn.Parameter(
+        self._codebooks = torch.nn.Parameter(
             torch.tensor(
-                [
-                    [1.0, 0.0],
-                    [0.0, 1.0],
-                    [1.0, 1.0],
-                ],
+                [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
                 dtype=torch.float32,
             ),
             requires_grad=False,
         )
-        self.code_seq_len = 2
 
-    def forward(self, video: torch.Tensor, return_only_codebook_ids: bool = False):
-        assert return_only_codebook_ids is True
+    @property
+    def device(self) -> torch.device:
+        return self._codebooks.device
+
+    @torch.no_grad()
+    def codes_from_video(self, video: torch.Tensor) -> torch.Tensor:
         batch_size = int(video.shape[0])
         return torch.tensor([[0, 2]] * batch_size, dtype=torch.long, device=video.device)
 
+    @torch.no_grad()
+    def vectors_from_codes(self, codes: torch.Tensor) -> torch.Tensor:
+        return self._codebooks[codes.to(self._codebooks.device)]
 
-class _FakeLAQTask(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.model = _FakeLAQModel()
-        self._param = torch.nn.Parameter(torch.zeros(1))
-
-    def eval(self):
-        return self
-
-    def freeze(self):
-        return self
+    @torch.no_grad()
+    def codes_and_vectors_from_video(self, video: torch.Tensor):
+        codes = self.codes_from_video(video)
+        return codes, self.vectors_from_codes(codes)
 
 
 def test_laq_provider_codes_and_vectors():
-    provider = LAQTaskCodeProvider(_FakeLAQTask())
+    provider = LAQTaskCodeProvider(_FakeEncoderVQ())
     video = torch.rand((2, 3, 2, 8, 8), dtype=torch.float32)
 
     codes, vectors = provider.codes_and_vectors_from_video(video)

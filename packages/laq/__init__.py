@@ -22,6 +22,12 @@ __all__ = [
     "NSVQ",
     "Attention",
     "Transformer",
+    # Checkpoint loaders
+    "load_laq_task_from_checkpoint",
+    "load_laq_model_weights_only",
+    "load_laq_encoder_vq_inference_from_checkpoint",
+    # Inference
+    "LAQEncoderVQInference",
     # Validation
     "ValidationStrategy",
     "ValidationCache",
@@ -42,6 +48,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "NSVQ": ("laq.models.nsvq", "NSVQ"),
     "Attention": ("laq.models.attention", "Attention"),
     "Transformer": ("laq.models.attention", "Transformer"),
+    "load_laq_task_from_checkpoint": ("laq.checkpoints", "load_laq_task_from_checkpoint"),
+    "load_laq_model_weights_only": ("laq.checkpoints", "load_laq_model_weights_only"),
+    "load_laq_encoder_vq_inference_from_checkpoint": ("laq.checkpoints", "load_laq_encoder_vq_inference_from_checkpoint"),
+    "LAQEncoderVQInference": ("laq.inference", "LAQEncoderVQInference"),
     "ValidationStrategy": ("laq.validation", "ValidationStrategy"),
     "ValidationCache": ("laq.validation", "ValidationCache"),
     "BasicVisualizationStrategy": ("laq.validation", "BasicVisualizationStrategy"),

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -13,8 +12,6 @@ import torch
 from PIL import Image
 
 from common.adapters.oxe_shared import OXEDatasetConfig, resolve_nested_key
-
-logger = logging.getLogger(__name__)
 
 _TRAIN_SPLIT_RE = re.compile(r"^train(?:\[(.*)\])?$")
 _IMAGE_KEY_PRIORITY = (
@@ -31,27 +28,6 @@ _IMAGE_KEY_PRIORITY = (
     "agentview_rgb",
     "eye_in_hand_rgb",
 )
-
-
-def _fallback_dataset_config(dataset_name: str) -> OXEDatasetConfig:
-    logger.warning(
-        "Dataset %s is not in OXE_DATASETS; using generic local fallback config",
-        dataset_name,
-    )
-    return OXEDatasetConfig(
-        name=dataset_name,
-        gcs_path="",
-        image_key="image",
-        instruction_key="natural_language_instruction",
-        state_key="state",
-        action_key="world_vector",
-        action_is_dict=True,
-        action_dim=3,
-        state_dim=0,
-        allow_missing_state=True,
-    )
-
-
 def _parse_split_index(token: str, n_items: int, default: int) -> int:
     token = token.strip()
     if token == "":

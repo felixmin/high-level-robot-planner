@@ -295,13 +295,14 @@ class BasicVisualizationStrategy(ValidationStrategy):
             return None
 
         # Generate reconstructions
+        was_training = pl_module.training
         pl_module.eval()
         with torch.no_grad():
             recons = pl_module.model(
                 frames.to(pl_module.device),
                 return_recons_only=True,
             )
-        pl_module.train()
+        pl_module.train(was_training)
 
         # If aux_decoder is disabled, recons will be None
         if recons is None:

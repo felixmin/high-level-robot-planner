@@ -71,3 +71,5 @@ adapter:
     seed: 42
     resample_each_epoch: true
     stopping_strategy: all_exhausted
+    repeat_t_policy_train: fresh_per_draw
+    repeat_t_policy_val: cached_subset

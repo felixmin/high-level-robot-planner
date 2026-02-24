@@ -110,6 +110,7 @@ class OpenXLocalDataModule(pl.LightningDataModule):
             return
 
         from common.adapters.openx_local import discover_local_subdatasets
+        from common.adapters.oxe_shared import resolve_oxe_dataset_config
         from common.adapters.openx_local_indexed_full import (
             OpenXLocalIndexedEpisodePairSampler,
             OpenXLocalIndexedPairMapDataset,
@@ -129,15 +130,17 @@ class OpenXLocalDataModule(pl.LightningDataModule):
         index_rebuild = bool(local_cfg["index_rebuild"])
         index_max_open_shards = int(local_cfg["index_max_open_shards"])
         weights_by_size = bool(local_cfg["weights_by_size"])
-        auto_discover = bool(local_cfg.get("auto_discover", False))
-        auto_train_split = str(local_cfg.get("auto_train_split", "train[:90%]"))
-        auto_val_split = str(local_cfg.get("auto_val_split", "train[90%:]"))
-        auto_pair_offset_steps = int(local_cfg.get("auto_pair_offset_steps", 5))
-        auto_weight = float(local_cfg.get("auto_weight", 1.0))
+        auto_discover = bool(local_cfg["auto_discover"])
+        auto_train_split = str(local_cfg["auto_train_split"])
+        auto_val_split = str(local_cfg["auto_val_split"])
+        auto_pair_offset_steps = int(local_cfg["auto_pair_offset_steps"])
+        auto_weight = float(local_cfg["auto_weight"])
         seed = int(local_cfg["seed"])
         resample_each_epoch = bool(local_cfg["resample_each_epoch"])
-        stopping_strategy = str(local_cfg.get("stopping_strategy", "all_exhausted"))
-        steps_per_epoch = local_cfg.get("steps_per_epoch")
+        stopping_strategy = str(local_cfg["stopping_strategy"])
+        repeat_t_policy_train = str(local_cfg["repeat_t_policy_train"])
+        repeat_t_policy_val = str(local_cfg["repeat_t_policy_val"])
+        steps_per_epoch = local_cfg["steps_per_epoch"]
         if steps_per_epoch is not None and int(steps_per_epoch) <= 0:
             raise ValueError(
                 "data.adapter.openx_local.steps_per_epoch must be > 0 when set"
@@ -181,6 +184,16 @@ class OpenXLocalDataModule(pl.LightningDataModule):
             )
         else:
             resolved_datasets = list(self.datasets)
+            unknown_datasets = [
+                str(entry["name"])
+                for entry in resolved_datasets
+                if resolve_oxe_dataset_config(str(entry["name"])) is None
+            ]
+            if unknown_datasets:
+                unknown_list = ", ".join(sorted(set(unknown_datasets)))
+                raise ValueError(
+                    f"Unknown OXE datasets configured while auto_discover=false: {unknown_list}"
+                )
 
         if not resolved_datasets:
             raise ValueError("OpenX local has no datasets configured or discovered")
@@ -237,6 +250,7 @@ class OpenXLocalDataModule(pl.LightningDataModule):
             epoch=0,
             resample_each_epoch=resample_each_epoch,
             stopping_strategy=stopping_strategy,
+            repeat_t_policy=repeat_t_policy_train,
         )
         self.val_sampler = OpenXLocalIndexedEpisodePairSampler(
             index=val_index,
@@ -247,6 +261,7 @@ class OpenXLocalDataModule(pl.LightningDataModule):
             epoch=0,
             resample_each_epoch=False,
             stopping_strategy=stopping_strategy,
+            repeat_t_policy=repeat_t_policy_val,
         )
 
         dataset_names = [d["name"] for d in self._resolved_datasets]

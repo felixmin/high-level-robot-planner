@@ -57,3 +57,7 @@ adapter:
     steps_per_epoch: 5000
     # all_exhausted consumes full split; first_exhausted stops when one source ends
     stopping_strategy: first_exhausted
+    # Train: vary t across repeated episode draws in replacement mode.
+    repeat_t_policy_train: fresh_per_draw
+    # Val: keep stable subset mapping for repeatability.
+    repeat_t_policy_val: cached_subset

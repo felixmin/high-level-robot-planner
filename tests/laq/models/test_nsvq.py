@@ -231,5 +231,38 @@ def test_nsvq_replace_unused_codebooks(nsvq_module, nsvq_config):
     print(f"✓ Codebook replacement works")
 
 
+def test_nsvq_get_indices_no_counter_update(nsvq_module, nsvq_config):
+    """get_indices must return same indices as forward but not update codebooks_used."""
+    device = nsvq_config["device"]
+    batch_size = 2
+    num_patches = (nsvq_config["image_size"] // nsvq_config["patch_size"]) ** 2
+    input_first = torch.randn(batch_size, num_patches, nsvq_config["dim"], device=device)
+    input_last = torch.randn(batch_size, num_patches, nsvq_config["dim"], device=device)
+
+    nsvq_module.codebooks_used.zero_()
+    with torch.no_grad():
+        indices_get = nsvq_module.get_indices(input_first, input_last)
+
+    assert nsvq_module.codebooks_used.sum().item() == 0
+    assert indices_get.shape == (batch_size, nsvq_config["code_seq_len"])
+    assert indices_get.min() >= 0
+    assert indices_get.max() < nsvq_config["num_embeddings"]
+
+
+def test_nsvq_get_indices_matches_forward_indices(nsvq_module, nsvq_config):
+    """get_indices must produce the same codebook assignments as vq.forward."""
+    device = nsvq_config["device"]
+    batch_size = 2
+    num_patches = (nsvq_config["image_size"] // nsvq_config["patch_size"]) ** 2
+    input_first = torch.randn(batch_size, num_patches, nsvq_config["dim"], device=device)
+    input_last = torch.randn(batch_size, num_patches, nsvq_config["dim"], device=device)
+
+    with torch.no_grad():
+        _, _, _, indices_forward = nsvq_module(input_first, input_last, codebook_training_only=False)
+        indices_get = nsvq_module.get_indices(input_first, input_last)
+
+    assert torch.equal(indices_forward, indices_get)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

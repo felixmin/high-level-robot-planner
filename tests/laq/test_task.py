@@ -66,6 +66,8 @@ def training_config():
         "scheduler": {
             "type": "cosine",
             "min_lr": 1e-6,
+            "warmup_steps": 0,
+            "warmup_start_lr": 1e-6,
         },
         "gradient": {
             "clip_val": 1.0,
@@ -132,27 +134,13 @@ class TestLAQTaskInitialization:
         task = LAQTask(
             model_config=model_config,
             training_config=training_config,
-            use_ema=False,
         )
 
         assert task.model is not None
         assert task.model_config == model_config
         assert task.training_config == training_config
-        assert task.use_ema is False
 
         print("✓ LAQTask initialized")
-
-    def test_task_with_ema(self, model_config, training_config):
-        """Test LAQTask with EMA enabled."""
-        task = LAQTask(
-            model_config=model_config,
-            training_config=training_config,
-            use_ema=True,
-        )
-
-        assert task.use_ema is True
-
-        print("✓ LAQTask with EMA initialized")
 
     def test_task_passes_vq_discarding_threshold_schedule(self, model_config, training_config):
         """Test task forwards threshold schedule to LAQ model."""
@@ -160,7 +148,6 @@ class TestLAQTaskInitialization:
         task = LAQTask(
             model_config=model_config,
             training_config=training_config,
-            use_ema=False,
         )
 
         assert task.model.vq_discarding_threshold_schedule == [(0.1, 100), (0.01, 1000)]
@@ -171,7 +158,6 @@ class TestLAQTaskInitialization:
         task = LAQTask(
             model_config=model_config,
             training_config=training_config,
-            use_ema=False,
         )
 
         assert task.model.dino_config is not None
@@ -186,7 +172,6 @@ class TestLAQTaskInitialization:
         task = LAQTask(
             model_config=model_config,
             training_config=training_config,
-            use_ema=False,
         )
 
         assert task.model.dino_config is None
@@ -297,48 +282,7 @@ class TestLAQTaskValidationStep:
         assert isinstance(loss, torch.Tensor)
         assert loss.item() >= 0
 
-        # Check that validation batch was stored
-        assert task.validation_batch is not None
-        assert task.validation_batch.shape[0] <= 8  # Max 8 samples
-
         print(f"✓ Validation step: loss={loss.item():.4f}")
-
-    def test_validation_batch_storage(self, model_config, training_config, device):
-        """Test validation batch storage."""
-        task = LAQTask(
-            model_config=model_config,
-            training_config=training_config,
-        ).to(device)
-
-        # Create large batch (> 8 samples)
-        large_batch = torch.randn(16, 3, 2, 256, 256).to(device)
-
-        # Validation step
-        task.validation_step(large_batch, batch_idx=0)
-
-        # Should store max 8 samples
-        assert task.validation_batch.shape[0] == 8
-
-        print("✓ Validation batch storage (max 8 samples)")
-
-    def test_validation_epoch_end(self, model_config, training_config, synthetic_batch, device):
-        """Test validation epoch end."""
-        task = LAQTask(
-            model_config=model_config,
-            training_config=training_config,
-        ).to(device)
-
-        batch = synthetic_batch.to(device)
-
-        # Store validation batch
-        task.validation_step(batch, batch_idx=0)
-        assert task.validation_batch is not None
-
-        # End of epoch should reset
-        task.on_validation_epoch_end()
-        assert task.validation_batch is None
-
-        print("✓ Validation epoch end resets batch")
 
 
 class TestLAQTaskOptimizer:
@@ -379,27 +323,6 @@ class TestLAQTaskOptimizer:
         assert scheduler_config["frequency"] == 1
 
         print("✓ LR scheduler configured")
-
-
-class TestLAQTaskReconstructions:
-    """Test LAQTask reconstruction generation."""
-
-    def test_generate_reconstructions(self, model_config, training_config, synthetic_batch, device):
-        """Test generating reconstructions for visualization."""
-        task = LAQTask(
-            model_config=model_config,
-            training_config=training_config,
-        ).to(device)
-
-        batch = synthetic_batch.to(device)
-
-        # Generate reconstructions
-        recons = task.generate_reconstructions(batch)
-
-        assert recons.shape == (2, 3, 256, 256)  # [B, C, H, W]
-        assert recons.device == batch.device
-
-        print(f"✓ Generated reconstructions: shape={recons.shape}")
 
 
 class TestLAQTaskGradients:

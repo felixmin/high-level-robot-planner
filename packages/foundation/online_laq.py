@@ -8,9 +8,12 @@ to generate discrete latent action codes during Stage 2 training.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Protocol
+from typing import TYPE_CHECKING, Any, Dict, Protocol
 
 import torch
+
+if TYPE_CHECKING:
+    from laq.inference import LAQEncoderVQInference
 
 
 def oxe_frames_to_laq_video(frames: torch.Tensor) -> torch.Tensor:
@@ -74,96 +77,34 @@ class OnlineLAQConfig:
 
 class LAQTaskCodeProvider(torch.nn.Module):
     """
-    Thin wrapper around `laq.task.LAQTask` to expose code indices for Stage 2.
+    Thin adapter over LAQEncoderVQInference exposing code indices for Stage 2.
     """
 
-    def __init__(self, laq_task: Any):
+    def __init__(self, encoder_vq: LAQEncoderVQInference):
         super().__init__()
-        self._laq_task = laq_task
-        self._laq_task.eval()
-        self._laq_task.freeze()
-
-        self.codebook_size = self._infer_codebook_size()
-        self.code_seq_len = self._infer_code_seq_len()
-        self.codebook_dim = self._infer_codebook_dim()
+        self._encoder_vq = encoder_vq
+        self.codebook_size = encoder_vq.codebook_size
+        self.code_seq_len = encoder_vq.code_seq_len
+        self.codebook_dim = encoder_vq.codebook_dim
 
     def train(self, mode: bool = True) -> "LAQTaskCodeProvider":
-        """Override to always keep this module and internal LAQ in eval mode."""
-        # This is a frozen label generator - never switch to train mode
         return super().train(False)
-
-    def _infer_codebook_size(self) -> int:
-        model = getattr(self._laq_task, "model", None)
-        vq = getattr(model, "vq", None)
-        if vq is not None and hasattr(vq, "num_embeddings"):
-            return int(vq.num_embeddings)
-        if model is not None and hasattr(model, "codebook_size"):
-            return int(getattr(model, "codebook_size"))
-        model_cfg = getattr(self._laq_task, "model_config", None)
-        if model_cfg is not None and hasattr(model_cfg, "codebook_size"):
-            return int(getattr(model_cfg, "codebook_size"))
-        raise AttributeError(
-            "Could not infer LAQ codebook size from checkpoint (expected one of: "
-            "laq_task.model.vq.num_embeddings, laq_task.model.codebook_size, laq_task.model_config.codebook_size)."
-        )
-
-    def _infer_code_seq_len(self) -> int:
-        model = getattr(self._laq_task, "model", None)
-        if model is not None and hasattr(model, "code_seq_len"):
-            return int(getattr(model, "code_seq_len"))
-        model_cfg = getattr(self._laq_task, "model_config", None)
-        if model_cfg is not None and hasattr(model_cfg, "code_seq_len"):
-            return int(getattr(model_cfg, "code_seq_len"))
-        raise AttributeError(
-            "Could not infer LAQ code_seq_len from checkpoint (expected one of: "
-            "laq_task.model.code_seq_len, laq_task.model_config.code_seq_len)."
-        )
-
-    def _infer_codebook_dim(self) -> int:
-        model = getattr(self._laq_task, "model", None)
-        vq = getattr(model, "vq", None)
-        codebooks = getattr(vq, "codebooks", None) if vq is not None else None
-        if isinstance(codebooks, torch.Tensor) and codebooks.ndim == 2:
-            return int(codebooks.shape[1])
-        if vq is not None and hasattr(vq, "embedding_dim"):
-            return int(getattr(vq, "embedding_dim"))
-        raise AttributeError(
-            "Could not infer LAQ codebook dim from checkpoint (expected laq_task.model.vq.codebooks or embedding_dim)."
-        )
 
     @property
     def device(self) -> torch.device:
-        return next(self._laq_task.parameters()).device
+        return self._encoder_vq.device
 
     @torch.no_grad()
     def codes_from_video(self, video: torch.Tensor) -> torch.Tensor:
-        video = video.to(self.device)
-        indices = self._laq_task.model(video, return_only_codebook_ids=True)
-        if indices.ndim != 2:
-            raise ValueError(
-                f"Expected indices [B, S], got shape {tuple(indices.shape)}"
-            )
-        return indices.to(torch.long)
+        return self._encoder_vq.codes_from_video(video)
 
     @torch.no_grad()
     def vectors_from_codes(self, codes: torch.Tensor) -> torch.Tensor:
-        if codes.ndim != 2:
-            raise ValueError(f"Expected codes [B, S], got {tuple(codes.shape)}")
-        model = getattr(self._laq_task, "model", None)
-        vq = getattr(model, "vq", None)
-        codebooks = getattr(vq, "codebooks", None) if vq is not None else None
-        if not isinstance(codebooks, torch.Tensor) or codebooks.ndim != 2:
-            raise AttributeError("LAQ checkpoint does not expose vq.codebooks tensor")
-
-        codes = codes.to(device=codebooks.device, dtype=torch.long)
-        vectors = codebooks[codes]  # [B, S, D]
-        return vectors
+        return self._encoder_vq.vectors_from_codes(codes)
 
     @torch.no_grad()
     def codes_and_vectors_from_video(self, video: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        codes = self.codes_from_video(video)
-        vectors = self.vectors_from_codes(codes)
-        return codes, vectors
+        return self._encoder_vq.codes_and_vectors_from_video(video)
 
 
 def extract_oxe_language(batch: Dict[str, Any]) -> list[str]:

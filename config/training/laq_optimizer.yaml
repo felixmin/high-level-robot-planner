@@ -3,6 +3,12 @@
 
 epochs: 100
 max_steps: 200000  # If set, overrides epochs
+resume_from_checkpoint: null
+load_weights_from: null
+use_ema: false
+ema_decay: 0.999
+ema_update_every: 1
+ema_update_after_step: 0
 
 # --- Logging / UI ---
 # How often Lightning emits scalar logs (to wandb + any configured logger).

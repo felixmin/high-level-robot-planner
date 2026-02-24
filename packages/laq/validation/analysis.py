@@ -79,6 +79,7 @@ class LatentTransferStrategy(ValidationStrategy):
         source_frames = all_frames[indices[:n]]  # (s_a, s_a')
         target_frames = all_frames[indices[n:]]  # (s_b, s_b')
 
+        was_training = pl_module.training
         pl_module.eval()
         with torch.no_grad():
             device = pl_module.device
@@ -116,8 +117,7 @@ class LatentTransferStrategy(ValidationStrategy):
             # Compute self-reconstruction error (for reference)
             self_recons = pl_module.model(target_frames, return_recons_only=True)
             self_mse = F.mse_loss(self_recons, target_s1_true)
-
-        pl_module.train()
+        pl_module.train(was_training)
 
         # Use metric_suffix for bucket-specific logging
         metrics[f"val/latent_transfer_mse{metric_suffix}"] = transfer_mse.item()

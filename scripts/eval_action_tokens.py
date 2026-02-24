@@ -9,7 +9,6 @@ collects token + flow metadata, and writes analysis plots/files.
 from __future__ import annotations
 
 import csv
-import inspect
 import json
 import math
 import random
@@ -39,6 +38,7 @@ from common.data_factory import create_datamodule  # noqa: E402
 from common.logging import set_seed  # noqa: E402
 from common.unified_logging import resolve_runs_dir, setup_unified_logging  # noqa: E402
 from laq import LAQTask  # noqa: E402
+from laq.checkpoints import load_laq_task_from_checkpoint  # noqa: E402
 
 
 def _seq_str(seq: tuple[int, ...]) -> str:
@@ -116,41 +116,9 @@ def _to_state_vec(x: Any, dim: int = 2) -> np.ndarray | None:
     return arr[:dim]
 
 
-def _load_laq_task(checkpoint_path: str, cfg: DictConfig, logger) -> LAQTask:
-    ckpt_path = str(checkpoint_path)
-    try:
-        task = LAQTask.load_from_checkpoint(ckpt_path, map_location="cpu", weights_only=False)
-        logger.info("Loaded checkpoint with LAQTask.load_from_checkpoint(weights_only=False)")
-        return task
-    except TypeError:
-        task = LAQTask.load_from_checkpoint(ckpt_path, map_location="cpu")
-        logger.info("Loaded checkpoint with LAQTask.load_from_checkpoint()")
-        return task
-    except Exception as exc:
-        logger.warning(f"Primary checkpoint load failed ({exc}); using strict fallback loader.")
-
-    task = LAQTask(
-        model_config=cfg.model,
-        training_config=cfg.training,
-        use_ema=bool(cfg.training.get("use_ema", False)),
-    )
-
-    load_kwargs: dict[str, Any] = {"map_location": "cpu"}
-    if "weights_only" in inspect.signature(torch.load).parameters:
-        load_kwargs["weights_only"] = False
-    ckpt = torch.load(ckpt_path, **load_kwargs)
-    state_dict = ckpt.get("state_dict", ckpt)
-    model_state = {
-        k.replace("model.", "", 1): v
-        for k, v in state_dict.items()
-        if isinstance(k, str) and k.startswith("model.")
-    }
-    missing, unexpected = task.model.load_state_dict(model_state, strict=True)
-    if missing or unexpected:
-        raise RuntimeError(
-            f"Strict fallback load failed. missing={len(missing)}, unexpected={len(unexpected)}"
-        )
-    logger.info("Loaded checkpoint via strict fallback path")
+def _load_laq_task(checkpoint_path: str, logger) -> LAQTask:
+    task = load_laq_task_from_checkpoint(str(checkpoint_path))
+    logger.info("Loaded LAQ checkpoint via shared loader")
     return task
 
 
@@ -1469,7 +1437,7 @@ def main(cfg: DictConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    task = _load_laq_task(str(cfg.analysis.checkpoint_path), cfg=cfg, logger=logger)
+    task = _load_laq_task(str(cfg.analysis.checkpoint_path), logger=logger)
     task = task.to(device)
     task.eval()
 

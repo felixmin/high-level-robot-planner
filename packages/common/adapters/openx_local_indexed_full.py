@@ -14,7 +14,6 @@ import json
 import logging
 import os
 import pickle
-import random
 import tarfile
 import time
 import fcntl
@@ -44,7 +43,6 @@ from .openx_local import (
     _extract_image,
     _extract_instruction,
     _extract_state,
-    _fallback_dataset_config,
     _parse_train_split,
 )
 
@@ -81,27 +79,23 @@ def _iter_episode_records_from_shard(
     shard_path: str,
 ) -> Iterator[tuple[int, int, int]]:
     """Yield (offset_data, size, num_steps) for each valid episode."""
-    try:
-        with tarfile.open(shard_path, "r") as tf:
-            for member in tf:
-                if not member.isfile() or not member.name.endswith(".data.pickle"):
-                    continue
-                fileobj = tf.extractfile(member)
-                if fileobj is None:
-                    continue
-                try:
-                    episode = pickle.load(fileobj)
-                except Exception:
-                    continue
-                steps = episode.get("steps") if isinstance(episode, dict) else None
-                if not isinstance(steps, list):
-                    continue
-                n_steps = len(steps)
-                if n_steps <= 0:
-                    continue
-                yield int(member.offset_data), int(member.size), int(n_steps)
-    except (tarfile.ReadError, OSError):
-        return
+    with tarfile.open(shard_path, "r") as tf:
+        for member in tf:
+            if not member.isfile() or not member.name.endswith(".data.pickle"):
+                continue
+            fileobj = tf.extractfile(member)
+            if fileobj is None:
+                raise ValueError(f"Failed to extract {member.name} from {shard_path}")
+            episode = pickle.load(fileobj)
+            if not isinstance(episode, dict):
+                raise TypeError(f"Episode must be dict in {shard_path}:{member.name}")
+            steps = episode["steps"]
+            if not isinstance(steps, list):
+                raise TypeError(f"Episode steps must be list in {shard_path}:{member.name}")
+            n_steps = len(steps)
+            if n_steps <= 0:
+                continue
+            yield int(member.offset_data), int(member.size), int(n_steps)
 
 
 def _scan_shard_records_to_tmp(
@@ -213,7 +207,7 @@ def _index_fingerprint(
         dataset_name = str(entry["name"])
         dataset_dir = root_path / dataset_name
         if not dataset_dir.exists():
-            continue
+            raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
         shards = sorted(dataset_dir.glob("*.tar"))
         if max_shards_per_dataset is not None:
             shards = shards[:max_shards_per_dataset]
@@ -246,7 +240,7 @@ def _index_key(
         "datasets": [
             {
                 "name": str(entry["name"]),
-                "weight": float(entry.get("weight", 1.0)),
+                "weight": float(entry["weight"]),
                 "offset": int(entry["pair_offset_steps"]),
                 "split": str(entry[split_key]),
             }
@@ -282,17 +276,17 @@ def build_openx_local_episode_index(
         dataset_name = str(entry["name"])
         split = str(entry[split_key])
         offset = int(entry["pair_offset_steps"])
-        weight = float(entry.get("weight", 1.0))
+        weight = float(entry["weight"])
 
         dataset_dir = root_path / dataset_name
         if not dataset_dir.exists():
-            continue
+            raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
 
         shards = sorted(dataset_dir.glob("*.tar"))
         if max_shards_per_dataset is not None:
             shards = shards[:max_shards_per_dataset]
         if not shards:
-            continue
+            raise ValueError(f"No shard files found for dataset: {dataset_name}")
 
         entry_id = len(entry_metas)
         entry_metas.append(
@@ -404,7 +398,7 @@ def build_openx_local_episode_index(
                         )
                         shard_results.append(result)
         else:
-            logger.warning("No shard tasks found for split=%s (key=%s)", split_key, key)
+            raise ValueError(f"No shard tasks found for split={split_key} key={key}")
 
         episode_totals = [0 for _ in entry_metas]
         for result in shard_results:
@@ -574,28 +568,27 @@ def load_openx_local_episode_index(index_root: str) -> OpenXLocalEpisodeIndexBun
     root = Path(index_root)
     meta = json.loads((root / "meta.json").read_text(encoding="utf-8"))
 
-    datasets = [str(x) for x in meta.get("datasets", [])]
-    dataset_weights = np.asarray(meta.get("dataset_weights", []), dtype=np.float64)
-    dataset_offsets = np.asarray(meta.get("dataset_offsets", []), dtype=np.int64)
+    datasets = [str(x) for x in meta["datasets"]]
+    dataset_weights = np.asarray(meta["dataset_weights"], dtype=np.float64)
+    dataset_offsets = np.asarray(meta["dataset_offsets"], dtype=np.int64)
     dataset_configs = []
     for name in datasets:
         resolved_cfg = resolve_oxe_dataset_config(name)
-        if resolved_cfg is not None:
-            dataset_configs.append(resolved_cfg)
-            resolved_key = resolve_oxe_dataset_key(name)
-            if resolved_key is not None and resolved_key != name:
-                logger.info("Resolved dataset alias: %s -> %s", name, resolved_key)
-        else:
-            dataset_configs.append(_fallback_dataset_config(name))
+        if resolved_cfg is None:
+            raise ValueError(f"Unknown OXE dataset in episode index metadata: {name}")
+        dataset_configs.append(resolved_cfg)
+        resolved_key = resolve_oxe_dataset_key(name)
+        if resolved_key is not None and resolved_key != name:
+            logger.info("Resolved dataset alias: %s -> %s", name, resolved_key)
 
     return OpenXLocalEpisodeIndexBundle(
         index_path=str(root),
-        key=str(meta.get("key", "")),
+        key=str(meta["key"]),
         datasets=datasets,
         dataset_weights=dataset_weights,
         dataset_offsets=dataset_offsets,
         dataset_configs=dataset_configs,
-        shard_paths=[str(x) for x in meta.get("shard_paths", [])],
+        shard_paths=[str(x) for x in meta["shard_paths"]],
         episode_dataset_ids=np.load(root / "episode_dataset_ids.npy", mmap_mode="r"),
         episode_shard_ids=np.load(root / "episode_shard_ids.npy", mmap_mode="r"),
         episode_offsets=np.load(root / "episode_offsets.npy", mmap_mode="r"),
@@ -670,19 +663,16 @@ def prepare_openx_local_episode_index(
 
 def _load_episode_from_offset(
     fileobj: BinaryIO, offset_data: int, size: int
-) -> Optional[Dict[str, Any]]:
-    try:
-        fileobj.seek(offset_data)
-        payload = fileobj.read(size)
-    except Exception:
-        return None
-    try:
-        episode = pickle.loads(payload)
-    except Exception:
-        return None
-    if isinstance(episode, dict) and isinstance(episode.get("steps"), list):
-        return episode
-    return None
+) -> Dict[str, Any]:
+    fileobj.seek(offset_data)
+    payload = fileobj.read(size)
+    episode = pickle.loads(payload)
+    if not isinstance(episode, dict):
+        raise TypeError("Episode payload must be a dict")
+    steps = episode["steps"]
+    if not isinstance(steps, list):
+        raise TypeError("Episode payload must contain list 'steps'")
+    return episode
 
 
 class OpenXLocalIndexedPairMapDataset(Dataset):
@@ -695,13 +685,11 @@ class OpenXLocalIndexedPairMapDataset(Dataset):
         image_size: int,
         return_metadata: bool,
         max_open_shards: int = 16,
-        max_sample_attempts: int = 24,
     ) -> None:
         self.index = index
         self.image_size = int(image_size)
         self.return_metadata = bool(return_metadata)
         self.max_open_shards = max(1, int(max_open_shards))
-        self.max_sample_attempts = max(1, int(max_sample_attempts))
         self._open_files: Dict[int, BinaryIO] = {}
         self._lru_shards: List[int] = []
 
@@ -766,66 +754,35 @@ class OpenXLocalIndexedPairMapDataset(Dataset):
     def _max_t_for_episode(self, episode_id: int) -> int:
         return int(self._episode_max_t[episode_id])
 
-    def _fallback_episode_and_t(
-        self, episode_id: int, t: int, attempt: int
-    ) -> tuple[int, int]:
-        seed = (
-            int(episode_id) * 1_000_003
-            + int(t) * 9_176
-            + int(attempt) * 101
-            + int(self.image_size) * 17
-            + len(self.index.datasets) * 13
-        ) & 0xFFFFFFFF
-        rng = random.Random(seed)
-        if attempt < 4:
-            max_t = self._max_t_for_episode(episode_id)
-            if max_t > 0:
-                return episode_id, rng.randrange(max_t)
-        new_episode = int(
-            self._valid_episode_ids[rng.randrange(int(self._valid_episode_ids.shape[0]))]
-        )
-        max_t = self._max_t_for_episode(new_episode)
-        return new_episode, rng.randrange(max_t)
-
-    def _build_by_episode_and_t(self, episode_id: int, t: int) -> Optional[Any]:
+    def _build_by_episode_and_t(self, episode_id: int, t: int) -> Any:
         dataset_id = int(self.index.episode_dataset_ids[episode_id])
         offset = int(self.index.dataset_offsets[dataset_id])
         max_t = self._max_t_for_episode(episode_id)
         if max_t <= 0 or t < 0 or t >= max_t:
-            return None
+            raise IndexError(f"Invalid t={t} for episode_id={episode_id} (max_t={max_t})")
 
         shard_id = int(self.index.episode_shard_ids[episode_id])
         offset_data = int(self.index.episode_offsets[episode_id])
         size = int(self.index.episode_sizes[episode_id])
         fileobj = self._get_shard_file(shard_id)
         episode = _load_episode_from_offset(fileobj, offset_data, size)
-        if episode is None:
-            return None
 
-        steps = episode.get("steps")
-        if not isinstance(steps, list):
-            return None
+        steps = episode["steps"]
         step_t = steps[t]
         step_h = steps[t + offset]
-        if not isinstance(step_t, dict) or not isinstance(step_h, dict):
-            return None
 
-        obs_t = step_t.get("observation", {})
-        obs_h = step_h.get("observation", {})
-        if not isinstance(obs_t, dict) or not isinstance(obs_h, dict):
-            return None
+        obs_t = step_t["observation"]
+        obs_h = step_h["observation"]
 
         cfg = self.index.dataset_configs[dataset_id]
         raw_img_t = _extract_image(obs_t, cfg)
         raw_img_h = _extract_image(obs_h, cfg)
         if raw_img_t is None or raw_img_h is None:
-            return None
-
-        try:
-            img_t = _decode_image_to_tensor(raw_img_t, self.image_size)
-            img_h = _decode_image_to_tensor(raw_img_h, self.image_size)
-        except Exception:
-            return None
+            raise ValueError(
+                f"Missing image payload for dataset={cfg.name} episode_id={episode_id} t={t}"
+            )
+        img_t = _decode_image_to_tensor(raw_img_t, self.image_size)
+        img_h = _decode_image_to_tensor(raw_img_h, self.image_size)
 
         frames = torch.stack([img_t, img_h], dim=0).permute(1, 0, 2, 3)
         if not self.return_metadata:
@@ -861,19 +818,7 @@ class OpenXLocalIndexedPairMapDataset(Dataset):
         t = int(idx[1])
         if episode_id < 0 or episode_id >= len(self.index):
             raise IndexError(f"episode_id out of range: {episode_id}")
-
-        cur_episode = episode_id
-        cur_t = t
-        for attempt in range(self.max_sample_attempts):
-            sample = self._build_by_episode_and_t(cur_episode, cur_t)
-            if sample is not None:
-                return sample
-            cur_episode, cur_t = self._fallback_episode_and_t(cur_episode, cur_t, attempt)
-
-        raise RuntimeError(
-            f"Failed to build sample after {self.max_sample_attempts} attempts "
-            f"(episode_id={episode_id}, t={t})"
-        )
+        return self._build_by_episode_and_t(episode_id, t)
 
 
 class OpenXLocalIndexedEpisodePairSampler(Sampler[tuple[int, int]]):
@@ -890,6 +835,7 @@ class OpenXLocalIndexedEpisodePairSampler(Sampler[tuple[int, int]]):
         epoch: int,
         resample_each_epoch: bool,
         stopping_strategy: str = "all_exhausted",
+        repeat_t_policy: str = "cached_subset",
     ) -> None:
         self.index = index
         self.pairs_per_episode = (
@@ -905,6 +851,12 @@ class OpenXLocalIndexedEpisodePairSampler(Sampler[tuple[int, int]]):
             raise ValueError(
                 "stopping_strategy must be one of {'all_exhausted', 'first_exhausted'}, "
                 f"got {stopping_strategy!r}"
+            )
+        self.repeat_t_policy = str(repeat_t_policy).strip().lower()
+        if self.repeat_t_policy not in {"cached_subset", "fresh_per_draw"}:
+            raise ValueError(
+                "repeat_t_policy must be one of {'cached_subset', 'fresh_per_draw'}, "
+                f"got {repeat_t_policy!r}"
             )
         self._external_epoch_set = False
         self._iter_invocations = 0
@@ -1020,6 +972,33 @@ class OpenXLocalIndexedEpisodePairSampler(Sampler[tuple[int, int]]):
         cache[episode_id] = chosen
         return chosen
 
+    @staticmethod
+    def _splitmix64(x: int) -> int:
+        mask = (1 << 64) - 1
+        x = (x + 0x9E3779B97F4A7C15) & mask
+        z = x
+        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & mask
+        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & mask
+        return (z ^ (z >> 31)) & mask
+
+    def _fresh_t_for_draw(
+        self,
+        *,
+        episode_id: int,
+        max_t: int,
+        epoch_term: int,
+        draw_id: int,
+    ) -> int:
+        if max_t <= 1:
+            return 0
+        key = (
+            (int(self.seed) & ((1 << 64) - 1))
+            ^ (int(episode_id) * 0x9E3779B97F4A7C15)
+            ^ (int(epoch_term) * 0xBF58476D1CE4E5B9)
+        ) & ((1 << 64) - 1)
+        base = int(self._splitmix64(key) % int(max_t))
+        return int((base + int(draw_id)) % int(max_t))
+
     def _allocate_dataset_quotas(
         self,
         *,
@@ -1075,6 +1054,7 @@ class OpenXLocalIndexedEpisodePairSampler(Sampler[tuple[int, int]]):
         linear_index: int,
         epoch_term: int,
         subset_cache: Dict[int, np.ndarray],
+        draw_id: Optional[int] = None,
     ) -> tuple[int, int]:
         episode_ids = self.episode_ids_by_dataset[dataset_id]
         prefix = self.episode_pair_prefix_by_dataset[dataset_id]
@@ -1095,7 +1075,18 @@ class OpenXLocalIndexedEpisodePairSampler(Sampler[tuple[int, int]]):
                 f"Sampler selected unsampleable episode: episode_id={episode_id}, max_t={max_t}"
             )
 
-        if self.pairs_per_episode is None or self.pairs_per_episode >= max_t:
+        if (
+            draw_id is not None
+            and self.repeat_t_policy == "fresh_per_draw"
+            and self.pairs_per_episode == 1
+        ):
+            t = self._fresh_t_for_draw(
+                episode_id=episode_id,
+                max_t=max_t,
+                epoch_term=epoch_term,
+                draw_id=int(draw_id),
+            )
+        elif self.pairs_per_episode is None or self.pairs_per_episode >= max_t:
             t = int(offset_in_episode)
         else:
             subset = self._episode_subset(
@@ -1114,6 +1105,7 @@ class OpenXLocalIndexedEpisodePairSampler(Sampler[tuple[int, int]]):
         rng: np.random.Generator,
         epoch_term: int,
         subset_cache: Dict[int, np.ndarray],
+        draw_id: int,
     ) -> tuple[int, int]:
         dataset_id = int(rng.choice(self.valid_dataset_ids, p=self.valid_dataset_probs))
         prefix = self.episode_pair_prefix_by_dataset[dataset_id]
@@ -1125,12 +1117,14 @@ class OpenXLocalIndexedEpisodePairSampler(Sampler[tuple[int, int]]):
             linear_index=linear_index,
             epoch_term=epoch_term,
             subset_cache=subset_cache,
+            draw_id=int(draw_id),
         )
 
     def __iter__(self) -> Iterator[tuple[int, int]]:
         epoch_term = self._epoch_term()
         rng = np.random.default_rng(self.seed + epoch_term * 1_000_003)
         subset_cache: Dict[int, np.ndarray] = {}
+        draw_id = 0
         quotas, remaining = self._allocate_dataset_quotas(
             rng=rng,
             target_samples=self.num_samples,
@@ -1177,6 +1171,7 @@ class OpenXLocalIndexedEpisodePairSampler(Sampler[tuple[int, int]]):
                 epoch_term=epoch_term,
                 subset_cache=subset_cache,
             )
+            draw_id += 1
 
         if remaining > 0:
             if not self._warned_unique_exhausted:
@@ -1193,4 +1188,6 @@ class OpenXLocalIndexedEpisodePairSampler(Sampler[tuple[int, int]]):
                     rng=rng,
                     epoch_term=epoch_term,
                     subset_cache=subset_cache,
+                    draw_id=draw_id,
                 )
+                draw_id += 1

@@ -131,6 +131,54 @@ def test_sampler_falls_back_to_replacement_only_after_unique_capacity() -> None:
     assert len(set(samples)) <= 3
 
 
+def test_sampler_fresh_per_draw_varies_t_on_repeated_episode_draws() -> None:
+    index = _build_index(
+        steps_by_dataset=[[10]],
+        dataset_weights=[1.0],
+    )
+    sampler = OpenXLocalIndexedEpisodePairSampler(
+        index=index,
+        pairs_per_episode=1,
+        weights_by_size=False,
+        num_samples=6,
+        seed=5,
+        epoch=0,
+        resample_each_epoch=True,
+        repeat_t_policy="fresh_per_draw",
+    )
+
+    samples = list(iter(sampler))
+    assert len(samples) == 6
+    assert all(ep == 0 for ep, _ in samples)
+
+    t_values = [int(t) for _, t in samples]
+    assert len(set(t_values)) > 1
+
+
+def test_sampler_cached_subset_keeps_t_fixed_on_repeated_episode_draws() -> None:
+    index = _build_index(
+        steps_by_dataset=[[10]],
+        dataset_weights=[1.0],
+    )
+    sampler = OpenXLocalIndexedEpisodePairSampler(
+        index=index,
+        pairs_per_episode=1,
+        weights_by_size=False,
+        num_samples=6,
+        seed=5,
+        epoch=0,
+        resample_each_epoch=True,
+        repeat_t_policy="cached_subset",
+    )
+
+    samples = list(iter(sampler))
+    assert len(samples) == 6
+    assert all(ep == 0 for ep, _ in samples)
+
+    t_values = [int(t) for _, t in samples]
+    assert len(set(t_values)) == 1
+
+
 def test_all_exhausted_epoch_length_matches_total_capacity() -> None:
     index = _build_index(
         steps_by_dataset=[[100] * 100, [1000] * 1000],
@@ -209,3 +257,25 @@ def test_sampler_rejects_unknown_stopping_strategy() -> None:
         assert "stopping_strategy" in str(exc)
     else:
         raise AssertionError("Expected ValueError for unknown stopping_strategy")
+
+
+def test_sampler_rejects_unknown_repeat_t_policy() -> None:
+    index = _build_index(
+        steps_by_dataset=[[4]],
+        dataset_weights=[1.0],
+    )
+    try:
+        OpenXLocalIndexedEpisodePairSampler(
+            index=index,
+            pairs_per_episode=1,
+            weights_by_size=False,
+            num_samples=None,
+            seed=0,
+            epoch=0,
+            resample_each_epoch=True,
+            repeat_t_policy="bad_policy",
+        )
+    except ValueError as exc:
+        assert "repeat_t_policy" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for unknown repeat_t_policy")

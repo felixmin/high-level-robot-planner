@@ -43,6 +43,7 @@ from laq import (
     ValidationStrategyCallback,
     create_validation_strategies,
 )
+from laq.checkpoints import load_laq_model_weights_only
 
 
 class TrustedFullCheckpointIO(TorchCheckpointIO):
@@ -74,24 +75,20 @@ def main(cfg: DictConfig):
         wandb.finish()
 
     # Setup unified logging
-    runs_dir = None
-    try:
-        if HydraConfig.initialized():
-            runs_dir = Path(str(HydraConfig.get().runtime.output_dir))
-    except Exception:
-        runs_dir = None
-    if runs_dir is None:
+    if HydraConfig.initialized():
+        runs_dir = Path(str(HydraConfig.get().runtime.output_dir))
+    else:
         runs_dir = resolve_runs_dir(
-            logging_root_dir=cfg.logging.get("root_dir"),
-            logging_runs_dir=cfg.logging.get("runs_dir"),
+            logging_root_dir=cfg.logging.root_dir,
+            logging_runs_dir=cfg.logging.runs_dir,
             workspace_root=workspace_root,
-            experiment_name=OmegaConf.select(cfg, "experiment.name"),
+            experiment_name=cfg.experiment.name,
         )
 
     logger, output_dir = setup_unified_logging(
         runs_dir=runs_dir,
-        job_id=cfg.logging.get("job_id"),
-        log_level=cfg.logging.get("level", "INFO"),
+        job_id=cfg.logging.job_id,
+        log_level=cfg.logging.level,
         logger_name="laq.training",
     )
 
@@ -125,14 +122,11 @@ def main(cfg: DictConfig):
     if cfg.data.backend == "oxe_local_indexed":
         dataset_names = [d.name for d in cfg.data.dataset.oxe.datasets]
         logger.info(f"  - Datasets: {dataset_names}")
-        try:
-            est_batches = int(len(datamodule.train_dataset))
-            est_pairs = est_batches * int(cfg.data.loader.batch_size)
-            logger.info(
-                f"  - Estimated train batches/epoch: ~{est_batches:,} (~{est_pairs:,} pairs)"
-            )
-        except TypeError:
-            logger.info("  - Train dataset length is not available")
+        est_batches = int(len(datamodule.train_dataset))
+        est_pairs = est_batches * int(cfg.data.loader.batch_size)
+        logger.info(
+            f"  - Estimated train batches/epoch: ~{est_batches:,} (~{est_pairs:,} pairs)"
+        )
     else:
         raise ValueError(
             f"Only data.backend='oxe_local_indexed' is supported, got {cfg.data.backend!r}"
@@ -149,7 +143,6 @@ def main(cfg: DictConfig):
     task = LAQTask(
         model_config=model_config,
         training_config=training_config,
-        use_ema=training_config.get("use_ema", False),
     )
 
     num_params = count_parameters(task.model)
@@ -165,16 +158,7 @@ def main(cfg: DictConfig):
 
     callbacks = []
 
-    progress_bar_cfg = training_config.get("progress_bar")
-    if progress_bar_cfg is None:
-        raise ValueError(
-            "Missing `training.progress_bar` config. Expected:\n"
-            "training:\n"
-            "  progress_bar:\n"
-            "    enabled: true|false\n"
-            "    refresh_rate: <int>\n"
-            "    leave: true|false\n"
-        )
+    progress_bar_cfg = training_config.progress_bar
     if bool(progress_bar_cfg.enabled):
         callbacks.append(
             TQDMProgressBar(
@@ -215,15 +199,7 @@ def main(cfg: DictConfig):
     # Learning rate monitoring requires a Lightning logger and is added after logger setup.
 
     # Progress logging (for cluster jobs where tqdm doesn't work in log files)
-    progress_logger_cfg = training_config.get("progress_logger")
-    if progress_logger_cfg is None:
-        raise ValueError(
-            "Missing `training.progress_logger` config. Expected:\n"
-            "training:\n"
-            "  progress_logger:\n"
-            "    enabled: true|false\n"
-            "    log_every_n_steps: <int>\n"
-        )
+    progress_logger_cfg = training_config.progress_logger
     if bool(progress_logger_cfg.enabled):
         callbacks.append(
             ProgressLoggerCallback(
@@ -234,16 +210,8 @@ def main(cfg: DictConfig):
         logger.info(f"  - log_every_n_steps: {int(progress_logger_cfg.log_every_n_steps)}")
 
     # Throughput logging: logs perf/steps_per_sec and perf/samples_per_sec to wandb
-    perf_cfg = training_config.get("throughput")
-    if perf_cfg and bool(perf_cfg.get("enabled", True)):
-        if perf_cfg.get("log_every_n_steps") is None:
-            raise ValueError(
-                "Missing `training.throughput.log_every_n_steps` config. Expected:\n"
-                "training:\n"
-                "  throughput:\n"
-                "    enabled: true\n"
-                "    log_every_n_steps: <int>\n"
-            )
+    perf_cfg = training_config.throughput
+    if bool(perf_cfg.enabled):
         callbacks.append(
             ThroughputLoggingCallback(
                 ThroughputLoggingConfig(
@@ -255,44 +223,23 @@ def main(cfg: DictConfig):
         logger.info("✓ Throughput logger added")
 
     # Dataset usage logging: print dataset mix consumed between validations.
-    usage_cfg = training_config.get("dataset_usage_logger")
-    if usage_cfg and bool(usage_cfg.get("enabled", True)):
-        if usage_cfg.get("log_every_n_steps") is None:
-            raise ValueError(
-                "Missing `training.dataset_usage_logger.log_every_n_steps` config. Expected:\n"
-                "training:\n"
-                "  dataset_usage_logger:\n"
-                "    enabled: true\n"
-                "    log_every_n_steps: <int>\n"
-            )
+    usage_cfg = training_config.dataset_usage_logger
+    if bool(usage_cfg.enabled):
         callbacks.append(
             DatasetUsageLoggerCallback(
                 enabled=True,
-                log_on_validation_end=bool(usage_cfg.get("log_on_validation_end", True)),
+                log_on_validation_end=bool(usage_cfg.log_on_validation_end),
                 log_every_n_steps=int(usage_cfg.log_every_n_steps),
-                key=str(usage_cfg.get("key", "dataset_name")),
-                top_k=int(usage_cfg.get("top_k", 12)),
+                key=str(usage_cfg.key),
+                top_k=int(usage_cfg.top_k),
             )
         )
         logger.info("✓ Dataset usage logger added")
 
     # Train preview buffer: snapshots from already-consumed train batches.
     # Used by basic visualization to avoid iterating train_dataloader in validation.
-    preview_cfg = training_config.get("train_preview_buffer")
-    if preview_cfg is None:
-        raise ValueError(
-            "Missing `training.train_preview_buffer` config. Expected:\n"
-            "training:\n"
-            "  train_preview_buffer:\n"
-            "    enabled: true|false\n"
-            "    max_samples: <int>\n"
-            "    samples_per_batch: <int>\n"
-        )
-    if bool(preview_cfg.get("enabled", True)):
-        if preview_cfg.get("max_samples") is None:
-            raise ValueError("Missing `training.train_preview_buffer.max_samples` config.")
-        if preview_cfg.get("samples_per_batch") is None:
-            raise ValueError("Missing `training.train_preview_buffer.samples_per_batch` config.")
+    preview_cfg = training_config.train_preview_buffer
+    if bool(preview_cfg.enabled):
         callbacks.append(
             TrainPreviewBufferCallback(
                 enabled=True,
@@ -307,19 +254,12 @@ def main(cfg: DictConfig):
         logger.info("✓ Train preview buffer disabled")
 
     # Setup validation strategies
-    val_config = cfg.get("validation")
-    if val_config is None:
-        raise ValueError(
-            "Missing top-level `validation` config. "
-            "Compose a validation preset via `/validation@validation: ...`."
-        )
-    strategies_config = val_config.get("strategies", {})
+    val_config = cfg.validation
+    strategies_config = val_config.strategies
     if strategies_config:
         strategies_config = OmegaConf.to_container(strategies_config, resolve=True)
 
-    bucket_configs = val_config.get("buckets")
-    if bucket_configs is not None:
-        bucket_configs = OmegaConf.to_container(bucket_configs, resolve=True)
+    bucket_configs = OmegaConf.to_container(val_config.buckets, resolve=True)
 
     bucket_filters = None
     if bucket_configs is not None:
@@ -330,13 +270,13 @@ def main(cfg: DictConfig):
     val_strategy_callback = ValidationStrategyCallback(
         strategies=strategies,
         bucket_configs=bucket_configs,  # Pass bucket configs for routing
-        num_fixed_samples=val_config.get("num_fixed_samples", 8),
-        num_random_samples=val_config.get("num_random_samples", 8),
-        max_cached_samples=val_config.get("max_cached_samples", 256),
+        num_fixed_samples=val_config.num_fixed_samples,
+        num_random_samples=val_config.num_random_samples,
+        max_cached_samples=val_config.max_cached_samples,
     )
     callbacks.append(val_strategy_callback)
     logger.info(f"✓ Validation strategy callback added ({len(strategies)} strategies)")
-    logger.info(f"  - Max cached samples: {val_config.get('max_cached_samples', 256)}")
+    logger.info(f"  - Max cached samples: {val_config.max_cached_samples}")
     if bucket_configs:
         logger.info(f"  - Buckets: {list(bucket_configs.keys())}")
     for strategy in strategies:
@@ -344,11 +284,11 @@ def main(cfg: DictConfig):
         logger.info(f"  - {strategy.name}: every {strategy.every_n_validations} validations{bucket_info}")
 
     # Optional EMA
-    if training_config.get("use_ema", False):
+    if training_config.use_ema:
         ema_callback = EMACallback(
-            decay=training_config.get("ema_decay", 0.999),
-            update_every=training_config.get("ema_update_every", 1),
-            update_after_step=training_config.get("ema_update_after_step", 0),
+            decay=training_config.ema_decay,
+            update_every=training_config.ema_update_every,
+            update_after_step=training_config.ema_update_after_step,
         )
         callbacks.append(ema_callback)
         logger.info("✓ EMA callback added")
@@ -358,23 +298,20 @@ def main(cfg: DictConfig):
     logger.info("Setting up WandB Logger")
     logger.info("=" * 80)
 
-    if hasattr(cfg, "logging") and cfg.logging.get("use_wandb", True):
+    if cfg.logging.use_wandb:
         # Calculate unique run name for sweeps
         run_name = cfg.experiment.name
-        try:
-            hydra_cfg = HydraConfig.get()
-            if hydra_cfg.mode == "MULTIRUN":
-                run_name = f"{run_name}_{hydra_cfg.job.num}"
-        except (ValueError, Exception):
-            pass
+        hydra_cfg = HydraConfig.get()
+        if hydra_cfg.mode == "MULTIRUN":
+            run_name = f"{run_name}_{hydra_cfg.job.num}"
 
         wandb_logger = setup_wandb_with_unified_paths(
             logger=logger,
             output_dir=output_dir,
-            project=cfg.logging.get("project", "hlrp"),
+            project=cfg.logging.project,
             name=run_name,
             group=cfg.experiment.name,
-            tags=cfg.logging.get("tags", []),
+            tags=cfg.logging.tags,
             use_wandb=True,
             settings=wandb.Settings(start_method="thread", reinit=True),
         )
@@ -397,10 +334,10 @@ def main(cfg: DictConfig):
 
     profiler = None
     profiler_type = None
-    if training_config.get("profiler", {}).get("enabled", False):
-        profiler_type = training_config.profiler.get("type", "simple")
+    if training_config.profiler.enabled:
+        profiler_type = training_config.profiler.type
         dirpath = str(output_dir / "profiles")
-        filename = training_config.profiler.get("filename", "profile")
+        filename = training_config.profiler.filename
 
         if profiler_type == "simple":
             from lightning.pytorch.profilers import SimpleProfiler
@@ -430,28 +367,15 @@ def main(cfg: DictConfig):
     logger.info("=" * 80)
 
     # Get validation check interval from config
-    if val_config.get("check_interval") is None:
-        raise ValueError("Missing `validation.check_interval` config.")
-    if val_config.get("limit_batches") is None:
-        raise ValueError("Missing `validation.limit_batches` config.")
     val_check_interval = val_config.check_interval
     limit_val_batches = val_config.limit_batches
-    check_val_every_n_epoch = val_config.get("check_val_every_n_epoch", 1)
+    check_val_every_n_epoch = val_config.check_val_every_n_epoch
 
-    if training_config.get("log_every_n_steps") is None:
-        raise ValueError("Missing `training.log_every_n_steps` config.")
     log_every_n_steps = int(training_config.log_every_n_steps)
 
-    model_summary_cfg = training_config.get("model_summary")
-    if model_summary_cfg is None:
-        raise ValueError(
-            "Missing `training.model_summary` config. Expected:\n"
-            "training:\n"
-            "  model_summary:\n"
-            "    enabled: true|false\n"
-        )
+    model_summary_cfg = training_config.model_summary
 
-    ckpt_path = training_config.get("resume_from_checkpoint", None)
+    ckpt_path = training_config.resume_from_checkpoint
     trainer_plugins = None
     if ckpt_path:
         trainer_plugins = [TrustedFullCheckpointIO()]
@@ -459,12 +383,12 @@ def main(cfg: DictConfig):
 
     trainer = pl.Trainer(
         max_epochs=training_config.epochs,
-        max_steps=training_config.get("max_steps") or -1,  # Convert None to -1
+        max_steps=int(training_config.max_steps),
         accelerator="auto",
         devices="auto",
         strategy="auto",
         plugins=trainer_plugins,
-        precision=cfg.get("precision", "32-true"),
+        precision=cfg.precision,
         gradient_clip_val=training_config.gradient.clip_val,
         gradient_clip_algorithm=training_config.gradient.clip_algorithm,
         callbacks=callbacks,
@@ -484,7 +408,7 @@ def main(cfg: DictConfig):
     logger.info(f"  - Val check interval: {val_check_interval}")
     logger.info(f"  - Limit val batches: {limit_val_batches}")
     logger.info(f"  - Check val every n epoch: {check_val_every_n_epoch}")
-    logger.info(f"  - Precision: {cfg.get('precision', '32-true')}")
+    logger.info(f"  - Precision: {cfg.precision}")
     logger.info(f"  - Accelerator: auto")
     logger.info(f"  - Devices: auto")
     logger.info(f"  - Profiler: {profiler_type if profiler else 'disabled'}")
@@ -495,21 +419,17 @@ def main(cfg: DictConfig):
     logger.info("=" * 80)
 
     # Check for weight-only loading (new scheduler, fresh optimizer)
-    weights_path = training_config.get("load_weights_from", None)
+    weights_path = training_config.load_weights_from
     if weights_path:
         logger.info(f"✓ Loading model weights from: {weights_path}")
-        ckpt = torch.load(weights_path, map_location="cpu", weights_only=False)
-        # Load only model state_dict, not optimizer/scheduler
-        state_dict = ckpt.get("state_dict", ckpt)
-        # Filter to model weights only (remove 'model.' prefix if present from Lightning)
-        model_state = {k.replace("model.", "", 1) if k.startswith("model.") else k: v
-                       for k, v in state_dict.items() if not k.startswith(("optimizer", "lr_scheduler"))}
-        missing, unexpected = task.model.load_state_dict(model_state, strict=False)
+        missing, unexpected, loaded_count = load_laq_model_weights_only(
+            task.model, weights_path, strict=False
+        )
         if missing:
             logger.warning(f"  - Missing keys: {missing[:5]}{'...' if len(missing) > 5 else ''}")
         if unexpected:
             logger.warning(f"  - Unexpected keys: {unexpected[:5]}{'...' if len(unexpected) > 5 else ''}")
-        logger.info(f"  - Loaded {len(model_state)} weight tensors (fresh optimizer/scheduler)")
+        logger.info(f"  - Loaded {loaded_count} weight tensors (fresh optimizer/scheduler)")
 
     # Check for full resume (restores optimizer/scheduler state)
     if ckpt_path:

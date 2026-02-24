@@ -366,6 +366,19 @@ class NSVQ(torch.nn.Module):
             self.codebooks_used.zero_()
             return int(unused_count), int(used_count), int(total_assignments), float(min_count)
 
+    def get_indices(self, input_data_first: torch.Tensor, input_data_last: torch.Tensor) -> torch.Tensor:
+        """Return quantization indices without updating the codebooks_used counter."""
+        batch_size = input_data_first.shape[0]
+        first = self.encode(input_data_first.contiguous(), batch_size)
+        last = self.encode(input_data_last.contiguous(), batch_size)
+        delta = last - first
+        distances = (
+            torch.sum(delta ** 2, dim=1, keepdim=True)
+            - 2 * torch.matmul(delta, self.codebooks.t())
+            + torch.sum(self.codebooks.t() ** 2, dim=0, keepdim=True)
+        )
+        return torch.argmin(distances, dim=1).reshape(batch_size, -1)
+
     def inference(self, input_data_first, input_data_last, user_action_token_num=None):
 
         """

@@ -13,27 +13,34 @@ Decoder Types:
 
 import logging
 import math
-import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import torch
-import torch.nn.functional as F
 from einops import rearrange, pack
 from einops.layers.torch import Rearrange
 from torch import nn
 
 from laq.models.attention import ContinuousPositionBias, Transformer
+from laq.models.decoder_losses import (
+    compute_aux_outputs,
+    compute_dino_loss,
+    compute_flow_loss_term,
+    compute_pixel_loss,
+)
 from laq.models.dino import DINOEncoder, DINOFeatureExtractor, DINOWrapper
+from laq.models.forward_core import (
+    build_decoder_shared_inputs,
+    encode_and_quantize,
+    initialize_metrics,
+    normalize_video_input,
+    prepare_action_tokens,
+    update_codebook_stats,
+)
 from laq.models.nsvq import NSVQ
 
 logger = logging.getLogger(__name__)
-
-
-def exists(val):
-    return val is not None
-
 
 def pair(val):
     ret = (val, val) if not isinstance(val, tuple) else val
@@ -60,7 +67,6 @@ class DinoConfig:
             return self.loss_weight
         warmup_factor = min(1.0, step / self.warmup_steps)
         return self.loss_weight * warmup_factor
-
 
 class LatentActionQuantization(nn.Module):
     """
@@ -545,7 +551,7 @@ class LatentActionQuantization(nn.Module):
         recon_video = self.aux_to_pixels(tokens)
 
         return recon_video
-    
+
 
     def forward(
         self,
@@ -568,251 +574,88 @@ class LatentActionQuantization(nn.Module):
             If return_only_codebook_ids: codebook indices [B, code_seq_len]
             Otherwise: (loss, metrics_dict)
         """
-        if video.ndim not in {4, 5}:
-            raise ValueError(f"Expected 4D or 5D input, got {video.ndim}D")
-
-        if video.ndim == 4:
-            video = rearrange(video, 'b c h w -> b c 1 h w')
-
-        b, c, f, *image_dims = video.shape
-        device = video.device
-
-        if tuple(image_dims) != self.image_size:
-            raise ValueError(f"Expected image size {self.image_size}, got {tuple(image_dims)}")
-
-        first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
-
-        # Encode both frames
-        enc_first_frame_tokens, enc_rest_frames_tokens, first_tokens, last_tokens = (
-            self._encode_frames(first_frame, rest_frames)
-        )
-
-        tokens, perplexity, _, indices = self.vq(first_tokens, last_tokens, codebook_training_only=False)
-
-        # Codebook usage stats (windowed by `self.vq.codebooks_used`, which is reset
-        # after a replacement). These are useful diagnostics even when we are not
-        # performing a replacement on this exact step.
-        current_vq_discarding_threshold = self._get_vq_discarding_threshold(int(step))
-        window_total = self.vq.codebooks_used.sum().detach()
-        unused_indices, used_indices, min_count_val = self.vq._get_replacement_indices(
-            discarding_threshold=current_vq_discarding_threshold
-        )
-
-        codebook_replaced = 0.0
-        replaced_count = float(unused_indices.shape[0])
-        used_count = float(used_indices.shape[0])
-        min_count = float(min_count_val)
-
-        if step != 0 and self._should_replace_codebook(step):
-            logger.debug(f"Replacing unused codebook entries at step {step}")
-            codebook_replaced = 1.0
-            unused_c, used_c, total_c, min_c = self.vq.replace_unused_codebooks(
-                discarding_threshold=current_vq_discarding_threshold
-            )
-            # Ensure logged stats match the actual replacement decision.
-            replaced_count = float(unused_c)
-            used_count = float(used_c)
-            min_count = float(min_c)
-            window_total = window_total.new_tensor(float(total_c))
-            if int(os.environ.get("RANK", "0")) == 0:
-                print(
-                    f"[Codebook] step={int(step)} replaced={int(replaced_count)} "
-                    f"used={int(used_count)} total={int(total_c)} min_count={min_count:.4f} "
-                    f"threshold={current_vq_discarding_threshold:.6f}"
-                )
+        video = normalize_video_input(self, video)
 
         if return_only_codebook_ids:
-            return indices
+            first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
+            _, _, first_tokens, last_tokens = self._encode_frames(first_frame, rest_frames)
+            return self.vq.get_indices(first_tokens, last_tokens)
 
-        action_h, action_w = self.action_shape
-        tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h=action_h, w=action_w)
+        encoded = encode_and_quantize(self, video)
+        codebook = update_codebook_stats(self, int(step))
 
-        if self.latent_ablation == "permute_batch" and b > 1:
-            perm = torch.randperm(b, device=tokens.device)
-            tokens = tokens[perm]
+        action_tokens = prepare_action_tokens(self, encoded)
+        metrics = initialize_metrics(
+            self,
+            perplexity=encoded.perplexity,
+            indices=encoded.indices,
+            step=int(step),
+            codebook=codebook,
+        )
+        total_loss = encoded.rest_frames.new_zeros((), requires_grad=True)
 
-        # Initialize loss and metrics
-        # Avoid `torch.tensor(0.0, device=...)` which can introduce CPU->GPU sync.
-        total_loss = rest_frames.new_zeros((), requires_grad=True)
-        metrics: dict[str, Any] = {
-            "code_usage_perplexity_in_batch": perplexity.detach(),
-            "replacement_applied_this_step": codebook_replaced,
-            "entries_below_usage_threshold_count_in_window": replaced_count,
-            "entries_at_or_above_usage_threshold_count_in_window": used_count,
-            "usage_count_threshold_in_window": min_count,
-            "discarding_threshold_fraction_of_expected_usage": current_vq_discarding_threshold,
-        }
-        if self.metrics_num_unique_codes_every_n_steps > 0 and int(step) % int(self.metrics_num_unique_codes_every_n_steps) == 0:
-            metrics["unique_codes_in_batch"] = int(indices.unique().size(0))
-        # Avoid per-step GPU sync: keep this as a tensor and log it only at a configured interval.
-        # Log the window total *before* any replacement (replacement resets the counter).
-        metrics["code_assignments_in_window"] = window_total
+        h_dec, w_dec, attn_bias, pixel_context = build_decoder_shared_inputs(
+            self,
+            first_frame=encoded.first_frame,
+            device=encoded.device,
+        )
 
-        # Precompute shared values for decoders
-        h_dec, w_dec = self.patch_height_width
-        attn_bias = self.spatial_rel_pos_bias(h_dec, w_dec, device=device)
+        dino_loss_term = compute_dino_loss(
+            self,
+            encoded=encoded,
+            action_tokens=action_tokens,
+            attn_bias=attn_bias,
+            h_dec=h_dec,
+            w_dec=w_dec,
+            step=int(step),
+            metrics=metrics,
+        )
+        if dino_loss_term is not None:
+            total_loss = total_loss + dino_loss_term
 
-        # Precompute pixel context if needed by any pixel-based decoder
-        # (pixel_decoder, aux_decoder, or flow_decoder)
-        pixel_context = None
-        if self.pixel_decoder is not None or self.aux_decoder is not None or self.flow_decoder is not None:
-            pixel_context = self.decoder_context_projection(first_frame)
-
-        # --- 1. DINO Decoder Path (Training) ---
-        # Predict DINO/encoder tokens of next frame from encoder context + action
-        if self.dino_decoder is not None:
-            dino_weight = self.dino_config.get_weight(step)
-            metrics["dino_weight"] = dino_weight
-            if dino_weight == 0.0:
-                pass
-            else:
-                dino_context = enc_first_frame_tokens  # [B, 1, h, w, d]
-                video_shape = tuple(dino_context.shape[:-1])
-
-                # Flatten for transformer
-                dino_context_flat = rearrange(dino_context, 'b t h w d -> (b t) (h w) d')
-                dino_action_flat = rearrange(tokens, 'b t h w d -> (b t) (h w) d')
-
-                # Run DINO decoder
-                pred_dino_tokens = self.dino_decoder(
-                    dino_context_flat,
-                    attn_bias=attn_bias,
-                    video_shape=video_shape,
-                    context=dino_action_flat
-                )
-
-                # Reshape back
-                pred_dino_tokens = rearrange(
-                    pred_dino_tokens, '(b t) (h w) d -> b t h w d',
-                    b=b, h=h_dec, w=w_dec
-                )
-
-                # DINO loss: MSE to target encoder tokens
-                target_dino_tokens = enc_rest_frames_tokens.detach()
-                dino_loss = F.mse_loss(pred_dino_tokens, target_dino_tokens)
-                total_loss = total_loss + dino_weight * dino_loss
-                metrics["dino_loss"] = dino_loss.detach()
-
-        # --- 2. Pixel Decoder Path (Training) ---
-        # Predict pixels of next frame with gradients flowing to encoder
-        if self.pixel_decoder is not None:
-            video_shape = tuple(pixel_context.shape[:-1])
-
-            # Flatten for transformer
-            pixel_context_flat = rearrange(pixel_context, 'b t h w d -> (b t) (h w) d')
-            pixel_action_flat = rearrange(tokens, 'b t h w d -> (b t) (h w) d')
-
-            # Run pixel decoder (gradients flow to encoder)
-            pred_pixel_tokens = self.pixel_decoder(
-                pixel_context_flat,
-                attn_bias=attn_bias,
-                video_shape=video_shape,
-                context=pixel_action_flat
-            )
-
-            # Reshape and project to pixels
-            pred_pixel_tokens = rearrange(
-                pred_pixel_tokens, '(b t) (h w) d -> b t h w d',
-                b=b, h=h_dec, w=w_dec
-            )
-            pred_pixels = self.pixel_to_pixels(pred_pixel_tokens)
-
-            # Pixel loss with gradients to encoder
-            pixel_loss = F.mse_loss(rest_frames, pred_pixels)
+        pixel_loss = compute_pixel_loss(
+            self,
+            rest_frames=encoded.rest_frames,
+            action_tokens=action_tokens,
+            pixel_context=pixel_context,
+            attn_bias=attn_bias,
+            h_dec=h_dec,
+            w_dec=w_dec,
+            batch_size=encoded.batch_size,
+            metrics=metrics,
+        )
+        if pixel_loss is not None:
             total_loss = total_loss + pixel_loss
-            metrics["pixel_loss"] = pixel_loss.detach()
 
-        # --- 3. Aux Decoder Path (Interpretability) ---
-        # Predict pixels for visualization (gradients detached from encoder)
-        if self.aux_decoder is not None or return_recons_only:
-            if self.aux_decoder is None:
-                # Aux decoder disabled but reconstructions requested - return None
-                if return_recons_only:
-                    return None
-
-            # Detach action so aux loss doesn't affect encoder/VQ
-            aux_actions = tokens.detach()
-
-            # Run aux decoder inline (avoid redundant computation in self.decode)
-            video_shape = tuple(pixel_context.shape[:-1])
-            aux_context_flat = rearrange(pixel_context, 'b t h w d -> (b t) (h w) d')
-            aux_action_flat = rearrange(aux_actions, 'b t h w d -> (b t) (h w) d')
-
-            aux_tokens = self.aux_decoder(
-                aux_context_flat,
-                attn_bias=attn_bias,
-                video_shape=video_shape,
-                context=aux_action_flat
-            )
-            aux_tokens = rearrange(aux_tokens, '(b t) (h w) d -> b t h w d', b=b, h=h_dec, w=w_dec)
-            recon_video = self.aux_to_pixels(aux_tokens)
-
-            if return_recons_only:
-                recon_frames = rearrange(recon_video, 'b c 1 h w -> b c h w')
-                return recon_frames
-
-            # Aux loss: pixel reconstruction (only trains aux decoder, not encoder)
-            aux_loss = F.mse_loss(rest_frames, recon_video)
+        aux_loss, recon_frames = compute_aux_outputs(
+            self,
+            rest_frames=encoded.rest_frames,
+            action_tokens=action_tokens,
+            pixel_context=pixel_context,
+            attn_bias=attn_bias,
+            h_dec=h_dec,
+            w_dec=w_dec,
+            batch_size=encoded.batch_size,
+            return_recons_only=bool(return_recons_only),
+            metrics=metrics,
+        )
+        if return_recons_only:
+            return recon_frames
+        if aux_loss is not None:
             total_loss = total_loss + aux_loss
-            metrics["aux_loss"] = aux_loss.detach()
 
-        # --- 4. Flow Decoder Path (Training) ---
-        # Predict optical flow with gradients flowing to encoder
-        if self.flow_decoder is not None:
-            from laq.models.flow import (
-                compute_flow_loss,
-                compute_flow_summary_loss,
-                compute_weighted_mean_flow,
-            )
-
-            flow_weight = self.flow_config.get_weight(step)
-            metrics["flow_weight"] = flow_weight
-            metrics["flow_summary_weight"] = self.flow_config.summary_loss_weight
-
-            # If flow loss is effectively disabled (e.g. warmup at step=0),
-            # skip the expensive RAFT teacher + decoder forward entirely.
-            if flow_weight == 0.0:
-                return total_loss, metrics
-
-            # NO detach - gradients flow to encoder for motion-aware representations
-            flow_actions = tokens
-
-            # Compute ground-truth flow from RAFT teacher
-            gt_flow = self.flow_teacher.compute_flow(first_frame, rest_frames)
-
-            # Predict flow from context + action
-            pred_flow = self.flow_decoder(
-                pixel_context,
-                flow_actions,
-                attn_bias,
-            )
-
-            # Flow loss with gradients to encoder
-            flow_loss = compute_flow_loss(pred_flow, gt_flow)
-            total_loss = total_loss + flow_weight * flow_loss
-            metrics["flow_loss"] = flow_loss.detach()
-
-            if self.flow_config.summary_loss_weight > 0.0:
-                flow_summary_loss = compute_flow_summary_loss(
-                    pred_flow=pred_flow,
-                    gt_flow=gt_flow,
-                    static_eps=self.flow_config.summary_static_eps,
-                )
-                total_loss = total_loss + (
-                    flow_weight * self.flow_config.summary_loss_weight * flow_summary_loss
-                )
-                metrics["flow_summary_loss"] = flow_summary_loss.detach()
-
-                pred_mean_dx, pred_mean_dy = compute_weighted_mean_flow(
-                    pred_flow,
-                    static_eps=self.flow_config.summary_static_eps,
-                )
-                gt_mean_dx, gt_mean_dy = compute_weighted_mean_flow(
-                    gt_flow,
-                    static_eps=self.flow_config.summary_static_eps,
-                )
-                metrics["flow_mean_dx_abs_err"] = (pred_mean_dx - gt_mean_dx).abs().mean().detach()
-                metrics["flow_mean_dy_abs_err"] = (pred_mean_dy - gt_mean_dy).abs().mean().detach()
+        flow_loss_term = compute_flow_loss_term(
+            self,
+            first_frame=encoded.first_frame,
+            rest_frames=encoded.rest_frames,
+            action_tokens=action_tokens,
+            pixel_context=pixel_context,
+            attn_bias=attn_bias,
+            step=int(step),
+            metrics=metrics,
+        )
+        if flow_loss_term is not None:
+            total_loss = total_loss + flow_loss_term
 
         return total_loss, metrics
         
@@ -835,14 +678,7 @@ class LatentActionQuantization(nn.Module):
             If return_only_codebook_ids: codebook indices [B, code_seq_len]
             Otherwise: reconstructed frames [B, C, H, W], or None if aux_decoder disabled
         """
-        if video.ndim not in {4, 5}:
-            raise ValueError(f"Expected 4D or 5D input, got {video.ndim}D")
-
-        if video.ndim == 4:
-            video = rearrange(video, 'b c h w -> b c 1 h w')
-
-        if tuple(video.shape[3:]) != self.image_size:
-            raise ValueError(f"Expected image size {self.image_size}, got {tuple(video.shape[3:])}")
+        video = normalize_video_input(self, video)
 
         first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
 
