@@ -1,5 +1,3 @@
-This code is build on [LAPA](https://github.com/LatentActionPretraining/LAPA).
-
 # Robot-learning from Video
 
 
