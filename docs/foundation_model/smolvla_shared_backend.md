@@ -51,7 +51,7 @@ New policy type:
 
 Config:
 
-- `config/experiment/lerobot_hlrp_smolvla_shared_smoke.yaml`
+- `config/experiment/lerobot_hlrp_smolvla_shared_libero_scratch.yaml`
 
 Optional Stage-2 checkpoint handoff, depending on policy init mode:
 
@@ -76,9 +76,15 @@ Example:
 
 ```bash
 python scripts/submit_job.py \
-  experiment=lerobot_hlrp_smolvla_shared_smoke \
+  experiment=lerobot_hlrp_smolvla_shared_libero_scratch \
   cluster=lrz_x100 \
+  lerobot.init_mode=artifact \
   lerobot.stage2_artifact=/dss/.../artifacts/smolvla_shared_stage2_artifact.pt \
+  lerobot.steps=50 \
+  lerobot.batch_size=2 \
+  lerobot.eval_freq=10 \
+  lerobot.log_freq=10 \
+  lerobot.save_freq=1000 \
   experiment.name=lerobot_hlrp_smolvla_shared_smoke
 ```
 

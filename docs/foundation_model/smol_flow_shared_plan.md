@@ -58,9 +58,15 @@ python scripts/submit_job.py \
 ### 3) Stage 3 LeRobot fine-tune with HLRP policy plugin
 ```bash
 python scripts/submit_job.py \
-  experiment=lerobot_hlrp_smoke \
+  experiment=lerobot_hlrp_smolvla_shared_libero_scratch \
   cluster=lrz_x100 \
-  lerobot.base_policy_ckpt=/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/<STAGE2_CKPT>.ckpt \
+  lerobot.init_mode=artifact \
+  lerobot.stage2_artifact=/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/<STAGE2_ARTIFACT>.pt \
+  lerobot.steps=50 \
+  lerobot.batch_size=2 \
+  lerobot.eval_freq=10 \
+  lerobot.log_freq=10 \
+  lerobot.save_freq=1000 \
   experiment.name=lerobot_stage3_finetune
 ```
 

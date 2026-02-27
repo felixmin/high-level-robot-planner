@@ -101,8 +101,9 @@ Workstation capability reference (for local non-Slurm runs):
   - `scripts/submit_job.py`
 
 ## Stage 3 (LeRobot) Config
-- Smoke config:
-  - `config/experiment/lerobot_hlrp_smoke.yaml`
+- Main train configs:
+  - `config/experiment/lerobot_hlrp_smolvla_shared_libero_scratch.yaml`
+  - `config/experiment/lerobot_hlrp_smolvla_shared_libero_cotrain_scratch.yaml`
 - Uses LeRobot policy plugin editable install from:
   - `lerobot_policy_hlrp`
 
@@ -193,7 +194,7 @@ Typical sequence:
 
 ## Useful Stage 3 Smoke Command Pattern
 Example via submit script:
-- `python scripts/submit_job.py experiment=lerobot_hlrp_smoke cluster=lrz_x100 experiment.name=lerobot_hlrp_smoke_retry`
+- `python scripts/submit_job.py experiment=lerobot_hlrp_smolvla_shared_libero_scratch cluster=lrz_x100 experiment.name=lerobot_hlrp_smolvla_shared_smoke_retry lerobot.steps=50 lerobot.batch_size=2 lerobot.eval_freq=10 lerobot.log_freq=10 lerobot.save_freq=1000`
 
 With W&B enabled:
-- `python scripts/submit_job.py experiment=lerobot_hlrp_smoke cluster=lrz_x100 experiment.name=lerobot_hlrp_smoke_wandb logging.use_wandb=true lerobot.wandb_enable=true`
+- `python scripts/submit_job.py experiment=lerobot_hlrp_smolvla_shared_libero_scratch cluster=lrz_x100 experiment.name=lerobot_hlrp_smolvla_shared_smoke_wandb lerobot.steps=50 lerobot.batch_size=2 lerobot.eval_freq=10 lerobot.log_freq=10 lerobot.save_freq=1000 logging.use_wandb=true lerobot.wandb_enable=true`

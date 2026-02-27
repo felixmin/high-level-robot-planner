@@ -1,6 +1,7 @@
 # @package _global_
 
 defaults:
+  - /model/shared@smolvla_core: smolvla_core
   - /model@model: foundation_smol_flow_shared
   - /data@data: octo_dataset
   - /training@training: vla_lightning

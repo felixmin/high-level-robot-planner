@@ -28,7 +28,8 @@ def test_command_builder_artifact_mode_includes_stage2_artifact(config_dir: str)
         cfg = compose(
             config_name="config",
             overrides=[
-                "experiment=lerobot_hlrp_smolvla_shared_smoke",
+                "experiment=lerobot_hlrp_smolvla_shared_libero_scratch",
+                "lerobot.init_mode=artifact",
                 "lerobot.stage2_artifact=/tmp/stage2.pt",
             ],
         )
@@ -70,7 +71,7 @@ def test_command_builder_requires_non_null_command(config_dir: str) -> None:
         cfg = compose(
             config_name="config",
             overrides=[
-                "experiment=lerobot_hlrp_smolvla_shared_smoke",
+                "experiment=lerobot_hlrp_smolvla_shared_libero_scratch",
                 "lerobot.command=null",
             ],
         )

@@ -41,6 +41,28 @@ def _episodes_arg(value: object) -> str | None:
     return s if s else None
 
 
+def _format_cli_value(value: object) -> str:
+    if isinstance(value, bool):
+        return _to_bool_flag(value)
+    if value is None:
+        return "null"
+    if OmegaConf.is_list(value):
+        return json.dumps(list(value), separators=(",", ":"))
+    if isinstance(value, (list, tuple, dict)):
+        return json.dumps(value, separators=(",", ":"))
+    return str(value)
+
+
+def _flatten_cli_args(prefix: str, value: object, out: list[tuple[str, str]]) -> None:
+    if OmegaConf.is_dict(value) or isinstance(value, dict):
+        for key, sub_value in value.items():
+            key_str = str(key)
+            child_prefix = f"{prefix}.{key_str}" if prefix else key_str
+            _flatten_cli_args(child_prefix, sub_value, out)
+        return
+    out.append((prefix, _format_cli_value(value)))
+
+
 def _run_install_command(
     cmd: list[str],
     *,
@@ -255,14 +277,21 @@ def _lerobot_run_command_from_cfg(cfg: DictConfig) -> list[str]:
     if env_task:
         cmd.append(f"--env.task={env_task}")
 
-    extra_args = OmegaConf.select(cfg, "lerobot.extra_args") or []
-    if not (OmegaConf.is_list(extra_args) or isinstance(extra_args, (list, tuple))):
-        raise ValueError("lerobot.extra_args must be a list of strings")
-    for i, arg in enumerate(extra_args):
-        if not isinstance(arg, str):
-            raise ValueError(f"lerobot.extra_args[{i}] must be a string")
-        if arg.strip():
-            cmd.append(arg.strip())
+    deprecated_extra_args = OmegaConf.select(cfg, "lerobot.extra_args")
+    if deprecated_extra_args is not None:
+        raise ValueError("lerobot.extra_args is removed; use lerobot.args mapping")
+
+    args_overrides = OmegaConf.select(cfg, "lerobot.args")
+    if args_overrides is None:
+        raise ValueError("Missing required lerobot.args mapping")
+    if not (OmegaConf.is_dict(args_overrides) or isinstance(args_overrides, dict)):
+        raise ValueError("lerobot.args must be a mapping")
+    flattened: list[tuple[str, str]] = []
+    _flatten_cli_args("", args_overrides, flattened)
+    for key, value in flattened:
+        if not key:
+            raise ValueError("lerobot.args cannot contain empty keys")
+        cmd.append(f"--{key}={value}")
     return cmd
 
 

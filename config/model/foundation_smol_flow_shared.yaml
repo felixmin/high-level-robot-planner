@@ -8,26 +8,26 @@ backend: smolvla_shared
 training_mode: latent_flow
 
 vla:
-  model_name: HuggingFaceTB/SmolVLM2-500M-Video-Instruct
+  model_name: ${smolvla_core.vla.model_name}
   torch_dtype: bf16  # bf16, fp16, fp32
   trust_remote_code: true
   freeze_vlm: true
-  freeze_vision_encoder: true
-  load_vlm_weights: true
-  attention_mode: cross_attn
-  num_expert_layers: -1
-  num_vlm_layers: 16
-  self_attn_every_n_layers: 2
-  expert_width_multiplier: 0.75
-  add_image_special_tokens: false
-  tokenizer_max_length: 48
-  pad_language_to: longest
-  max_state_dim: 32
-  prefix_length: -1
-  use_gpu_preprocessing: true
-  image_size: [512, 512]
-  camera_keys: null
-  empty_cameras: 0
+  freeze_vision_encoder: ${smolvla_core.vla.freeze_vision_encoder}
+  load_vlm_weights: ${smolvla_core.vla.load_vlm_weights}
+  attention_mode: ${smolvla_core.vla.attention_mode}
+  num_expert_layers: ${smolvla_core.vla.num_expert_layers}
+  num_vlm_layers: ${smolvla_core.vla.num_vlm_layers}
+  self_attn_every_n_layers: ${smolvla_core.vla.self_attn_every_n_layers}
+  expert_width_multiplier: ${smolvla_core.vla.expert_width_multiplier}
+  add_image_special_tokens: ${smolvla_core.vla.add_image_special_tokens}
+  tokenizer_max_length: ${smolvla_core.vla.tokenizer_max_length}
+  pad_language_to: ${smolvla_core.vla.pad_language_to}
+  max_state_dim: ${smolvla_core.vla.max_state_dim}
+  prefix_length: ${smolvla_core.vla.prefix_length}
+  use_gpu_preprocessing: ${smolvla_core.vla.use_gpu_preprocessing}
+  image_size: ${smolvla_core.vla.image_size}
+  camera_keys: ${smolvla_core.vla.camera_keys}
+  empty_cameras: ${smolvla_core.vla.empty_cameras}
   normalization_stats: {}
 
 laq:
@@ -41,16 +41,16 @@ action_tokens:
   token_fmt: "<ACT_{i}>"
 
 flow:
-  action_dim: 32
-  action_chunk_size: 50
-  flow_hidden_dim: 1024
-  flow_steps: 10
+  action_dim: ${smolvla_core.flow.action_dim}
+  action_chunk_size: ${smolvla_core.flow.action_chunk_size}
+  flow_hidden_dim: ${smolvla_core.flow.flow_hidden_dim}
+  flow_steps: ${smolvla_core.flow.flow_steps}
   latent_loss_weight: 1.0
   action_loss_weight: 0.0
-  min_period: 4.0e-3
-  max_period: 4.0
-  time_beta_alpha: 1.5
-  time_beta_beta: 1.0
+  min_period: ${smolvla_core.flow.min_period}
+  max_period: ${smolvla_core.flow.max_period}
+  time_beta_alpha: ${smolvla_core.flow.time_beta_alpha}
+  time_beta_beta: ${smolvla_core.flow.time_beta_beta}
 
 chat:
   system_prompt: "You are a robot policy."

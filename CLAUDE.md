@@ -179,11 +179,13 @@ pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https
 
 ## Stage 3 Notes
 
-- Smoke config: `config/experiment/lerobot_hlrp_smoke.yaml`
+- Main train configs:
+  - `config/experiment/lerobot_hlrp_smolvla_shared_libero_scratch.yaml`
+  - `config/experiment/lerobot_hlrp_smolvla_shared_libero_cotrain_scratch.yaml`
 - Uses LeRobot policy plugin from `lerobot_policy_hlrp/` (editable install).
 - Installer fallback order: `python -m pip` → `uv pip` → `pip` (all `--no-deps -e`). Supports different container layouts (with/without pip in active venv).
-- Example smoke command: `python scripts/submit_job.py experiment=lerobot_hlrp_smoke cluster=lrz_x100 experiment.name=lerobot_hlrp_smoke_retry`
-- With W&B: `python scripts/submit_job.py experiment=lerobot_hlrp_smoke cluster=lrz_x100 experiment.name=lerobot_hlrp_smoke_wandb logging.use_wandb=true lerobot.wandb_enable=true`
+- Example smoke command: `python scripts/submit_job.py experiment=lerobot_hlrp_smolvla_shared_libero_scratch cluster=lrz_x100 experiment.name=lerobot_hlrp_smolvla_shared_smoke_retry lerobot.steps=50 lerobot.batch_size=2 lerobot.eval_freq=10 lerobot.log_freq=10 lerobot.save_freq=1000`
+- With W&B: `python scripts/submit_job.py experiment=lerobot_hlrp_smolvla_shared_libero_scratch cluster=lrz_x100 experiment.name=lerobot_hlrp_smolvla_shared_smoke_wandb lerobot.steps=50 lerobot.batch_size=2 lerobot.eval_freq=10 lerobot.log_freq=10 lerobot.save_freq=1000 logging.use_wandb=true lerobot.wandb_enable=true`
 
 ## Containers
 

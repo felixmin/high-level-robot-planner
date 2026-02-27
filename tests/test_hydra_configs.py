@@ -109,8 +109,6 @@ class TestExperimentConsistency:
     @pytest.mark.parametrize(
         "experiment",
         [
-            "lerobot_hlrp_smolvla_shared_smoke",
-            "lerobot_hlrp_smolvla_shared_libero",
             "lerobot_hlrp_smolvla_shared_libero_scratch",
             "lerobot_hlrp_smolvla_shared_libero_cotrain_scratch",
         ],
