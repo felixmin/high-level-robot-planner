@@ -13,3 +13,17 @@ pip install --no-build-isolation egl_probe
 pip install -e ".[libero]"
 pip uninstall torch torchvision torchaudio
 pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
+
+
+
+## Switch to Olivers file
+After some experiments with the pytorch ngc file where I had issues I moved to olivers file without preinstalled cuda
+
+workflow:
+build on workstation
+push to dockerhub
+docker push felixmin/hlrp:latest
+enroot import docker://... to download it
+enroot create xyz.sqsh to create it
+
+
