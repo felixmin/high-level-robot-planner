@@ -70,6 +70,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         self.dataset_stats = dataset_stats
         self.normalization_stats = dataset_stats
         self.dataset_meta = dataset_meta
+        self._action_supervision_threshold: int | None = None
 
         self._image_keys = self._resolve_image_keys(config)
         self._action_dim = self._infer_action_dim(config)
@@ -164,7 +165,35 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         self._train_forward_calls += 1
         if (step % cycle) < latent_steps:
             return "latent"
-        return str(self.config.alternating_supervised_mode)
+        return "multitask"
+
+    def _resolve_action_supervision_threshold(self) -> int | None:
+        key = str(self.config.action_supervision_key)
+        if key == "index":
+            total = int(self.dataset_meta.total_frames)
+        else:
+            total = int(self.dataset_meta.total_episodes)
+        return int(total * float(self.config.action_supervision_ratio))
+
+    def _action_supervision_mask(
+        self,
+        batch: dict[str, Any],
+        *,
+        batch_size: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        if float(self.config.action_supervision_ratio) == 1.0:
+            return torch.ones((batch_size,), dtype=torch.bool, device=device)
+        if self._action_supervision_threshold is None:
+            self._action_supervision_threshold = self._resolve_action_supervision_threshold()
+        key = str(self.config.action_supervision_key)
+        ids = batch[key]
+        if not torch.is_tensor(ids):
+            ids = torch.as_tensor(ids, device=device)
+        else:
+            ids = ids.to(device=device)
+        ids = ids.reshape(batch_size)
+        return ids < self._action_supervision_threshold
 
     def _conditioning_step_index(self) -> int:
         return 0 if self._uses_latent_targets() else -1
@@ -608,20 +637,39 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         action_loss: torch.Tensor | None = None
         latent_loss: torch.Tensor | None = None
 
+        action_supervised_count = 0
         if active_mode in {"action", "multitask"}:
             target_action = self._extract_action_target(batch)
-            action_loss = self.core.action_flow_loss(
-                batch=foundation_batch,
-                target_actions=target_action,
-                action_is_pad=foundation_batch.action_is_pad,
+            action_keep = self._action_supervision_mask(
+                batch,
+                batch_size=int(target_action.shape[0]),
+                device=target_action.device,
             )
+            action_supervised_count = int(action_keep.sum().item())
+            if action_supervised_count > 0:
+                action_batch = self._slice_foundation_batch(foundation_batch, action_keep)
+                action_loss = self.core.action_flow_loss(
+                    batch=action_batch,
+                    target_actions=target_action[action_keep],
+                    action_is_pad=action_batch.action_is_pad,
+                )
+            else:
+                action_loss = self._zero_loss()
 
-        latent_valid_count = 0
+        latent_valid_pairs = 0
+        latent_supervised_count = 0
         if active_mode in {"latent", "multitask"}:
             target_latent, valid_pair = self._compute_latent_targets_online(batch)
             keep = valid_pair.to(device=target_latent.device, dtype=torch.bool)
-            latent_valid_count = int(keep.sum().item())
-            if latent_valid_count > 0:
+            latent_valid_pairs = int(keep.sum().item())
+            if str(self.config.latent_supervision_scope) == "action_subset":
+                keep = keep & self._action_supervision_mask(
+                    batch,
+                    batch_size=int(keep.shape[0]),
+                    device=target_latent.device,
+                )
+            latent_supervised_count = int(keep.sum().item())
+            if latent_supervised_count > 0:
                 latent_batch = self._slice_foundation_batch(foundation_batch, keep)
                 latent_loss = self.core.latent_flow_loss(
                     batch=latent_batch,
@@ -653,9 +701,13 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         }
         if action_loss is not None:
             metrics["action_loss"] = float(action_loss.detach().cpu())
+            metrics["action_supervised_samples"] = float(action_supervised_count)
+            metrics["action_supervised_fraction"] = float(action_supervised_count / int(target_action.shape[0]))
         if latent_loss is not None:
             metrics["latent_loss"] = float(latent_loss.detach().cpu())
-            metrics["latent_valid_pairs"] = float(latent_valid_count)
+            metrics["latent_valid_pairs"] = float(latent_valid_pairs)
+            metrics["latent_supervised_samples"] = float(latent_supervised_count)
+            metrics["latent_supervised_fraction"] = float(latent_supervised_count / int(target_latent.shape[0]))
         return total, metrics
 
     def predict_action_chunk(self, batch: dict[str, torch.Tensor], **kwargs) -> torch.Tensor:

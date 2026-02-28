@@ -109,8 +109,8 @@ class TestExperimentConsistency:
     @pytest.mark.parametrize(
         "experiment",
         [
-            "lerobot_hlrp_smolvla_shared_libero_scratch",
-            "lerobot_hlrp_smolvla_shared_libero_cotrain_scratch",
+            "stage3_smolvla_libero_scratch",
+            "stage3_smolvla_libero_cotrain_scratch",
         ],
     )
     def test_lerobot_experiments_load(self, config_dir, experiment):

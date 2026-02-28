@@ -28,7 +28,7 @@ def test_command_builder_artifact_mode_includes_stage2_artifact(config_dir: str)
         cfg = compose(
             config_name="config",
             overrides=[
-                "experiment=lerobot_hlrp_smolvla_shared_libero_scratch",
+                "experiment=stage3_smolvla_libero_scratch",
                 "lerobot.init_mode=artifact",
                 "lerobot.stage2_artifact=/tmp/stage2.pt",
             ],
@@ -43,7 +43,7 @@ def test_command_builder_scratch_mode_sets_null_stage2_artifact(config_dir: str)
     with initialize_config_dir(version_base=None, config_dir=config_dir):
         cfg = compose(
             config_name="config",
-            overrides=["experiment=lerobot_hlrp_smolvla_shared_libero_scratch"],
+            overrides=["experiment=stage3_smolvla_libero_scratch"],
         )
     cmd = mod._lerobot_run_command_from_cfg(cfg)
     assert "--policy.init_mode=scratch" in cmd
@@ -56,7 +56,7 @@ def test_command_builder_artifact_mode_requires_stage2_artifact(config_dir: str)
         cfg = compose(
             config_name="config",
             overrides=[
-                "experiment=lerobot_hlrp_smolvla_shared_libero_scratch",
+                "experiment=stage3_smolvla_libero_scratch",
                 "lerobot.init_mode=artifact",
                 "lerobot.stage2_artifact=null",
             ],
@@ -71,7 +71,7 @@ def test_command_builder_requires_non_null_command(config_dir: str) -> None:
         cfg = compose(
             config_name="config",
             overrides=[
-                "experiment=lerobot_hlrp_smolvla_shared_libero_scratch",
+                "experiment=stage3_smolvla_libero_scratch",
                 "lerobot.command=null",
             ],
         )
