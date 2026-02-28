@@ -15,10 +15,10 @@ class HLRPSmolVLASharedConfig(PreTrainedConfig):
     stage3_training_mode: str = MISSING
     action_loss_weight: float = MISSING
     latent_loss_weight: float = MISSING
-    alternating_latent_steps: int | None = None
-    action_supervision_ratio: float = MISSING
-    action_supervision_key: str = MISSING
-    latent_supervision_scope: str = MISSING
+    alternating_latent_steps_per_action_step: int | None = None
+    action_subset_ratio: float = MISSING
+    action_subset_key: str = MISSING
+    latent_scope: str = MISSING
 
     n_obs_steps: int = 1
     chunk_size: int = 50
@@ -96,19 +96,19 @@ class HLRPSmolVLASharedConfig(PreTrainedConfig):
             raise ValueError(f"action_loss_weight must be > 0, got {self.action_loss_weight}")
         if self.latent_loss_weight <= 0.0:
             raise ValueError(f"latent_loss_weight must be > 0, got {self.latent_loss_weight}")
-        if self.action_supervision_ratio <= 0.0 or self.action_supervision_ratio > 1.0:
+        if self.action_subset_ratio <= 0.0 or self.action_subset_ratio > 1.0:
             raise ValueError(
-                f"action_supervision_ratio must be in (0, 1], got {self.action_supervision_ratio}"
+                f"action_subset_ratio must be in (0, 1], got {self.action_subset_ratio}"
             )
-        if self.action_supervision_key not in {"index", "episode_index"}:
+        if self.action_subset_key not in {"index", "episode_index"}:
             raise ValueError(
-                "action_supervision_key must be one of {'index','episode_index'}, "
-                f"got {self.action_supervision_key!r}"
+                "action_subset_key must be one of {'index','episode_index'}, "
+                f"got {self.action_subset_key!r}"
             )
-        if self.latent_supervision_scope not in {"all", "action_subset"}:
+        if self.latent_scope not in {"all", "action_subset"}:
             raise ValueError(
-                "latent_supervision_scope must be one of {'all','action_subset'}, "
-                f"got {self.latent_supervision_scope!r}"
+                "latent_scope must be one of {'all','action_subset'}, "
+                f"got {self.latent_scope!r}"
             )
         if self.n_obs_steps < 1:
             raise ValueError(f"n_obs_steps must be >= 1, got {self.n_obs_steps}.")
@@ -137,8 +137,14 @@ class HLRPSmolVLASharedConfig(PreTrainedConfig):
                 )
 
         if self.stage3_training_mode == "alternating":
-            if self.alternating_latent_steps is None or self.alternating_latent_steps < 1:
-                raise ValueError("alternating_latent_steps must be >= 1 when stage3_training_mode='alternating'")
+            if (
+                self.alternating_latent_steps_per_action_step is None
+                or self.alternating_latent_steps_per_action_step < 1
+            ):
+                raise ValueError(
+                    "alternating_latent_steps_per_action_step must be >= 1 when "
+                    "stage3_training_mode='alternating'"
+                )
 
     @property
     def observation_delta_indices(self) -> list[int]:

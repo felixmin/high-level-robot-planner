@@ -70,9 +70,9 @@ Fail-fast behavior:
 1. `init_mode=artifact`:
    run Stage 2 with `model.backend=smolvla_shared`, `model.flow.action_dim`, and `model.flow.action_chunk_size`.
 2. `init_mode=artifact`:
-   use `lerobot.stage2_artifact=<artifact_path>` and run Stage 3.
+   use `lerobot.policy.stage2_artifact=<artifact_path>` and run Stage 3.
 3. `init_mode=scratch`:
-   set `lerobot.stage2_artifact=null` and run Stage 3.
+   set `lerobot.policy.stage2_artifact=null` and run Stage 3.
 
 ## TODO
 

@@ -41,8 +41,8 @@ action_tokens:
   token_fmt: "<ACT_{i}>"
 
 flow:
-  action_dim: ${smolvla_core.flow.action_dim}
-  action_chunk_size: ${smolvla_core.flow.action_chunk_size}
+  action_dim: ${smolvla_core.flow.max_action_dim}
+  action_chunk_size: ${smolvla_core.flow.chunk_size}
   flow_hidden_dim: ${smolvla_core.flow.flow_hidden_dim}
   flow_steps: ${smolvla_core.flow.flow_steps}
   latent_loss_weight: 1.0

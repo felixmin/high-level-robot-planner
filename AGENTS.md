@@ -180,7 +180,7 @@ Typical sequence:
 
 ## W&B and Hugging Face Auth
 - W&B:
-  - Enable with `logging.use_wandb=true lerobot.wandb_enable=true`
+  - Enable with `logging.use_wandb=true lerobot.wandb.enable=true`
   - In current setup, auth works from user credentials on cluster (e.g. `~/.netrc`) when accessible in runtime environment.
 - Hugging Face:
   - `submit_job.py` looks for `~/.huggingface/token` and wires `HF_TOKEN` / `HUGGINGFACE_HUB_TOKEN` for jobs.
@@ -194,7 +194,7 @@ Typical sequence:
 
 ## Useful Stage 3 Smoke Command Pattern
 Example via submit script:
-- `python scripts/submit_job.py experiment=lerobot_hlrp_smolvla_shared_libero_scratch cluster=lrz_x100 experiment.name=lerobot_hlrp_smolvla_shared_smoke_retry lerobot.steps=50 lerobot.batch_size=2 lerobot.eval_freq=10 lerobot.log_freq=10 lerobot.save_freq=1000`
+- `python scripts/submit_job.py experiment=stage3_hlrp_libero_action_scratch cluster=lrz_x100 experiment.name=stage3_hlrp_libero_smoke_retry lerobot.steps=50 lerobot.batch_size=2 lerobot.eval.freq=10 lerobot.log_freq=10 lerobot.save_freq=1000`
 
 With W&B enabled:
-- `python scripts/submit_job.py experiment=lerobot_hlrp_smolvla_shared_libero_scratch cluster=lrz_x100 experiment.name=lerobot_hlrp_smolvla_shared_smoke_wandb lerobot.steps=50 lerobot.batch_size=2 lerobot.eval_freq=10 lerobot.log_freq=10 lerobot.save_freq=1000 logging.use_wandb=true lerobot.wandb_enable=true`
+- `python scripts/submit_job.py experiment=stage3_hlrp_libero_action_scratch cluster=lrz_x100 experiment.name=stage3_hlrp_libero_smoke_wandb lerobot.steps=50 lerobot.batch_size=2 lerobot.eval.freq=10 lerobot.log_freq=10 lerobot.save_freq=1000 logging.use_wandb=true lerobot.wandb.enable=true`

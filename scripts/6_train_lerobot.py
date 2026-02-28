@@ -63,6 +63,27 @@ def _flatten_cli_args(prefix: str, value: object, out: list[tuple[str, str]]) ->
     out.append((prefix, _format_cli_value(value)))
 
 
+def _append_group_args(
+    cmd: list[str],
+    cfg: DictConfig,
+    *,
+    cfg_path: str,
+    cli_prefix: str,
+    skip_keys: set[str] | None = None,
+) -> None:
+    group = OmegaConf.select(cfg, cfg_path)
+    if group is None:
+        return
+    entries: list[tuple[str, str]] = []
+    for key, value in group.items():
+        key_str = str(key)
+        if skip_keys is not None and key_str in skip_keys:
+            continue
+        _flatten_cli_args(f"{cli_prefix}.{key_str}", value, entries)
+    for key, value in entries:
+        cmd.append(f"--{key}={value}")
+
+
 def _run_install_command(
     cmd: list[str],
     *,
@@ -191,32 +212,32 @@ def _install_editable_policy(
 def _lerobot_run_command_from_cfg(cfg: DictConfig) -> list[str]:
     train_cmd_raw = OmegaConf.select(cfg, "lerobot.command")
 
-    policy_type = OmegaConf.select(cfg, "lerobot.policy_type")
-    policy_repo_id = OmegaConf.select(cfg, "lerobot.policy_repo_id")
-    init_mode = OmegaConf.select(cfg, "lerobot.init_mode")
-    dataset_repo_id = OmegaConf.select(cfg, "lerobot.dataset_repo_id")
+    policy_type = OmegaConf.select(cfg, "lerobot.policy.type")
+    policy_repo_id = OmegaConf.select(cfg, "lerobot.policy.repo_id")
+    init_mode = OmegaConf.select(cfg, "lerobot.policy.init_mode")
+    dataset_repo_id = OmegaConf.select(cfg, "lerobot.dataset.repo_id")
     output_dir = OmegaConf.select(cfg, "lerobot.output_dir")
     job_name = OmegaConf.select(cfg, "lerobot.job_name")
     steps = OmegaConf.select(cfg, "lerobot.steps")
     batch_size = OmegaConf.select(cfg, "lerobot.batch_size")
     num_workers = OmegaConf.select(cfg, "lerobot.num_workers")
-    eval_freq = OmegaConf.select(cfg, "lerobot.eval_freq")
-    eval_batch_size = OmegaConf.select(cfg, "lerobot.eval_batch_size")
+    eval_freq = OmegaConf.select(cfg, "lerobot.eval.freq")
+    eval_batch_size = OmegaConf.select(cfg, "lerobot.eval.batch_size")
     log_freq = OmegaConf.select(cfg, "lerobot.log_freq")
     save_freq = OmegaConf.select(cfg, "lerobot.save_freq")
-    stage2_artifact = OmegaConf.select(cfg, "lerobot.stage2_artifact")
+    stage2_artifact = OmegaConf.select(cfg, "lerobot.policy.stage2_artifact")
 
     required = {
         "lerobot.command": train_cmd_raw,
-        "lerobot.policy_type": policy_type,
-        "lerobot.policy_repo_id": policy_repo_id,
-        "lerobot.dataset_repo_id": dataset_repo_id,
+        "lerobot.policy.type": policy_type,
+        "lerobot.policy.repo_id": policy_repo_id,
+        "lerobot.dataset.repo_id": dataset_repo_id,
         "lerobot.output_dir": output_dir,
         "lerobot.job_name": job_name,
         "lerobot.steps": steps,
         "lerobot.batch_size": batch_size,
         "lerobot.num_workers": num_workers,
-        "lerobot.eval_freq": eval_freq,
+        "lerobot.eval.freq": eval_freq,
         "lerobot.log_freq": log_freq,
         "lerobot.save_freq": save_freq,
     }
@@ -231,7 +252,7 @@ def _lerobot_run_command_from_cfg(cfg: DictConfig) -> list[str]:
         train_cmd,
         f"--policy.type={policy_type}",
         f"--policy.repo_id={policy_repo_id}",
-        f"--policy.push_to_hub={_to_bool_flag(OmegaConf.select(cfg, 'lerobot.push_to_hub') is True)}",
+        f"--policy.push_to_hub={_to_bool_flag(OmegaConf.select(cfg, 'lerobot.policy.push_to_hub') is True)}",
         f"--dataset.repo_id={dataset_repo_id}",
         f"--output_dir={output_dir}",
         f"--job_name={job_name}",
@@ -241,57 +262,82 @@ def _lerobot_run_command_from_cfg(cfg: DictConfig) -> list[str]:
         f"--eval_freq={int(eval_freq)}",
         f"--log_freq={int(log_freq)}",
         f"--save_freq={int(save_freq)}",
-        f"--wandb.enable={_to_bool_flag(OmegaConf.select(cfg, 'lerobot.wandb_enable') is True)}",
+        f"--wandb.enable={_to_bool_flag(OmegaConf.select(cfg, 'lerobot.wandb.enable') is True)}",
     ]
 
     if str(policy_type) == "hlrp_smolvla_shared":
         if init_mode is None:
-            raise ValueError("lerobot.init_mode is required for policy_type=hlrp_smolvla_shared")
+            raise ValueError("lerobot.policy.init_mode is required for policy_type=hlrp_smolvla_shared")
         cmd.append(f"--policy.init_mode={init_mode}")
         if str(init_mode) == "artifact":
             if stage2_artifact is None:
-                raise ValueError("lerobot.stage2_artifact is required when lerobot.init_mode=artifact")
+                raise ValueError(
+                    "lerobot.policy.stage2_artifact is required when lerobot.policy.init_mode=artifact"
+                )
             cmd.append(f"--policy.stage2_artifact={stage2_artifact}")
         elif str(init_mode) == "scratch":
             if stage2_artifact is not None:
-                raise ValueError("lerobot.stage2_artifact must be null when lerobot.init_mode=scratch")
+                raise ValueError(
+                    "lerobot.policy.stage2_artifact must be null when lerobot.policy.init_mode=scratch"
+                )
             cmd.append("--policy.stage2_artifact=null")
         else:
-            raise ValueError(f"Unsupported lerobot.init_mode={init_mode!r}; expected 'artifact' or 'scratch'")
+            raise ValueError(
+                f"Unsupported lerobot.policy.init_mode={init_mode!r}; expected 'artifact' or 'scratch'"
+            )
 
     if eval_batch_size is not None:
         cmd.append(f"--eval.batch_size={int(eval_batch_size)}")
 
-    policy_device = OmegaConf.select(cfg, "lerobot.policy_device")
+    policy_device = OmegaConf.select(cfg, "lerobot.policy.device")
     if policy_device is not None:
         cmd.append(f"--policy.device={policy_device}")
 
-    episodes = _episodes_arg(OmegaConf.select(cfg, "lerobot.dataset_episodes"))
+    episodes = _episodes_arg(OmegaConf.select(cfg, "lerobot.dataset.episodes"))
     if episodes is not None:
         cmd.append(f"--dataset.episodes={episodes}")
 
-    env_type = OmegaConf.select(cfg, "lerobot.env_type")
+    env_type = OmegaConf.select(cfg, "lerobot.env.type")
     if env_type:
         cmd.append(f"--env.type={env_type}")
-    env_task = OmegaConf.select(cfg, "lerobot.env_task")
+    env_task = OmegaConf.select(cfg, "lerobot.env.task")
     if env_task:
         cmd.append(f"--env.task={env_task}")
 
-    deprecated_extra_args = OmegaConf.select(cfg, "lerobot.extra_args")
-    if deprecated_extra_args is not None:
-        raise ValueError("lerobot.extra_args is removed; use lerobot.args mapping")
+    _append_group_args(
+        cmd,
+        cfg,
+        cfg_path="lerobot.policy",
+        cli_prefix="policy",
+        skip_keys={"type", "repo_id", "push_to_hub", "device", "init_mode", "stage2_artifact"},
+    )
+    _append_group_args(
+        cmd,
+        cfg,
+        cfg_path="lerobot.dataset",
+        cli_prefix="dataset",
+        skip_keys={"repo_id", "episodes"},
+    )
+    _append_group_args(
+        cmd,
+        cfg,
+        cfg_path="lerobot.env",
+        cli_prefix="env",
+        skip_keys={"type", "task"},
+    )
+    _append_group_args(
+        cmd,
+        cfg,
+        cfg_path="lerobot.eval",
+        cli_prefix="eval",
+        skip_keys={"freq", "batch_size"},
+    )
+    _append_group_args(cmd, cfg, cfg_path="lerobot.optimizer", cli_prefix="optimizer")
+    _append_group_args(cmd, cfg, cfg_path="lerobot.scheduler", cli_prefix="scheduler")
 
-    args_overrides = OmegaConf.select(cfg, "lerobot.args")
-    if args_overrides is None:
-        raise ValueError("Missing required lerobot.args mapping")
-    if not (OmegaConf.is_dict(args_overrides) or isinstance(args_overrides, dict)):
-        raise ValueError("lerobot.args must be a mapping")
-    flattened: list[tuple[str, str]] = []
-    _flatten_cli_args("", args_overrides, flattened)
-    for key, value in flattened:
-        if not key:
-            raise ValueError("lerobot.args cannot contain empty keys")
-        cmd.append(f"--{key}={value}")
+    use_policy_training_preset = OmegaConf.select(cfg, "lerobot.use_policy_training_preset")
+    if use_policy_training_preset is not None:
+        cmd.append(f"--use_policy_training_preset={_to_bool_flag(use_policy_training_preset)}")
     return cmd
 
 
@@ -334,15 +380,15 @@ def main(cfg: DictConfig) -> None:
     env["PYTHONPATH"] = (
         packages_path if not existing_pythonpath else f"{packages_path}:{existing_pythonpath}"
     )
-    env_overrides = OmegaConf.select(cfg, "lerobot.env") or {}
+    env_overrides = OmegaConf.select(cfg, "lerobot.shell_env") or {}
     if not OmegaConf.is_dict(env_overrides):
-        raise ValueError("lerobot.env must be a mapping of environment variables")
+        raise ValueError("lerobot.shell_env must be a mapping of environment variables")
     for k, v in env_overrides.items():
         if v is None:
             continue
         env[str(k)] = str(v)
 
-    install_editable = OmegaConf.select(cfg, "lerobot.install_policy_editable")
+    install_editable = OmegaConf.select(cfg, "lerobot.install_editable")
     if install_editable:
         editable_path = Path(str(install_editable))
         if not editable_path.is_absolute():

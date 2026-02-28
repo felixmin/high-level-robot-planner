@@ -18,9 +18,9 @@ def test_artifact_mode_requires_stage2_artifact() -> None:
             stage3_training_mode="action",
             action_loss_weight=1.0,
             latent_loss_weight=1.0,
-            action_supervision_ratio=1.0,
-            action_supervision_key="index",
-            latent_supervision_scope="all",
+            action_subset_ratio=1.0,
+            action_subset_key="index",
+            latent_scope="all",
             stage2_artifact=None,
         )
 
@@ -32,9 +32,9 @@ def test_scratch_mode_requires_null_stage2_artifact() -> None:
             stage3_training_mode="action",
             action_loss_weight=1.0,
             latent_loss_weight=1.0,
-            action_supervision_ratio=1.0,
-            action_supervision_key="index",
-            latent_supervision_scope="all",
+            action_subset_ratio=1.0,
+            action_subset_key="index",
+            latent_scope="all",
             stage2_artifact=Path("/tmp/art.pt"),
         )
 
@@ -45,9 +45,9 @@ def test_artifact_mode_with_artifact_is_valid() -> None:
         stage3_training_mode="action",
         action_loss_weight=1.0,
         latent_loss_weight=1.0,
-        action_supervision_ratio=1.0,
-        action_supervision_key="index",
-        latent_supervision_scope="all",
+        action_subset_ratio=1.0,
+        action_subset_key="index",
+        latent_scope="all",
         stage2_artifact=Path("/tmp/art.pt"),
     )
     assert cfg.init_mode == "artifact"
@@ -60,9 +60,9 @@ def test_scratch_mode_with_null_artifact_is_valid() -> None:
         stage3_training_mode="action",
         action_loss_weight=1.0,
         latent_loss_weight=1.0,
-        action_supervision_ratio=1.0,
-        action_supervision_key="index",
-        latent_supervision_scope="all",
+        action_subset_ratio=1.0,
+        action_subset_key="index",
+        latent_scope="all",
         stage2_artifact=None,
     )
     assert cfg.init_mode == "scratch"
@@ -76,23 +76,23 @@ def test_latent_mode_requires_laq_fields() -> None:
             stage3_training_mode="latent",
             action_loss_weight=1.0,
             latent_loss_weight=1.0,
-            action_supervision_ratio=1.0,
-            action_supervision_key="index",
-            latent_supervision_scope="all",
+            action_subset_ratio=1.0,
+            action_subset_key="index",
+            latent_scope="all",
             stage2_artifact=None,
         )
 
 
 def test_alternating_mode_requires_schedule() -> None:
-    with pytest.raises(ValueError, match="alternating_latent_steps"):
+    with pytest.raises(ValueError, match="alternating_latent_steps_per_action_step"):
         HLRPSmolVLASharedConfig(
             init_mode="scratch",
             stage3_training_mode="alternating",
             action_loss_weight=1.0,
             latent_loss_weight=1.0,
-            action_supervision_ratio=1.0,
-            action_supervision_key="index",
-            latent_supervision_scope="all",
+            action_subset_ratio=1.0,
+            action_subset_key="index",
+            latent_scope="all",
             stage2_artifact=None,
             laq_checkpoint_path=Path("/tmp/laq.ckpt"),
             laq_future_frames=10,
@@ -100,43 +100,43 @@ def test_alternating_mode_requires_schedule() -> None:
         )
 
 
-def test_action_supervision_ratio_must_be_valid() -> None:
-    with pytest.raises(ValueError, match="action_supervision_ratio"):
+def test_action_subset_ratio_must_be_valid() -> None:
+    with pytest.raises(ValueError, match="action_subset_ratio"):
         HLRPSmolVLASharedConfig(
             init_mode="scratch",
             stage3_training_mode="action",
             action_loss_weight=1.0,
             latent_loss_weight=1.0,
-            action_supervision_ratio=0.0,
-            action_supervision_key="index",
-            latent_supervision_scope="all",
+            action_subset_ratio=0.0,
+            action_subset_key="index",
+            latent_scope="all",
             stage2_artifact=None,
         )
 
 
-def test_action_supervision_key_must_be_valid() -> None:
-    with pytest.raises(ValueError, match="action_supervision_key"):
+def test_action_subset_key_must_be_valid() -> None:
+    with pytest.raises(ValueError, match="action_subset_key"):
         HLRPSmolVLASharedConfig(
             init_mode="scratch",
             stage3_training_mode="action",
             action_loss_weight=1.0,
             latent_loss_weight=1.0,
-            action_supervision_ratio=1.0,
-            action_supervision_key="task_index",
-            latent_supervision_scope="all",
+            action_subset_ratio=1.0,
+            action_subset_key="task_index",
+            latent_scope="all",
             stage2_artifact=None,
         )
 
 
-def test_latent_supervision_scope_must_be_valid() -> None:
-    with pytest.raises(ValueError, match="latent_supervision_scope"):
+def test_latent_scope_must_be_valid() -> None:
+    with pytest.raises(ValueError, match="latent_scope"):
         HLRPSmolVLASharedConfig(
             init_mode="scratch",
             stage3_training_mode="action",
             action_loss_weight=1.0,
             latent_loss_weight=1.0,
-            action_supervision_ratio=1.0,
-            action_supervision_key="index",
-            latent_supervision_scope="subset",
+            action_subset_ratio=1.0,
+            action_subset_key="index",
+            latent_scope="subset",
             stage2_artifact=None,
         )

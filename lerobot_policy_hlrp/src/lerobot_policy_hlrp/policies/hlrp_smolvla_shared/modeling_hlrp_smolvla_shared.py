@@ -159,7 +159,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         mode = str(self.config.stage3_training_mode)
         if mode != "alternating":
             return mode
-        latent_steps = int(self.config.alternating_latent_steps)
+        latent_steps = int(self.config.alternating_latent_steps_per_action_step)
         cycle = latent_steps + 1
         step = self._train_forward_calls
         self._train_forward_calls += 1
@@ -168,12 +168,12 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         return "multitask"
 
     def _resolve_action_supervision_threshold(self) -> int | None:
-        key = str(self.config.action_supervision_key)
+        key = str(self.config.action_subset_key)
         if key == "index":
             total = int(self.dataset_meta.total_frames)
         else:
             total = int(self.dataset_meta.total_episodes)
-        return int(total * float(self.config.action_supervision_ratio))
+        return int(total * float(self.config.action_subset_ratio))
 
     def _action_supervision_mask(
         self,
@@ -182,11 +182,11 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         batch_size: int,
         device: torch.device,
     ) -> torch.Tensor:
-        if float(self.config.action_supervision_ratio) == 1.0:
+        if float(self.config.action_subset_ratio) == 1.0:
             return torch.ones((batch_size,), dtype=torch.bool, device=device)
         if self._action_supervision_threshold is None:
             self._action_supervision_threshold = self._resolve_action_supervision_threshold()
-        key = str(self.config.action_supervision_key)
+        key = str(self.config.action_subset_key)
         ids = batch[key]
         if not torch.is_tensor(ids):
             ids = torch.as_tensor(ids, device=device)
@@ -662,7 +662,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
             target_latent, valid_pair = self._compute_latent_targets_online(batch)
             keep = valid_pair.to(device=target_latent.device, dtype=torch.bool)
             latent_valid_pairs = int(keep.sum().item())
-            if str(self.config.latent_supervision_scope) == "action_subset":
+            if str(self.config.latent_scope) == "action_subset":
                 keep = keep & self._action_supervision_mask(
                     batch,
                     batch_size=int(keep.shape[0]),

@@ -18,8 +18,8 @@ vla:
   empty_cameras: 0
 
 flow:
-  action_dim: 32
-  action_chunk_size: 50
+  max_action_dim: 32
+  chunk_size: 50
   flow_hidden_dim: 1024
   flow_steps: 10
   min_period: 4.0e-3
@@ -28,4 +28,4 @@ flow:
   time_beta_beta: 1.0
 
 latent:
-  vector_dim: 32
+  latent_vector_dim: 32

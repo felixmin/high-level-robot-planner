@@ -55,8 +55,8 @@ Config:
 
 Optional Stage-2 checkpoint handoff, depending on policy init mode:
 
-- `lerobot.init_mode=artifact`: requires `lerobot.stage2_artifact=/path/to/smolvla_shared_stage2_artifact.pt`
-- `lerobot.init_mode=scratch`: requires `lerobot.stage2_artifact=null`
+- `lerobot.policy.init_mode=artifact`: requires `lerobot.policy.stage2_artifact=/path/to/smolvla_shared_stage2_artifact.pt`
+- `lerobot.policy.init_mode=scratch`: requires `lerobot.policy.stage2_artifact=null`
 
 ### Stage 2 -> Stage 3 Artifact Contract
 
@@ -78,11 +78,11 @@ Example:
 python scripts/submit_job.py \
   experiment=lerobot_hlrp_smolvla_shared_libero_scratch \
   cluster=lrz_x100 \
-  lerobot.init_mode=artifact \
-  lerobot.stage2_artifact=/dss/.../artifacts/smolvla_shared_stage2_artifact.pt \
+  lerobot.policy.init_mode=artifact \
+  lerobot.policy.stage2_artifact=/dss/.../artifacts/smolvla_shared_stage2_artifact.pt \
   lerobot.steps=50 \
   lerobot.batch_size=2 \
-  lerobot.eval_freq=10 \
+  lerobot.eval.freq=10 \
   lerobot.log_freq=10 \
   lerobot.save_freq=1000 \
   experiment.name=lerobot_hlrp_smolvla_shared_smoke

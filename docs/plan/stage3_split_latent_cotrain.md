@@ -39,10 +39,10 @@ So we can derive a deterministic per-sample supervision mask in policy code with
 
 - Keep existing `stage3_training_mode` semantics unchanged.
 - Add required policy config fields:
-  - `action_supervision_ratio` in `(0, 1]`
-  - `action_supervision_key` in `{index, episode_index}`
+  - `action_subset_ratio` in `(0, 1]`
+  - `action_subset_key` in `{index, episode_index}`
 - Add required latent-branch scope field:
-  - `latent_supervision_scope` in `{all, action_subset}`
+  - `latent_scope` in `{all, action_subset}`
 - Implement **prefix split** semantics:
   - supervised if `batch[key] < floor(ratio * total_count)`
   - total_count = `dataset_meta.total_frames` for `index`
@@ -72,17 +72,17 @@ flowchart TD
 
 ## Config Surface
 
-Policy fields (Hydra -> `lerobot.args.policy.*`):
-- `action_supervision_ratio`: float
-- `action_supervision_key`: `index` or `episode_index`
-- `latent_supervision_scope`: `all` or `action_subset`
+Policy fields (Hydra -> `lerobot.policy.*`):
+- `action_subset_ratio`: float
+- `action_subset_key`: `index` or `episode_index`
+- `latent_scope`: `all` or `action_subset`
 
 Recommended values:
 - standard full cotrain: `ratio=1.0`
 - 10% supervised split by frame index: `ratio=0.1`, `key=index`
 - 10% supervised split by episodes: `ratio=0.1`, `key=episode_index`
-- apples-to-apples latent scope: `latent_supervision_scope=action_subset`
-- semi-supervised latent scope: `latent_supervision_scope=all`
+- apples-to-apples latent scope: `latent_scope=action_subset`
+- semi-supervised latent scope: `latent_scope=all`
 
 ## File-Level Change Plan
 
@@ -96,8 +96,8 @@ Recommended values:
 - apply mask before `core.action_flow_loss(...)`
 - log metrics: selected action samples and fraction
 
-3. `config/experiment/stage3_smolvla_libero_scratch.yaml`
-4. `config/experiment/stage3_smolvla_libero_cotrain_scratch.yaml`
+3. `config/experiment/stage3_hlrp_libero_action_scratch.yaml`
+4. `config/experiment/stage3_hlrp_libero_multitask_scratch.yaml`
 - set explicit policy fields (`ratio`, `key`)
 
 5. tests

@@ -216,7 +216,7 @@ def test_stage3_policy_inference_batch_allows_missing_image_is_pad() -> None:
 def test_stage3_action_supervision_mask_prefix_ratio() -> None:
     policy = object.__new__(HLRPSmolVLASharedPolicy)
     torch.nn.Module.__init__(policy)
-    policy.config = SimpleNamespace(action_supervision_ratio=0.4, action_supervision_key="index")
+    policy.config = SimpleNamespace(action_subset_ratio=0.4, action_subset_key="index")
     policy.dataset_meta = SimpleNamespace(total_frames=10, total_episodes=5)
     policy._action_supervision_threshold = None
 
@@ -233,7 +233,7 @@ def test_stage3_action_supervision_mask_prefix_ratio() -> None:
 def test_stage3_action_supervision_mask_ratio_one_selects_all() -> None:
     policy = object.__new__(HLRPSmolVLASharedPolicy)
     torch.nn.Module.__init__(policy)
-    policy.config = SimpleNamespace(action_supervision_ratio=1.0, action_supervision_key="index")
+    policy.config = SimpleNamespace(action_subset_ratio=1.0, action_subset_key="index")
     policy.dataset_meta = None
     policy._action_supervision_threshold = None
 
