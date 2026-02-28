@@ -31,6 +31,7 @@ lerobot:
 
   shell_env:
     MUJOCO_GL: egl
+    LIBERO_CONFIG_PATH: ${logging.root_dir}/cache/libero_config
     HF_HOME: /mnt/data/workspace/cache/huggingface
     HF_HUB_CACHE: /mnt/data/workspace/cache/huggingface/hub
     HF_DATASETS_CACHE: /mnt/data/workspace/cache/huggingface/datasets
