@@ -1,4 +1,7 @@
-# High-Level Robot Planner
+This code is build on [LAPA](https://github.com/LatentActionPretraining/LAPA).
+
+# Robot-learning from Video
+
 
 A three-stage robot learning system that learns policies from videos without action labels.
 
@@ -97,6 +100,32 @@ ruff check packages/ scripts/ tests/
 Python 3.12 with PyTorch 2.9.1. Key packages: pytorch-lightning, transformers, webdataset, hydra-core, wandb, accelerate.
 
 See `environment.yml` for complete dependency list.
+
+## Learning Robotic Action from Human Video - Hardware Setup
+
+Human demonstration data is significantly easier and more cost-effective to collect than traditional robot data, and it is widely available across the internet. By engineering a setup to record humans performing everyday actions, we can use this rich dataset to train a Franka Emika robot. Ultimately, this greater data diversity allows the robot to learn new tasks more efficiently and achieve better generalization in real-world environments.
+
+### Demonstrations
+
+**Human Demonstration:**
+
+
+
+
+https://github.com/user-attachments/assets/c85271ec-d35f-4310-ac96-08a0e8d20476
+
+
+
+
+**Franka Emika Robot Execution:**
+
+
+
+
+https://github.com/user-attachments/assets/0cc694b1-ff8c-406d-b5a7-a6815fe8c1af
+
+
+
 
 ## Citation
 
