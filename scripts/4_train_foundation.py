@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 
 import hydra
-from hydra.core.hydra_config import HydraConfig
 import lightning.pytorch as pl
 import torch
 import wandb
@@ -25,10 +24,10 @@ workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
 from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
-from common.cache_env import configure_cache_env, resolve_cache_dir
 from common.data_factory import create_datamodule
 from common.logging import set_seed
-from common.unified_logging import resolve_runs_dir, setup_unified_logging, setup_wandb_with_unified_paths
+from common.run_context import setup_run_context
+from common.unified_logging import setup_wandb_with_unified_paths
 from foundation.action_tokens import ActionTokenConfig
 from foundation.callbacks import (
     ThroughputLoggingCallback,
@@ -61,31 +60,11 @@ def main(cfg: DictConfig):
     if wandb.run:
         wandb.finish()
 
-    # Setup unified logging
-    runs_dir = None
-    try:
-        if HydraConfig.initialized():
-            runs_dir = Path(str(HydraConfig.get().runtime.output_dir))
-    except Exception:
-        runs_dir = None
-    if runs_dir is None:
-        runs_dir = resolve_runs_dir(
-            logging_root_dir=cfg.logging.root_dir,
-            logging_runs_dir=cfg.logging.runs_dir,
-            workspace_root=workspace_root,
-            experiment_name=OmegaConf.select(cfg, "experiment.name"),
-        )
-
-    logger, output_dir = setup_unified_logging(
-        runs_dir=runs_dir,
-        job_id=cfg.logging.job_id,
-        log_level=cfg.logging.level,
+    logger, output_dir = setup_run_context(
+        cfg=cfg,
+        workspace_root=workspace_root,
         logger_name="foundation.training",
     )
-
-    cache_dir = resolve_cache_dir(cfg=cfg, workspace_root=workspace_root)
-    if cache_dir is not None:
-        configure_cache_env(cache_dir=cache_dir, logger=logger)
 
     logger.info("=" * 80)
     logger.info("LAPA Stage 2: Foundation VLA Training (Action Tokens)")

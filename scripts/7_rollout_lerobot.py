@@ -17,14 +17,12 @@ import sys
 from pathlib import Path
 
 import hydra
-from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
-from common.cache_env import configure_cache_env, resolve_cache_dir
-from common.unified_logging import resolve_runs_dir, setup_unified_logging
+from common.run_context import setup_run_context
 
 
 def _to_bool_flag(value: object) -> str:
@@ -201,24 +199,9 @@ def _command_from_cfg(cfg: DictConfig) -> list[str]:
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
-    runs_dir = None
-    try:
-        if HydraConfig.initialized():
-            runs_dir = Path(str(HydraConfig.get().runtime.output_dir))
-    except Exception:
-        runs_dir = None
-    if runs_dir is None:
-        runs_dir = resolve_runs_dir(
-            logging_root_dir=OmegaConf.select(cfg, "logging.root_dir"),
-            logging_runs_dir=OmegaConf.select(cfg, "logging.runs_dir"),
-            workspace_root=workspace_root,
-            experiment_name=OmegaConf.select(cfg, "experiment.name"),
-        )
-
-    logger, _ = setup_unified_logging(
-        runs_dir=runs_dir,
-        job_id=OmegaConf.select(cfg, "logging.job_id"),
-        log_level=str(OmegaConf.select(cfg, "logging.level") or "INFO"),
+    logger, _ = setup_run_context(
+        cfg=cfg,
+        workspace_root=workspace_root,
         logger_name="lerobot.rollout",
     )
 
@@ -227,10 +210,6 @@ def main(cfg: DictConfig) -> None:
     logger.info("=" * 80)
     logger.info("\nConfiguration:")
     logger.info(OmegaConf.to_yaml(cfg))
-
-    cache_dir = resolve_cache_dir(cfg=cfg, workspace_root=workspace_root)
-    if cache_dir is not None:
-        configure_cache_env(cache_dir=cache_dir, logger=logger)
 
     env = os.environ.copy()
     packages_path = str(workspace_root / "packages")

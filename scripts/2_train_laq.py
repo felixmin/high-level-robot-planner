@@ -21,7 +21,6 @@ workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
 import hydra
-from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 import torch
 import wandb
@@ -32,10 +31,10 @@ from lightning.fabric.plugins.io.torch_io import TorchCheckpointIO
 
 from common.data_factory import create_datamodule
 from common.callbacks import DatasetUsageLoggerCallback, ProgressLoggerCallback
-from common.cache_env import configure_cache_env, resolve_cache_dir
+from common.run_context import setup_run_context
 from foundation.callbacks import ThroughputLoggingCallback, ThroughputLoggingConfig
 from common.logging import set_seed, count_parameters
-from common.unified_logging import resolve_runs_dir, setup_unified_logging, setup_wandb_with_unified_paths
+from common.unified_logging import setup_wandb_with_unified_paths
 from laq import (
     LAQTask,
     EMACallback,
@@ -74,27 +73,11 @@ def main(cfg: DictConfig):
     if wandb.run:
         wandb.finish()
 
-    # Setup unified logging
-    if HydraConfig.initialized():
-        runs_dir = Path(str(HydraConfig.get().runtime.output_dir))
-    else:
-        runs_dir = resolve_runs_dir(
-            logging_root_dir=cfg.logging.root_dir,
-            logging_runs_dir=cfg.logging.runs_dir,
-            workspace_root=workspace_root,
-            experiment_name=cfg.experiment.name,
-        )
-
-    logger, output_dir = setup_unified_logging(
-        runs_dir=runs_dir,
-        job_id=cfg.logging.job_id,
-        log_level=cfg.logging.level,
+    logger, output_dir = setup_run_context(
+        cfg=cfg,
+        workspace_root=workspace_root,
         logger_name="laq.training",
     )
-
-    cache_dir = resolve_cache_dir(cfg=cfg, workspace_root=workspace_root)
-    if cache_dir is not None:
-        configure_cache_env(cache_dir=cache_dir, logger=logger)
 
     logger.info("=" * 80)
     logger.info("LAPA Stage 1: LAQ Training")
