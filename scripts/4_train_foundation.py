@@ -51,6 +51,7 @@ from foundation.backends.smolvla_shared_backend import SmolVLASharedBackend
 from foundation.online_laq import LAQTaskCodeProvider
 from foundation.vla_inputs import ChatConfig
 from foundation.vla_backend_module import VLATokenBackendLightningModule, VLAOptimizerConfig
+from foundation.backends.interfaces import BackendMode
 from laq.checkpoints import load_laq_encoder_vq_inference_from_checkpoint
 
 

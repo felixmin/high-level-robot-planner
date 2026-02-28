@@ -53,4 +53,4 @@ flow:
   time_beta_beta: ${smolvla_core.flow.time_beta_beta}
 
 chat:
-  system_prompt: "You are a robot policy."
+  system_prompt: null
