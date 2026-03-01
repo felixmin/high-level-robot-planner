@@ -11,7 +11,9 @@ A three-stage robot learning system that learns policies from videos without act
 3. **Stage 3 (Finetuning)**: Adapting the foundation model to output continuous robot commands
 
 ## Performance and resource efficiency
-For performance reasons over the course of the project we switched from Open X Embodiment in rlds format to a preprocessed version that allows direct index based access. With the current setup we achieve full GPU utilization.
+Performance benchmark of the training pipeline on an Desktop Nvidia 5090 GPU. With the current setup we achieve full GPU utilization.
+
+For performance reasons over the course of the project we switched from Open X Embodiment in rlds format to a preprocessed version that allows direct index based access.
 
 <p align="center">
   <img src="docs/assets/lam_gpu_utilization.png" alt="LAM training GPU utilization" width="700">
