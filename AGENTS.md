@@ -213,3 +213,11 @@ Example via submit script:
 
 With W&B enabled:
 - `python scripts/submit_job.py experiment=stage3_hlrp_libero_action_scratch cluster=lrz_x100 experiment.name=stage3_hlrp_libero_smoke_wandb lerobot.steps=50 lerobot.batch_size=2 lerobot.eval.freq=10 lerobot.log_freq=10 lerobot.save_freq=1000 logging.use_wandb=true lerobot.wandb.enable=true`
+
+## Repo-local Skills
+
+### Available skills
+- `hlrp-docker-enroot-refresh`: Build, push, prune, import, and safely swap the HLRP LeRobot container using `containers/Dockerfile.lerobot`, the bundled `lerobot/` Docker build context in this repo, and the `felix_minzenmay/enroot/lam.sqsh` cluster path. (file: `/mnt/data/workspace/code/high-level-robot-planner/.codex/skills/hlrp-docker-enroot-refresh/SKILL.md`)
+
+### How to use repo-local skills
+- If the user asks to rebuild, push, import, replace, or debug the cluster container workflow, open the skill and follow it.

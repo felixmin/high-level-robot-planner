@@ -28,12 +28,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     MUJOCO_GL=osmesa \
     PATH=/opt/lerobot-venv/bin:$PATH
 
-# ENV NVIDIA_VISIBLE_DEVICES ${NVIDIA_VISIBLE_DEVICES:-all}
-# ENV NVIDIA_DRIVER_CAPABILITIES ${NVIDIA_DRIVER_CAPABILITIES:+$NVIDIA_DRIVER_CAPABILITIES,}graphics
-
 # Install system dependencies and uv (as root)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git curl libglib2.0-0 libegl1-mesa-dev libgl1-mesa-glx libegl1-mesa ffmpeg  libosmesa6-dev libglfw3 xvfb \
+    build-essential git curl libglib2.0-0 libegl1-mesa-dev libgl1-mesa-glx libegl1-mesa ffmpeg libosmesa6-dev libglfw3 xvfb \
     libusb-1.0-0-dev speech-dispatcher libgeos-dev portaudio19-dev \
     cmake pkg-config ninja-build \
     python3.10 python3.10-venv python3.10-dev \
@@ -41,44 +38,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mv /root/.local/bin/uv /usr/local/bin/uv \
     && useradd --create-home --shell /bin/bash user_lerobot \
     && usermod -aG sudo user_lerobot \
+    && mkdir -p /workspace/high-level-robot-planner /opt/lerobot-venv \
+    && chown -R user_lerobot:user_lerobot /workspace /opt/lerobot-venv \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Create application directory and virtual environment directory with proper permissions
-WORKDIR /lerobot
-RUN chown -R user_lerobot:user_lerobot /lerobot && \
-    mkdir -p /opt/lerobot-venv && \
-    chown -R user_lerobot:user_lerobot /opt/lerobot-venv
+WORKDIR /workspace/high-level-robot-planner
 
 # Switch to the non-root user
 USER user_lerobot
 
-# Environment variables for the testing
 ENV HOME=/home/user_lerobot \
     HF_HOME=/home/user_lerobot/.cache/huggingface \
     HF_LEROBOT_HOME=/home/user_lerobot/.cache/huggingface/lerobot \
     TORCH_HOME=/home/user_lerobot/.cache/torch \
     TRITON_CACHE_DIR=/home/user_lerobot/.cache/triton
 
-# Create the virtual environment in /opt
-# We use /opt instead of /lerobot so it won't be shadowed by volume mounts
 RUN uv venv --python python3.10 /opt/lerobot-venv
 
-# Install Python dependencies for caching
-COPY --chown=user_lerobot:user_lerobot pyproject.toml README.md MANIFEST.in ./
-COPY --chown=user_lerobot:user_lerobot src/ src/
+COPY --chown=user_lerobot:user_lerobot lerobot/pyproject.toml lerobot/README.md lerobot/MANIFEST.in /tmp/lerobot/
+COPY --chown=user_lerobot:user_lerobot lerobot/src/ /tmp/lerobot/src/
+
+WORKDIR /tmp/lerobot
 
 ARG UNBOUND_DEPS=false
 
 RUN if [ "$UNBOUND_DEPS" = "true" ]; then \
-    sed -i 's/,[[:space:]]*<[0-9\.]*//g' pyproject.toml; \
-    echo "Dependencies unbound:" && cat pyproject.toml; \
+    sed -i 's/,[[:space:]]*<[0-9\\.]*//g' pyproject.toml; \
     fi
 
-# Work around editable-build metadata resolution in this environment and
-# install only the LIBERO-focused dependency set.
 RUN sed -i 's/^dynamic = \["readme"\]/readme = "README.md"/' pyproject.toml \
     && uv pip install --no-cache -e ".[libero]" \
     && uv pip install --no-cache "num2words>=0.5.14"
+
+WORKDIR /workspace/high-level-robot-planner
 
 
 # Set the default command
