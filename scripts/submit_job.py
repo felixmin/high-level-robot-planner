@@ -152,6 +152,7 @@ def generate_sbatch_script(
     hf_token_path: Path | None,
     tfds_local_root: Path | None,
     pre_commands: list[str] | None = None,
+    python_bin: str = "python",
     *,
     time_limit: str | None = None,
     time: str | None = None,
@@ -172,7 +173,7 @@ def generate_sbatch_script(
     # Build the python command with overrides.
     # Quote each override so bash doesn't expand Hydra interpolations like `${now:...}`
     # or `${hydra.job.num}` inside the sbatch script.
-    python_args = ["python", f"scripts/{script}.py", *overrides]
+    python_args = [python_bin, f"scripts/{script}.py", *overrides]
     python_cmd = " ".join(shlex.quote(str(arg)) for arg in python_args).strip()
 
     pre_command_block = ""
@@ -459,6 +460,7 @@ def main():
             f"{container_image_path}\n"
             "Set `cluster.container.image=/path/to/container.sqsh` (or update your cluster config)."
         )
+    container_python_bin = str(OmegaConf.select(cfg, "cluster.container.python_bin") or "python")
 
     mem_value = OmegaConf.select(cfg, "cluster.compute.mem_gb")
     if mem_value is None:
@@ -638,6 +640,7 @@ def main():
             hf_token_path=hf_token_path,
             tfds_local_root=tfds_local_root_path,
             pre_commands=pre_commands,
+            python_bin=container_python_bin,
         )
 
         if dry_run:

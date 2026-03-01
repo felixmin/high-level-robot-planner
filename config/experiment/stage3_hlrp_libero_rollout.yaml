@@ -21,6 +21,7 @@ cluster:
     time_limit: "00:30:00"
   container:
     image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/enroot/hlrp_stage3_lerobot.sqsh
+    python_bin: /opt/lerobot-venv/bin/python
 
 logging:
   use_wandb: false
