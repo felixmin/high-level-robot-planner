@@ -128,7 +128,7 @@ if [[ "${IMAGE_URI}" == docker://docker.io/* ]]; then
 fi
 
 OUTPUT_DIR=$(dirname "${OUTPUT}")
-WRAP_RAW="set -euo pipefail; test ! -e \"${OUTPUT}\"; mkdir -p \"${OUTPUT_DIR}\"; export ENROOT_MAX_PROCESSORS=\"${MAX_PROCESSORS}\"; enroot import -o \"${OUTPUT}\" \"${IMAGE_URI}\"; ls -lh \"${OUTPUT}\""
+WRAP_RAW="set -eu; test ! -e \"${OUTPUT}\"; mkdir -p \"${OUTPUT_DIR}\"; export ENROOT_MAX_PROCESSORS=\"${MAX_PROCESSORS}\"; enroot import -o \"${OUTPUT}\" \"${IMAGE_URI}\"; ls -lh \"${OUTPUT}\""
 printf -v REMOTE_CMD 'sbatch -p %q -q %q -t %q --mem=%q -c %q -J %q --wrap %q' \
   "${PARTITION}" "${QOS}" "${TIME_LIMIT}" "${MEMORY}" "${CPUS}" "${JOB_NAME}" "${WRAP_RAW}"
 
