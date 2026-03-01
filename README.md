@@ -11,11 +11,27 @@ A three-stage robot learning system that learns policies from videos without act
 3. **Stage 3 (Finetuning)**: Adapting the foundation model to output continuous robot commands
 
 ## Performance and resource efficiency
-For performance reasons over the course of the project we switched from Open X Embodiment in rlds format to a preprocessed version that allows direct index based access. With the current setup we achieve full GPU utilization.
+Performance benchmark of the training pipeline on an Desktop Nvidia 5090 GPU. With the current setup we achieve full GPU utilization.
+
+For performance reasons over the course of the project we switched from Open X Embodiment in rlds format to a preprocessed version that allows direct index based access.
 
 <p align="center">
   <img src="docs/assets/lam_gpu_utilization.png" alt="LAM training GPU utilization" width="700">
 </p>
+
+## Deployment
+
+For robot teleoperation and policy deployment, we use our [CRISP Controller](https://utiasdsl.github.io/crisp_controllers/) setup:
+<img width="830" height="458" alt="image" src="https://github.com/user-attachments/assets/8a4fe7b9-691f-4c27-b92b-4bf3062fcb92" />
+
+
+Here is a dataset view of a human demonstration:
+
+https://github.com/user-attachments/assets/c85271ec-d35f-4310-ac96-08a0e8d20476
+
+Here is a view of a policy deployed to Lego stacking:
+
+https://github.com/user-attachments/assets/0cc694b1-ff8c-406d-b5a7-a6815fe8c1af
 
 ## Repository Structure
 
@@ -117,39 +133,14 @@ Python 3.12 with PyTorch 2.9.1. Key packages: pytorch-lightning, transformers, w
 
 See `environment.yml` for complete dependency list.
 
-## Learning Robotic Action from Human Video - Hardware Setup
-
-Human demonstration data is significantly easier and more cost-effective to collect than traditional robot data, and it is widely available across the internet. By engineering a setup to record humans performing everyday actions, we can use this rich dataset to train a Franka Emika robot. Ultimately, this greater data diversity allows the robot to learn new tasks more efficiently and achieve better generalization in real-world environments.
-
-### Demonstrations
-
-**Human Demonstration:**
-
-
-
-
-https://github.com/user-attachments/assets/c85271ec-d35f-4310-ac96-08a0e8d20476
-
-
-
-
-**Franka Emika Robot Execution:**
-
-
-
-
-https://github.com/user-attachments/assets/0cc694b1-ff8c-406d-b5a7-a6815fe8c1af
-
-
 
 
 ## Citation
 
 ```bibtex
 @misc{hlrp2024,
-  title={High-Level Robot Planner: Learning Policies from Videos},
-  author={Your Team},
-  year={2024}
+  title={V-PRO: Video Pretraining for Robot Action Policies},
+  year={2026}
 }
 ```
 
