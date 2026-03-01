@@ -37,9 +37,6 @@ lerobot:
   shell_env:
     MUJOCO_GL: osmesa
     LIBERO_CONFIG_PATH: ${logging.root_dir}/cache/libero_config
-    HF_HOME: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/cache/huggingface
-    HF_HUB_CACHE: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/cache/huggingface/hub
-    HF_DATASETS_CACHE: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/cache/huggingface/datasets
 
   wandb:
     enable: true
@@ -91,7 +88,7 @@ lerobot:
   dataset:
     repo_id: HuggingFaceVLA/libero
     episodes: null
-    root: /mnt/data/workspace/hflibero/datasets--HuggingFaceVLA--libero/snapshots/86958911c0f959db2bbbdb107eb3e17c5f9c798e
+    root: null
     use_imagenet_stats: false
     video_backend: pyav
 

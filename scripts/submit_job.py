@@ -149,6 +149,7 @@ def generate_sbatch_script(
     container_mounts: str,
     slurm_logs_dir: Path,
     cache_dir: Path,
+    home_dir: Path,
     hf_token_path: Path | None,
     tfds_local_root: Path | None,
     pre_commands: list[str] | None = None,
@@ -266,17 +267,20 @@ echo "========================================"
 export PYTHONPATH={PROJECT_ROOT}/packages:${{PYTHONPATH:-}}
 {nccl_block}
 
-	# Persist caches on the mounted filesystem (avoid downloading models every job).
-	# Important: do not override HF_HOME here, otherwise Hugging Face auth (token) may no longer be
-	# discovered if it was previously stored under the default HF_HOME on $HOME.
-	mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/torch"
-	export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
-	export TORCH_HOME="{cache_dir}/torch"
-	# Use node-local temp when available (wandb system monitor/GPU stats are sensitive to slow shared TMPDIR).
-	# Fall back to /tmp if SLURM_TMPDIR isn't set.
-	# Include SLURM_LOCALID so multi-task jobs don't contend for the same tmp directory.
-	export TMPDIR="${{SLURM_TMPDIR:-/tmp}}/hlrp-${{SLURM_JOB_ID}}-${{SLURM_LOCALID:-0}}"
-	mkdir -p "$TMPDIR"
+# Keep auth in the real cluster home, but redirect heavy caches to DSS.
+mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/huggingface/datasets" "{cache_dir}/huggingface/lerobot" "{cache_dir}/torch" "{cache_dir}/triton"
+export HOME="{home_dir}"
+export HF_HOME="$HOME/.cache/huggingface"
+export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
+export HF_DATASETS_CACHE="{cache_dir}/huggingface/datasets"
+export HF_LEROBOT_HOME="{cache_dir}/huggingface/lerobot"
+export TORCH_HOME="{cache_dir}/torch"
+export TRITON_CACHE_DIR="{cache_dir}/triton"
+# Use node-local temp when available (wandb system monitor/GPU stats are sensitive to slow shared TMPDIR).
+# Fall back to /tmp if SLURM_TMPDIR isn't set.
+# Include SLURM_LOCALID so multi-task jobs don't contend for the same tmp directory.
+export TMPDIR="${{SLURM_TMPDIR:-/tmp}}/hlrp-${{SLURM_JOB_ID}}-${{SLURM_LOCALID:-0}}"
+mkdir -p "$TMPDIR"
 
 	{hf_auth_block}
 
@@ -379,7 +383,10 @@ def main():
         base_env = os.environ.copy()
         base_env["PYTHONPATH"] = f"{PROJECT_ROOT}/packages:" + base_env.get("PYTHONPATH", "")
         base_env["HF_HUB_CACHE"] = str(cache_dir / "huggingface" / "hub")
+        base_env["HF_DATASETS_CACHE"] = str(cache_dir / "huggingface" / "datasets")
+        base_env["HF_LEROBOT_HOME"] = str(cache_dir / "huggingface" / "lerobot")
         base_env["TORCH_HOME"] = str(cache_dir / "torch")
+        base_env["TRITON_CACHE_DIR"] = str(cache_dir / "triton")
 
         for i, sweep_overrides in enumerate(sweep_combinations):
             combined_overrides = normalize_overrides(list(overrides) + sweep_overrides)
@@ -477,9 +484,11 @@ def main():
     runs_dir.parent.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    home_dir = Path.home().resolve()
+
     # Hugging Face auth token path (if present) for gated model downloads inside the container.
     hf_token_path = None
-    candidate = Path.home() / ".huggingface" / "token"
+    candidate = home_dir / ".huggingface" / "token"
     if candidate.exists():
         hf_token_path = candidate
 
@@ -527,9 +536,7 @@ def main():
             continue
         extra_mounts.append(mount_path)
 
-    mount_roots: list[Path] = [PROJECT_ROOT, runs_dir.parent, cache_dir, *extra_mounts]
-    if hf_token_path is not None:
-        mount_roots.append(hf_token_path.parent)
+    mount_roots: list[Path] = [PROJECT_ROOT, runs_dir.parent, cache_dir, home_dir, *extra_mounts]
 
     # Ensure unique mount roots while preserving order.
     seen: set[Path] = set()
@@ -637,6 +644,7 @@ def main():
             container_mounts=container_mounts,
             slurm_logs_dir=job_runs_dir,
             cache_dir=cache_dir,
+            home_dir=home_dir,
             hf_token_path=hf_token_path,
             tfds_local_root=tfds_local_root_path,
             pre_commands=pre_commands,
