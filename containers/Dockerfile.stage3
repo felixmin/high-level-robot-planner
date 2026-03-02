@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This image provides the stage-3 LeRobot runtime and a baseline LeRobot
-# install from the published package. During active development, the mounted
-# repo can still override the in-image install with editable installs at job
-# start.
+# This image provides the stage-3 LeRobot runtime from the bundled LeRobot
+# source tree in this repo. During active development, the mounted repo can
+# still override the in-image install with editable installs at job start.
 
 # docker build -f docker/Dockerfile.user -t lerobot-user .
 # docker run -it --gpus all -v $(pwd):/lerobot --rm lerobot-user
@@ -30,7 +29,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Install system dependencies and uv (as root)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git curl libglib2.0-0 libegl1-mesa-dev libgl1-mesa-glx libegl1-mesa ffmpeg libosmesa6-dev libglfw3 xvfb \
+    build-essential git curl libglib2.0-0 libegl1-mesa-dev libgl1-mesa-dev libgl1-mesa-glx libegl1-mesa libgles2-mesa-dev ffmpeg libosmesa6-dev libglfw3 xvfb \
     libusb-1.0-0-dev speech-dispatcher libgeos-dev portaudio19-dev \
     cmake pkg-config ninja-build \
     python3.10 python3.10-venv python3.10-dev \
@@ -49,18 +48,18 @@ USER user_lerobot
 
 ENV HOME=/home/user_lerobot
 
-COPY --chown=user_lerobot:user_lerobot requirements.txt /tmp/hlrp-requirements.txt
+COPY --chown=user_lerobot:user_lerobot containers/requirements.stage3-runtime.txt /tmp/hlrp-stage3-runtime.txt
+COPY --chown=user_lerobot:user_lerobot lerobot/pyproject.toml lerobot/README.md lerobot/MANIFEST.in /tmp/lerobot/
+COPY --chown=user_lerobot:user_lerobot lerobot/src /tmp/lerobot/src
 
 RUN python3.10 -m venv /opt/lerobot-venv \
     && /opt/lerobot-venv/bin/python -m ensurepip --upgrade \
     && /opt/lerobot-venv/bin/python -m pip install --upgrade pip setuptools wheel \
     && /opt/lerobot-venv/bin/python -m pip install --no-build-isolation \
         egl_probe \
-        "lerobot[libero]==0.4.3" \
-        "hf-libero>=0.1.3" \
-        "num2words>=0.5.14" \
-        nvidia-ml-py \
-    && /opt/lerobot-venv/bin/python -m pip install -r /tmp/hlrp-requirements.txt \
+        PyOpenGL-accelerate \
+    && /opt/lerobot-venv/bin/python -m pip install --no-build-isolation -e "/tmp/lerobot[libero,smolvla]" \
+    && /opt/lerobot-venv/bin/python -m pip install -r /tmp/hlrp-stage3-runtime.txt \
     && (/opt/lerobot-venv/bin/python -m pip uninstall -y torchao || true) \
     && /opt/lerobot-venv/bin/python -c "import hydra, omegaconf, importlib; importlib.import_module('lerobot'); importlib.import_module('lerobot.scripts'); print('stage3 image python env ok')"
 
