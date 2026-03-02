@@ -49,7 +49,7 @@ USER user_lerobot
 ENV HOME=/home/user_lerobot
 
 COPY --chown=user_lerobot:user_lerobot containers/requirements.stage3-runtime.txt /tmp/hlrp-stage3-runtime.txt
-COPY --chown=user_lerobot:user_lerobot lerobot/pyproject.toml lerobot/README.md lerobot/MANIFEST.in /tmp/lerobot/
+COPY --chown=user_lerobot:user_lerobot lerobot/pyproject.toml lerobot/README.md lerobot/MANIFEST.in lerobot/setup.py /tmp/lerobot/
 COPY --chown=user_lerobot:user_lerobot lerobot/src /tmp/lerobot/src
 
 RUN python3.10 -m venv /opt/lerobot-venv \
