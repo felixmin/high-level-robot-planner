@@ -110,8 +110,6 @@ class TestExperimentConsistency:
         [
             "stage3_hlrp_libero_action_scratch",
             "stage3_hlrp_libero_multitask_scratch",
-            "stage3_hlrp_libero_multitask_scratch_local",
-            "stage3_hlrp_libero_multitask_scratch_cluster",
         ],
     )
     def test_lerobot_experiments_load(self, config_dir, experiment):
@@ -126,3 +124,16 @@ class TestExperimentConsistency:
             assert cfg.lerobot.command is not None
             assert cfg.lerobot.policy.type is not None
             assert cfg.lerobot.policy.init_mode in {"artifact", "scratch"}
+
+    def test_stage3_runtime_override_switches_gl_backend(self, config_dir):
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "experiment=stage3_hlrp_libero_multitask_scratch",
+                    "runtime=stage3_cluster",
+                ],
+            )
+
+            assert cfg.lerobot.shell_env.MUJOCO_GL == "osmesa"
+            assert str(cfg.lerobot.shell_env.LIBERO_CONFIG_PATH).endswith("/cache/libero_config")

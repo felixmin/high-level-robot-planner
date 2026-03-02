@@ -278,6 +278,66 @@ What it proved:
   - checkpoint save
   - end of training
 
+### HLRP 30-minute eval-enabled run
+
+Run:
+
+- `5500595`
+
+Status:
+
+- `TIMEOUT`
+
+What it proved:
+
+- editable install of `lerobot` succeeded
+- editable install of `lerobot_policy_hlrp` succeeded
+- Libero env creation succeeded for all 10 tasks
+- HLRP policy creation succeeded
+- training succeeded
+- full eval over all 10 tasks succeeded
+- eval videos and aggregate metrics were written
+- `End of training` was reached
+
+What remained:
+
+- the run used essentially the full `00:30:00` budget
+- after training ended, Python emitted `multiprocessing` temp-dir cleanup `FileNotFoundError`s under `/tmp/hlrp-<jobid>-0/...`
+- Slurm marked the job `TIMEOUT` during shutdown/finalization
+
+Interpretation:
+
+- the eval-enabled path works functionally
+- `00:30:00` is still too tight if eval is included
+- use a larger budget for eval-enabled smoke runs
+
+### HLRP 45-minute eval-enabled confirmation run
+
+Run:
+
+- `5500619`
+
+Status:
+
+- `COMPLETED`
+
+What it proved:
+
+- editable install of `lerobot` succeeded
+- editable install of `lerobot_policy_hlrp` succeeded
+- Libero env creation succeeded
+- training succeeded
+- eval at step 10 succeeded
+- eval at step 20 succeeded
+- eval videos were written
+- aggregate eval metrics were logged
+- the job shut down cleanly within the wall-clock budget
+
+Interpretation:
+
+- the stage-3 HLRP eval-enabled path is operational
+- `00:45:00` is sufficient for this smoke configuration
+
 ## Current state
 
 Resolved:
@@ -294,14 +354,10 @@ Resolved:
 - HLRP editable overlay startup
 - HLRP training startup and training-only smoke execution
 
-Not yet fully verified in this note:
+Operational guidance:
 
-- the 30-minute eval-enabled HLRP smoke that was submitted after the training-only confirmation
-
-Current submitted eval-enabled runs:
-
-- LRZ: `5500594`
-- MCML: `5500595`
+- use `00:15:00` for train-only smoke runs (`lerobot.eval.freq=0`)
+- use at least `00:45:00` for eval-enabled smoke runs
 
 ## Historical note
 
@@ -351,7 +407,10 @@ If the stage-3 path breaks again, use this order.
 
 7. If stock works, run the HLRP smoke next.
    - first with `lerobot.eval.freq=0` for a pure training smoke
-   - then with eval enabled and a longer time limit if needed
+   - then with eval enabled and a longer time limit
+   - practical rule:
+     - `00:15:00` for train-only smoke
+     - `00:45:00` for eval-enabled smoke
 
 8. If HLRP fails before `lerobot-train` launches, check the wrapper layer.
    - command construction in [scripts/6_train_lerobot.py](/mnt/data/workspace/code/high-level-robot-planner/scripts/6_train_lerobot.py)

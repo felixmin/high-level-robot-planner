@@ -78,3 +78,5 @@ Fail-fast behavior:
 
 - Stage-2 `ACTIONS`/`MULTITASK` currently requires `batch["action_is_pad"]` in the OXE batch path (`packages/foundation/vla_backend_module.py`).
   Add `action_is_pad` emission in the Stage-2 OXE data path/collate before enabling these modes broadly.
+- Transform parity is implemented through `packages/foundation/backends/smolvla_shared/input_transform.py`, not through dedicated Stage-3 processor classes.
+- `predict_latent_and_action_chunk(...)` is not part of the current Stage-3 public policy API. If a combined latent+action inference helper is still desired, add it explicitly as a follow-up rather than assuming it exists.

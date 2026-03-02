@@ -4,6 +4,7 @@
 
 defaults:
   - /cluster@cluster: mcml_h100
+  - /runtime: stage3_cluster
   - optional /user_config: local
 
 experiment:
@@ -44,9 +45,5 @@ lerobot_eval:
   job_name: ${experiment.name}
   seed: 1000
   trust_remote_code: false
-
-  env:
-    MUJOCO_GL: osmesa
-    LIBERO_CONFIG_PATH: ${logging.root_dir}/cache/libero_config
 
   extra_args: []

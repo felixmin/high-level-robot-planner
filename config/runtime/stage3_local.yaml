@@ -1,0 +1,11 @@
+# @package _global_
+
+lerobot:
+  shell_env:
+    MUJOCO_GL: egl
+    LIBERO_CONFIG_PATH: ${logging.root_dir}/cache/libero_config
+
+lerobot_eval:
+  env:
+    MUJOCO_GL: egl
+    LIBERO_CONFIG_PATH: ${logging.root_dir}/cache/libero_config

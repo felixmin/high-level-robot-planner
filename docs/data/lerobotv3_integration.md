@@ -402,3 +402,138 @@ Do not:
 3. make the mixer responsible for schema conversion
 
 That would make later OXE removal much more expensive.
+
+## Additional implementation findings
+
+The current repo already has a partial convergence point between Stage 2 and Stage 3:
+
+- Stage 2 builds a `FoundationBatch` inside:
+  - [`packages/foundation/vla_backend_module.py`](../../packages/foundation/vla_backend_module.py)
+- Stage 3 HLRP LeRobot policy also builds a `FoundationBatch` from a LeRobot batch inside:
+  - [`lerobot_policy_hlrp/src/lerobot_policy_hlrp/policies/hlrp_smolvla_shared/modeling_hlrp_smolvla_shared.py`](../../lerobot_policy_hlrp/src/lerobot_policy_hlrp/policies/hlrp_smolvla_shared/modeling_hlrp_smolvla_shared.py)
+- Shared backend-side preparation already lives in:
+  - [`packages/foundation/backends/smolvla_shared/input_transform.py`](../../packages/foundation/backends/smolvla_shared/input_transform.py)
+
+This means the right unification target is not "one final preprocessed tensor format for every stage". The right target is:
+
+1. one canonical sample/batch contract close to LeRobot naming and semantics
+2. one canonical model input object (`FoundationBatch`)
+3. stage-specific target generation and backend-specific tokenization on top
+
+## What should align with LeRobot
+
+The clean compatibility boundary is the semantic sample contract, not the raw storage backend.
+
+The following should match LeRobot naming and meaning wherever practical:
+
+- feature names:
+  - `observation.images.*`
+  - `observation.state`
+  - `action`
+  - `task`
+- padding semantics:
+  - `<camera_key>_is_pad`
+  - `action_is_pad`
+  - `actions_id_pad` accepted as alias where LeRobot already uses it
+- temporal semantics:
+  - observation/action windows should be expressed in the same way as LeRobot policy configs
+  - prefer LeRobot-style `observation_delta_indices` / `action_delta_indices` as the source concept
+- normalization/stat keys:
+  - statistics should use the same feature names as the batch contract
+- shape conventions:
+  - time-aware tensors should preserve a consistent `[T, ...]` meaning across Stage 2 and Stage 3
+
+This is already how the Stage 3 HLRP plugin is structured:
+
+- LeRobot dataset factory resolves `delta_timestamps` from policy config in:
+  - [`lerobot/src/lerobot/datasets/factory.py`](../../lerobot/src/lerobot/datasets/factory.py)
+- HLRP Stage 3 policy config exposes:
+  - `observation_delta_indices`
+  - `action_delta_indices`
+  in:
+  - [`lerobot_policy_hlrp/src/lerobot_policy_hlrp/policies/hlrp_smolvla_shared/configuration_hlrp_smolvla_shared.py`](../../lerobot_policy_hlrp/src/lerobot_policy_hlrp/policies/hlrp_smolvla_shared/configuration_hlrp_smolvla_shared.py)
+
+## What should not be forced to align
+
+The following should stay outside a shared data preprocessing layer:
+
+- Hugging Face processor calls
+- tokenizer edits and tokenization
+- image packing specific to a backend/model
+- backend-specific padding to expert/model dimensions
+- LAQ-specific target generation
+
+Those belong either:
+
+- in a stage-specific adapter layer, or
+- in backend/model code
+
+Trying to centralize them in the dataloader would make the data path harder to understand and would couple storage format decisions to model implementation details.
+
+## Recommended adapter layering
+
+Recommended layers:
+
+1. source-native loader
+   - OXE loader can stay source-native
+   - LeRobot loader can stay source-native
+2. shared semantic adapter
+   - convert source-native samples/batches into a LeRobot-compatible semantic contract
+3. canonical model adapter
+   - convert the semantic contract into `FoundationBatch`
+4. stage-specific target adapter
+   - derive LAQ frame pairs, latent targets, action chunks, or rollout-specific extras
+5. backend/model preprocessing
+   - tokenization, processor image transforms, padding to model dims, device-local prep
+
+In practice, this means:
+
+- generic OXE extraction helpers should move out of:
+  - [`packages/foundation/online_laq.py`](../../packages/foundation/online_laq.py)
+- `online_laq.py` should keep only LAQ-specific adaptation concerns
+- Stage 2 and Stage 3 should share lower-level batch adapter helpers wherever possible
+
+`packages/foundation/online_laq.py` currently mixes:
+
+- true LAQ-specific adaptation such as `frames -> LAQ video`
+- generic OXE batch parsing such as language/state/action extraction
+
+The `frames -> LAQ video` conversion is a reasonable Stage-1/LAQ adapter concern.
+The generic extraction helpers are not LAQ-specific and should live in a shared adapter module instead.
+
+## Concrete design direction
+
+The recommended implementation direction is:
+
+1. define one canonical semantic batch dict using LeRobot-style names
+2. add shared adapter helpers that map:
+   - OXE batch -> canonical semantic batch
+   - LeRobot batch -> canonical semantic batch
+3. convert that canonical semantic batch into `FoundationBatch`
+4. derive LAQ supervision from the same canonical inputs instead of from ad hoc OXE-only fields
+
+This gives the desired interoperability combinations:
+
+- OXE data with HLRP Stage 2
+- LeRobot data with HLRP Stage 2
+- LeRobot data with HLRP Stage 3
+- mixed OXE/LeRobot data under one semantic contract
+
+without forcing:
+
+- OXE storage to become LeRobot immediately
+- Stage 1/2/3 to share one giant universal preprocessor
+- backend-specific tokenization to move into the dataloader
+
+## Practical recommendation
+
+Use LeRobot compatibility as the contract boundary, not as the only storage/runtime boundary.
+
+Specifically:
+
+1. align feature names, masks, and temporal window semantics to LeRobot
+2. make Stage 2 consume that contract through shared adapters
+3. keep `FoundationBatch` as the model-facing canonical object
+4. keep LAQ target generation and backend tokenization out of the data loader
+
+This should provide the interoperability benefit the architecture needs while keeping responsibilities clear and local.

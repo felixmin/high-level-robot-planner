@@ -7,6 +7,9 @@ This note summarizes where transform logic lives after the v2 refactor.
 Primary module:
 - `packages/foundation/backends/smolvla_shared/input_transform.py`
 
+This replaces the earlier idea of implementing separate Stage-3 processor-only parity helpers.
+If you are checking whether newline/tokenization/image-selection parity exists, inspect this module first.
+
 Responsibilities:
 - instruction formatting (`newline`, optional `system_prompt`)
 - language tokenization or pretokenized pass-through
@@ -47,3 +50,7 @@ require `state`.
 - Stage 2 and Stage 3 now use the same language/image/state transform semantics before core compute.
 - Stage 3 action supervision is now chunk-flow (`[B,T,A]`) with explicit pad masking.
 - Artifact manifest v2 carries transform-critical settings and `normalization_stats` to block silent drift.
+
+## Remaining Gap
+
+- Broad Stage-2 action-supervised usage still depends on the OXE data path emitting `action_is_pad` into the canonical batch before `ACTIONS`/`MULTITASK` should be considered fully production-ready.

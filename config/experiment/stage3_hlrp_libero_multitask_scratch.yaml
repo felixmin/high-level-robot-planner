@@ -2,6 +2,7 @@
 
 defaults:
   - /cluster@cluster: local_dev
+  - /runtime: stage3_local
   - /model/shared@smolvla_core: smolvla_core
   - optional /user_config: local
 
@@ -34,10 +35,6 @@ lerobot:
   log_freq: 200
   save_freq: 20000
   use_policy_training_preset: false
-
-  shell_env:
-    MUJOCO_GL: osmesa
-    LIBERO_CONFIG_PATH: ${logging.root_dir}/cache/libero_config
 
   wandb:
     enable: true
