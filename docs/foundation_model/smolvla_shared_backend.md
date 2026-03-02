@@ -49,9 +49,12 @@ New policy type:
 
 - `hlrp_smolvla_shared`
 
-Config:
+Current experiment configs:
 
-- `config/experiment/lerobot_hlrp_smolvla_shared_libero_scratch.yaml`
+- `config/experiment/stage3_hlrp_libero_action_scratch.yaml`
+- `config/experiment/stage3_hlrp_libero_multitask_scratch.yaml`
+- `config/experiment/stage3_hlrp_libero_multitask_scratch_cluster.yaml`
+- `config/experiment/stage3_hlrp_libero_multitask_scratch_local.yaml`
 
 Optional Stage-2 checkpoint handoff, depending on policy init mode:
 
@@ -76,7 +79,7 @@ Example:
 
 ```bash
 python scripts/submit_job.py \
-  experiment=lerobot_hlrp_smolvla_shared_libero_scratch \
+  experiment=stage3_hlrp_libero_action_scratch \
   cluster=lrz_x100 \
   lerobot.policy.init_mode=artifact \
   lerobot.policy.stage2_artifact=/dss/.../artifacts/smolvla_shared_stage2_artifact.pt \
@@ -96,7 +99,7 @@ Rollout/eval entrypoint:
 
 Experiment config:
 
-- `config/experiment/lerobot_hlrp_smolvla_shared_rollout.yaml`
+- `config/experiment/stage3_hlrp_libero_rollout.yaml`
 
 Required field:
 
@@ -106,8 +109,16 @@ Example:
 
 ```bash
 python scripts/submit_job.py \
-  experiment=lerobot_hlrp_smolvla_shared_rollout \
+  experiment=stage3_hlrp_libero_rollout \
   cluster=lrz_x100 \
   lerobot_eval.policy_path=/dss/.../checkpoints/000050/pretrained_model \
-  experiment.name=lerobot_hlrp_smolvla_shared_rollout
+  experiment.name=stage3_hlrp_libero_rollout
 ```
+
+## Known Open Item
+
+- Stage-2 `ACTIONS`/`MULTITASK` on the OXE path still depends on `action_is_pad` being emitted by the Stage-2 data adapter/collate. Until that is wired broadly, the shared Stage-2 backend is fully ready for `latent_flow`, while action-supervised Stage-2 usage should be treated as opt-in and data-path-dependent.
+
+## Implementation Note
+
+- The original redesign notes mentioned dedicated Stage-3 processor classes for newline/tokenization parity. The current implementation centralizes that logic in `packages/foundation/backends/smolvla_shared/input_transform.py` instead. Treat that module as the source of truth for language/image/state/action transform semantics.

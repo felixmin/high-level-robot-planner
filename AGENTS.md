@@ -210,13 +210,12 @@ Typical sequence:
 - This is to support different container layouts (with/without pip in active venv).
 
 ## Useful Stage 3 Smoke Command Pattern
-For short smoke or verification runs, always override `cluster.compute.time_limit=00:15:00` to improve scheduling. Do not use the cluster default multi-hour limit for 50-200 step checks.
+For short stage-3 train-only smoke or verification runs, do not use the cluster default multi-hour limit for 50-200 step checks.
+
+For stage-3 smoke runs with eval enabled, `00:15:00` is too short and `00:30:00` is still tight. Use at least `cluster.compute.time_limit=00:45:00`.
 
 Example via submit script:
-- `python scripts/submit_job.py experiment=stage3_hlrp_libero_action_scratch cluster=lrz_x100 cluster.compute.time_limit=00:15:00 experiment.name=stage3_hlrp_libero_smoke_retry lerobot.steps=50 lerobot.batch_size=2 lerobot.eval.freq=10 lerobot.log_freq=10 lerobot.save_freq=1000`
-
-With W&B enabled:
-- `python scripts/submit_job.py experiment=stage3_hlrp_libero_action_scratch cluster=lrz_x100 cluster.compute.time_limit=00:15:00 experiment.name=stage3_hlrp_libero_smoke_wandb lerobot.steps=50 lerobot.batch_size=2 lerobot.eval.freq=10 lerobot.log_freq=10 lerobot.save_freq=1000 logging.use_wandb=true lerobot.wandb.enable=true`
+- `python scripts/submit_job.py experiment=stage3_hlrp_libero_action_scratch cluster=lrz_x100 cluster.compute.time_limit=00:45:00 experiment.name=stage3_hlrp_libero_smoke_wandb lerobot.steps=50 lerobot.batch_size=2 lerobot.eval.freq=10 lerobot.eval.batch_size=1 lerobot.eval.n_episodes=1 lerobot.log_freq=10 lerobot.save_freq=1000 logging.use_wandb=true lerobot.wandb.enable=true`
 
 ## Repo-local Skills
 

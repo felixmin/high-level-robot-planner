@@ -196,7 +196,7 @@ Main call path:
 
 ## SmolVLA (`smolvla`)
 
-- Language is tokenized in preprocessor with `TokenizerProcessorStep`.
+- Language/image/state/action preparation is centralized in `packages/foundation/backends/smolvla_shared/input_transform.py`.
 - Tokens are embedded via `SmolVLMWithExpertModel.embed_language_tokens`.
 - Language, image, and state are fused into prefix sequence.
 - Action expert consumes prefix cache + noisy action suffix.
@@ -204,13 +204,17 @@ Main call path:
 Main call path:
 
 1. `make_smolvla_pre_post_processors`
-2. `TokenizerProcessorStep`
+2. `packages/foundation/backends/smolvla_shared/input_transform.py`
 3. `SmolVLAPolicy.predict_action_chunk` / `SmolVLAPolicy.forward`
 4. `VLAFlowMatching.sample_actions` / `VLAFlowMatching.forward`
 5. `VLAFlowMatching.embed_prefix`
 6. `SmolVLMWithExpertModel.embed_language_tokens`
 7. `SmolVLMWithExpertModel.forward`
 8. `VLAFlowMatching.denoise_step`
+
+For current open items and interface guarantees, treat
+`docs/foundation_model/stage2_stage3_interface_map.md` and
+`docs/foundation_model/smolvla_transform_parity.md` as the source of truth.
 
 ---
 

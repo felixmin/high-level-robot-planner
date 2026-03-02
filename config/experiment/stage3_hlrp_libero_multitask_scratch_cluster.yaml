@@ -1,14 +1,14 @@
 # @package _global_
 
 defaults:
-  - /cluster@cluster: local_dev
-  - /runtime: stage3_local
+  - /cluster@cluster: mcml_x100
+  - /runtime: stage3_cluster
   - /model/shared@smolvla_core: smolvla_core
   - optional /user_config: local
 
 experiment:
-  name: stage3_hlrp_libero_multitask_scratch
-  description: "Stage 3 Libero latent+action multitask training from scratch (HLRP SmolVLA shared policy)"
+  name: stage3_hlrp_libero_multitask_scratch_cluster
+  description: "Stage 3 Libero latent+action multitask training from scratch on cluster"
 
 submit:
   script: 6_train_lerobot
@@ -20,7 +20,7 @@ cluster:
 
 logging:
   use_wandb: true
-  tags: ["stage3", "lerobot", "libero", "hlrp-policy", "smolvla", "scratch", "cotrain"]
+  tags: ["stage3", "lerobot", "libero", "hlrp-policy", "smolvla", "scratch", "cotrain", "cluster"]
 
 lerobot:
   command: lerobot-train
