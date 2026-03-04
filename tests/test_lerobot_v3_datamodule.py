@@ -34,10 +34,20 @@ def _compiled_index(*, repo_id: str, start: int, stop: int) -> CompiledSourceInd
 
 class _FakeSource:
     def __init__(self, *, repo_id, root, revision, weight, camera_map, state_key, action_key, video_backend, tolerance_s):
-        del root, revision, camera_map, state_key, action_key, video_backend, tolerance_s
+        del root, revision, state_key, action_key, video_backend, tolerance_s
         self.repo_id = repo_id
         self.weight = weight
-        self.meta = SimpleNamespace(total_episodes=10, stats={}, repo_id=repo_id)
+        self.camera_map = dict(camera_map)
+        self.meta = SimpleNamespace(
+            total_episodes=10,
+            stats={},
+            repo_id=repo_id,
+            features={
+                "observation.images.rgb": {"dtype": "video"},
+                "observation.state": {"dtype": "float32"},
+                "action": {"dtype": "float32"},
+            },
+        )
         self.compile_calls = []
         self.compiled_train_index = None
         self.compiled_val_index = None
@@ -212,3 +222,21 @@ def test_lerobot_v3_datamodule_uses_distributed_sampler_when_initialized(monkeyp
     assert dm.train_sampler.world_size == 4
     assert dm.train_sampler.rank == 1
     assert dm.train_sampler.global_num_samples == 48
+
+
+def test_lerobot_v3_datamodule_fails_fast_on_missing_camera_role_mapping(monkeypatch) -> None:
+    monkeypatch.setattr("common.lerobot_v3_data.LeRobotSingleSource", _FakeSource)
+    cfg = _cfg(num_sources=1)
+    cfg["request"]["image_requests"] = {
+        "primary": {"deltas_steps": [0, 1], "required": True},
+        "wrist": {"deltas_steps": [0, 1], "required": False},
+    }
+    dm = LeRobotV3DataModule(
+        sources=cfg["dataset"]["lerobot"]["sources"],
+        request=cfg["request"],
+        loader=cfg["loader"],
+        adapter=cfg["adapter"]["lerobot_v3"],
+        output_format="raw",
+    )
+    with pytest.raises(ValueError, match="missing camera role"):
+        dm.setup()

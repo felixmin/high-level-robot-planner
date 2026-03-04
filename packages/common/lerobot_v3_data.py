@@ -175,6 +175,31 @@ def _resolve_split_episode_sets(
     return train_set, val_set
 
 
+def _validate_source_image_requests(
+    source: LeRobotSingleSource,
+    request: DatasetRequest,
+) -> None:
+    features = source.meta.features
+    for role in request.image_requests:
+        if role not in source.camera_map:
+            raise ValueError(
+                f"Source {source.repo_id!r} is missing camera role {role!r}. "
+                "All requested camera roles must be mapped by every source."
+            )
+        dataset_key = source.camera_map[role]
+        if dataset_key not in features:
+            raise ValueError(
+                f"Source {source.repo_id!r} camera key {dataset_key!r} for role {role!r} "
+                "is not present in dataset features."
+            )
+        dtype = str(features[dataset_key].get("dtype"))
+        if dtype not in {"image", "video"}:
+            raise ValueError(
+                f"Source {source.repo_id!r} camera key {dataset_key!r} for role {role!r} "
+                f"must be an image/video feature, got dtype={dtype!r}."
+            )
+
+
 class LeRobotMixedMapDataset(Dataset):
     def __init__(self, *, sources: Sequence[LeRobotSingleSource], split: str) -> None:
         self.sources = list(sources)
@@ -237,6 +262,7 @@ class LeRobotV3DataModule(pl.LightningDataModule):
                 video_backend=source_cfg.get("video_backend"),
                 tolerance_s=source_cfg.get("tolerance_s"),
             )
+            _validate_source_image_requests(source, self.request)
             train_set, val_set = _resolve_split_episode_sets(
                 int(source.meta.total_episodes),
                 train_episode_indices=source_cfg.get("train_episode_indices"),
