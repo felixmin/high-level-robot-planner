@@ -17,8 +17,10 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import lightning.pytorch as pl
 from omegaconf import DictConfig, ListConfig
 
+from common.batch_utils import move_dataclass_tensors_to_device, select_primary_image_stream, temporal_frames_to_bcthw, uint8_image_streams_to_float32
 from laq.models.latent_action_quantization import LatentActionQuantization, DinoConfig
 from laq.models.flow import FlowConfig
+from common.lerobot_v3_types import Stage1Batch
 
 
 def separate_weight_decayable_params(
@@ -154,6 +156,13 @@ class LAQTask(pl.LightningModule):
         # Flag for one-time batch validation (to catch interface issues early)
         self._batch_validated = False
 
+    @staticmethod
+    def _extract_frames_from_stage1_batch(batch: Stage1Batch) -> torch.Tensor:
+        return temporal_frames_to_bcthw(
+            select_primary_image_stream(batch.image_streams),
+            expected_time_steps=2,
+        )
+
     def forward(
         self,
         video: torch.Tensor,
@@ -209,6 +218,8 @@ class LAQTask(pl.LightningModule):
             if self.trainer.is_global_zero:
                 logger.info(f"Batch keys validated: {list(batch.keys())}")
                 logger.info(f"Required standard keys present: {list(STANDARD_BATCH_KEYS)}")
+        elif isinstance(batch, Stage1Batch):
+            self._extract_frames_from_stage1_batch(batch)
 
         self._batch_validated = True
 
@@ -228,7 +239,9 @@ class LAQTask(pl.LightningModule):
             Loss tensor
         """
         # Handle metadata dict if present
-        if isinstance(batch, dict):
+        if isinstance(batch, Stage1Batch):
+            frames = self._extract_frames_from_stage1_batch(batch)
+        elif isinstance(batch, dict):
             frames = batch["frames"]
         else:
             frames = batch
@@ -268,6 +281,20 @@ class LAQTask(pl.LightningModule):
         device: torch.device,
         dataloader_idx: int,
     ) -> Any:
+        if isinstance(batch, Stage1Batch):
+            batch = move_dataclass_tensors_to_device(batch, device)
+            return Stage1Batch(
+                image_streams=uint8_image_streams_to_float32(batch.image_streams),
+                image_padding_masks=batch.image_padding_masks,
+                task_text=batch.task_text,
+                subtask_text=batch.subtask_text,
+                state=batch.state,
+                state_is_pad=batch.state_is_pad,
+                action=batch.action,
+                action_is_pad=batch.action_is_pad,
+                meta=batch.meta,
+            )
+
         batch = super().transfer_batch_to_device(batch, device, dataloader_idx)
 
         if isinstance(batch, dict):
@@ -297,7 +324,9 @@ class LAQTask(pl.LightningModule):
             Loss tensor
         """
         # Handle metadata dict if present
-        if isinstance(batch, dict):
+        if isinstance(batch, Stage1Batch):
+            frames = self._extract_frames_from_stage1_batch(batch)
+        elif isinstance(batch, dict):
             frames = batch["frames"]
         else:
             frames = batch

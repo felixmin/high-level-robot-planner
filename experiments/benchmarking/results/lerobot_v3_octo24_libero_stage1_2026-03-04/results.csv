@@ -1,0 +1,2 @@
+batch_size,num_workers,warmup_steps,measured_steps,setup_s,first_batch_s,mean_batch_s,p50_batch_s,p90_batch_s,p99_batch_s,batches_per_s,samples_per_s,approx_payload_mb,rss_before_mb,rss_after_setup_mb,rss_after_run_mb
+32,4,2,4,36.398472072032746,92.69262973900186,0.923179088262259,3.48615285474807e-05,2.5848585242056297,3.5818564110144497,1.083213444405835,34.66283022098672,12.00006103515625,2146.3671875,3299.78515625,3317.21875

@@ -1,0 +1,32 @@
+# @package _global_
+
+defaults:
+  - /model@model: laq
+  - /data@data: octo24
+  - /training@training: laq_optimizer
+  - /validation@validation: laq_local_rich
+  - /cluster@cluster: local_dev
+  - optional /user_config: local
+
+experiment:
+  name: stage1_octo24_local
+  description: "Local Stage 1 training on the default Octo24 mix"
+
+submit:
+  script: 2_train_laq
+
+data:
+  output_format: stage1
+  adapter:
+    lerobot_v3:
+      steps_per_epoch: 5000
+
+training:
+  max_steps: 50000
+  log_every_n_steps: 10
+  checkpoint:
+    every_n_train_steps: 1000
+
+logging:
+  use_wandb: true
+  tags: ["stage1", "lerobot_v3", "octo24", "local"]

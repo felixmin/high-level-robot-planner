@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import torch
+
 from common.callbacks import DatasetUsageLoggerCallback
+from common.lerobot_v3_types import Stage1Batch
+from foundation.backends.interfaces import FoundationBatch
 
 
 def test_dataset_usage_logger_counts_and_prints_on_validation(capsys):
@@ -82,3 +86,28 @@ def test_dataset_usage_logger_can_print_batch_mix(capsys):
     out = capsys.readouterr().out
     assert "[Train][BatchMix]" in out
     assert "batch_total=3" in out
+
+
+def test_dataset_usage_logger_accepts_stage1_batch_meta(capsys):
+    cb = DatasetUsageLoggerCallback(enabled=True, log_on_validation_end=False, log_every_n_steps=1)
+    trainer = SimpleNamespace(global_step=0)
+    batch = Stage1Batch(
+        image_streams={"primary": torch.zeros((2, 2, 3, 8, 8), dtype=torch.uint8)},
+        meta={"dataset_name": ["bridge", "robonet"]},
+    )
+    cb.on_train_batch_end(trainer, None, outputs=None, batch=batch, batch_idx=0)
+    out = capsys.readouterr().out
+    assert "[Train][DatasetUsage]" in out
+    assert "bridge=1" in out
+    assert "robonet=1" in out
+
+
+def test_dataset_usage_logger_accepts_foundation_batch_meta(capsys):
+    cb = DatasetUsageLoggerCallback(enabled=True, log_on_validation_end=False, log_every_n_steps=1)
+    trainer = SimpleNamespace(global_step=0)
+    batch = FoundationBatch(meta={"dataset_name": ["nyu", "asu"]})
+    cb.on_train_batch_end(trainer, None, outputs=None, batch=batch, batch_idx=0)
+    out = capsys.readouterr().out
+    assert "[Train][DatasetUsage]" in out
+    assert "nyu=1" in out
+    assert "asu=1" in out

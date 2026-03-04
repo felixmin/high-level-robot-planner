@@ -9,6 +9,18 @@ from typing import Any, Optional
 
 from lightning.pytorch.callbacks import Callback
 
+def _batch_meta_list(batch: Any, *, key: str) -> list[Any] | None:
+    if isinstance(batch, dict):
+        items = batch.get(key)
+        return items if isinstance(items, list) else None
+    meta = getattr(batch, "meta", None)
+    if meta is not None:
+        if not isinstance(meta, dict):
+            return None
+        items = meta.get(key)
+        return items if isinstance(items, list) else None
+    return None
+
 
 class ProgressLoggerCallback(Callback):
     """
@@ -104,10 +116,8 @@ class DatasetUsageLoggerCallback(Callback):
     def on_train_batch_end(self, trainer, pl_module, outputs, batch: Any, batch_idx: int) -> None:
         if not self.enabled:
             return
-        if not isinstance(batch, dict):
-            return
-        items = batch.get(self.key)
-        if not isinstance(items, list):
+        items = _batch_meta_list(batch, key=self.key)
+        if items is None:
             return
 
         for x in items:

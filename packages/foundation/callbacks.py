@@ -19,6 +19,8 @@ from PIL import Image, ImageDraw, ImageFont
 from torchvision.transforms.functional import pil_to_tensor
 from torchvision.utils import flow_to_image
 
+from common.batch_utils import temporal_frames_to_bcthw
+
 logger = logging.getLogger(__name__)
 
 
@@ -775,7 +777,7 @@ class VLALatentFlowDecodeVisualizationCallback(Callback):
         max_chunk = max(1, int(self.cfg.max_decode_batch_size))
         for start in range(0, len(indices), max_chunk):
             chunk_idx = indices[start : start + max_chunk]
-            frames_chunk = frames[chunk_idx].to(pl_module.device)
+            frames_chunk = temporal_frames_to_bcthw(frames[chunk_idx].to(pl_module.device), expected_time_steps=2)
 
             try:
                 gt_chunk = torch.tensor([gt_vectors[i] for i in chunk_idx], dtype=torch.float32, device=pl_module.device)

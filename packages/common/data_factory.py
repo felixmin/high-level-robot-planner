@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from omegaconf import DictConfig, OmegaConf
+try:
+    from omegaconf import DictConfig, OmegaConf
+except ModuleNotFoundError:  # pragma: no cover - used only in lightweight unit-test envs
+    DictConfig = None  # type: ignore[assignment]
+    OmegaConf = None
 
 
 def _to_dict(cfg: Any) -> Dict[str, Any]:
-    if isinstance(cfg, DictConfig):
+    if DictConfig is not None and isinstance(cfg, DictConfig):
         out = OmegaConf.to_container(cfg, resolve=True)
         if not isinstance(out, dict):
             raise TypeError(f"Expected DictConfig -> dict, got {type(out)}")
@@ -37,18 +41,31 @@ def create_datamodule(cfg_data: Any):
     loader = data["loader"]
     dataset = data["dataset"]
 
-    if backend != "oxe_local_indexed":
-        raise ValueError(
-            f"Only data.backend='oxe_local_indexed' is supported, got {backend!r}"
+    if backend == "oxe_local_indexed":
+        from common.data import OpenXLocalDataModule
+
+        adapter = data["adapter"]
+        oxe = dataset["oxe"]
+        return OpenXLocalDataModule(
+            datasets=list(oxe["datasets"]),
+            preprocess=preprocess,
+            loader=loader,
+            adapter=adapter,
         )
 
-    from common.data import OpenXLocalDataModule
+    if backend == "lerobot_v3":
+        from common.lerobot_v3_data import LeRobotV3DataModule
 
-    adapter = data["adapter"]
-    oxe = dataset["oxe"]
-    return OpenXLocalDataModule(
-        datasets=list(oxe["datasets"]),
-        preprocess=preprocess,
-        loader=loader,
-        adapter=adapter,
+        adapter = data["adapter"]["lerobot_v3"]
+        lerobot = dataset["lerobot"]
+        return LeRobotV3DataModule(
+            sources=list(lerobot["sources"]),
+            request=data["request"],
+            loader=loader,
+            adapter=adapter,
+            output_format=str(data["output_format"]),
+        )
+
+    raise ValueError(
+        f"Only data.backend in {{'oxe_local_indexed','lerobot_v3'}} is supported, got {backend!r}"
     )

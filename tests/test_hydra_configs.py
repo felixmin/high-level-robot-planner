@@ -53,6 +53,56 @@ class TestExperimentConfigs:
             assert cfg.data.backend == "oxe_local_indexed"
             assert cfg.training.overfit_batches == 1
 
+    def test_stage1_octo24_local_config(self, config_dir):
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(config_name="config", overrides=["experiment=stage1_octo24_local"])
+
+            assert cfg.experiment.name == "stage1_octo24_local"
+            assert cfg.data.backend == "lerobot_v3"
+            assert cfg.data.output_format == "stage1"
+            assert len(cfg.data.dataset.lerobot.sources) == 24
+            assert cfg.data.loader.batch_size == 64
+            assert cfg.data.dataset.lerobot.sources[0].video_backend == "pyav"
+
+    def test_stage2_octo24_local_config(self, config_dir):
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(config_name="config", overrides=["experiment=stage2_octo24_local"])
+
+            assert cfg.experiment.name == "stage2_octo24_local"
+            assert cfg.data.backend == "lerobot_v3"
+            assert cfg.data.output_format == "foundation"
+            assert len(cfg.data.dataset.lerobot.sources) == 24
+            assert cfg.smolvla_core.vla.image_size == [256, 256]
+
+    def test_stage1_octo24_libero_data_override(self, config_dir):
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "experiment=stage1_octo24_local",
+                    "data=octo24_libero",
+                ],
+            )
+
+            assert cfg.data.output_format == "stage1"
+            assert len(cfg.data.dataset.lerobot.sources) == 25
+            assert cfg.data.dataset.lerobot.sources[5].repo_id == "HuggingFaceVLA/libero"
+
+    def test_stage2_octo24_libero_data_override(self, config_dir):
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    "experiment=stage2_octo24_local",
+                    "data=octo24_libero",
+                ],
+            )
+
+            assert cfg.data.backend == "lerobot_v3"
+            assert len(cfg.data.dataset.lerobot.sources) == 25
+            assert cfg.model.training_mode == "latent_flow"
+            assert cfg.data.request.state_request.deltas_steps == [0]
+
 
 class TestConfigComposition:
     def test_cli_overrides(self, config_dir):
@@ -86,11 +136,13 @@ class TestExperimentConsistency:
         [
             "stage1_laq_oxe_cluster",
             "stage1_laq_oxe_local",
+            "stage1_octo24_local",
             "stage1_laq_oxe_local_sweep",
             "stage1_laq_token_analysis",
             "stage2_cosmos2_tokens",
             "stage2_cosmos2_tokens_overfit",
             "stage2_smol_flow",
+            "stage2_octo24_local",
         ],
     )
     def test_stage12_experiments_load(self, config_dir, experiment):

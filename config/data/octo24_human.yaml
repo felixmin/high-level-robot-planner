@@ -1,0 +1,271 @@
+# @package data
+
+# Octo-style 24-dataset OXE composition mapped onto LeRobot v3 repos after
+# excluding the unresolved `kuka` port and swapping broken official ports to
+# working community mirrors where needed.
+
+backend: lerobot_v3
+
+dataset:
+  lerobot:
+    sources:
+      - repo_id: FedorX8/fractal20220817_data_lerobot
+        weight: 20.544
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/bridge_v2_lerobot
+        weight: 20.544
+        camera_map:
+          primary: observation.images.primary
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/bc_z_lerobot
+        weight: 10.997
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/stanford_hydra_dataset_lerobot
+        weight: 7.251
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/language_table_lerobot
+        weight: 7.13
+        camera_map:
+          primary: observation.images.rgb
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/taco_play_lerobot
+        weight: 4.35
+        camera_map:
+          primary: observation.images.rgb_static
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/furniture_bench_dataset_lerobot
+        weight: 3.988
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        tolerance_s: 1.0e-3
+        val_episode_count: 2
+
+      - repo_id: FedorX8/utaustin_mutex_lerobot
+        weight: 3.625
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/austin_sailor_dataset_lerobot
+        weight: 3.505
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/roboturk_lerobot
+        weight: 3.384
+        camera_map:
+          primary: observation.images.front_rgb
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/toto_lerobot
+        weight: 2.9
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: lerobot/austin_sirius_dataset
+        weight: 2.779
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/berkeley_autolab_ur5_lerobot
+        weight: 1.813
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/iamlab_cmu_pickup_insert_lerobot
+        weight: 1.45
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/viola_lerobot
+        weight: 1.45
+        camera_map:
+          primary: observation.images.agentview_rgb
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: lerobot/berkeley_fanuc_manipulation
+        weight: 1.208
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: lerobot/nyu_franka_play_dataset
+        weight: 1.088
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: lerobot/jaco_play
+        weight: 0.725
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: FedorX8/berkeley_cable_routing_lerobot
+        weight: 0.363
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: lerobot/austin_buds_dataset
+        weight: 0.363
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: lerobot/cmu_stretch
+        weight: 0.242
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: lerobot/nyu_door_opening_surprising_effectiveness
+        weight: 0.121
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: lerobot/dlr_edan_shared_control
+        weight: 0.121
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: lerobot/ucsd_kitchen_dataset
+        weight: 0.06
+        camera_map:
+          primary: observation.images.image
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: LSY-lab/simple_tasks_human_rec_v0
+        weight: 50
+        camera_map:
+          primary: observation.images.fpv
+        state_key: null
+        action_key: null
+        video_backend: pyav
+        val_episode_count: 2
+
+loader:
+  batch_size: 64
+  num_workers: 8
+  pin_memory: true
+  prefetch_factor: 2
+
+preprocess:
+  image_size: 256
+  return_metadata: true
+
+request:
+  image_requests:
+    primary:
+      deltas_steps: [0, 1]
+      required: true
+  state_request: null
+  action_request: null
+  include_task_text: true
+  include_subtask_text: false
+  include_metadata: true
+  pad_missing_future: true
+  image_size:
+    - ${data.preprocess.image_size}
+    - ${data.preprocess.image_size}
+  image_dtype: uint8
+
+output_format: raw
+
+adapter:
+  lerobot_v3:
+    seed: 42
+    steps_per_epoch: 5000
+    resample_each_epoch: true
+    weights_mode: explicit

@@ -200,3 +200,18 @@ def test_mean_std_normalization_handles_padded_tail_dims() -> None:
     # tail dims are identity-normalized because stats are shorter than padded model dim
     assert torch.allclose(n[..., 3:], x[..., 3:])
     assert torch.allclose(u, x)
+
+
+def test_mean_std_normalization_pads_value_to_stats_dim() -> None:
+    x = torch.tensor([[[3.0, 5.0]]], dtype=torch.float32)
+    stats = {
+        "state": {
+            "mean": torch.tensor([1.0, 3.0, 7.0], dtype=torch.float32),
+            "std": torch.tensor([2.0, 2.0, 5.0], dtype=torch.float32),
+        }
+    }
+    n = normalize_vector_mean_std(value=x, stats=stats, key_candidates=["state"])
+    u = unnormalize_vector_mean_std(value=n, stats=stats, key_candidates=["state"])
+    assert tuple(n.shape) == (1, 1, 3)
+    assert torch.allclose(n, torch.tensor([[[1.0, 1.0, 0.0]]], dtype=torch.float32))
+    assert torch.allclose(u, torch.tensor([[[3.0, 5.0, 7.0]]], dtype=torch.float32))

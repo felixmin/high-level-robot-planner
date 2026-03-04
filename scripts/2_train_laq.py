@@ -21,6 +21,7 @@ workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 import torch
 import wandb
@@ -105,14 +106,23 @@ def main(cfg: DictConfig):
     if cfg.data.backend == "oxe_local_indexed":
         dataset_names = [d.name for d in cfg.data.dataset.oxe.datasets]
         logger.info(f"  - Datasets: {dataset_names}")
-        est_batches = int(len(datamodule.train_dataset))
-        est_pairs = est_batches * int(cfg.data.loader.batch_size)
+        est_samples = int(len(datamodule.train_dataset))
+        est_batches = est_samples // int(cfg.data.loader.batch_size)
         logger.info(
-            f"  - Estimated train batches/epoch: ~{est_batches:,} (~{est_pairs:,} pairs)"
+            f"  - Estimated train batches/epoch: ~{est_batches:,} (~{est_samples:,} pairs)"
+        )
+    elif cfg.data.backend == "lerobot_v3":
+        if hasattr(datamodule, "sources"):
+            dataset_names = [src.repo_id for src in datamodule.sources]
+            logger.info(f"  - Sources: {dataset_names}")
+        est_samples = int(len(datamodule.train_dataset))
+        est_batches = est_samples // int(cfg.data.loader.batch_size)
+        logger.info(
+            f"  - Estimated train batches/epoch: ~{est_batches:,} (~{est_samples:,} samples)"
         )
     else:
         raise ValueError(
-            f"Only data.backend='oxe_local_indexed' is supported, got {cfg.data.backend!r}"
+            f"Only data.backend in {{'oxe_local_indexed', 'lerobot_v3'}} is supported, got {cfg.data.backend!r}"
         )
 
     # Initialize LAQ task

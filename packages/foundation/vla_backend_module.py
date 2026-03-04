@@ -15,7 +15,9 @@ from typing import Any
 
 import lightning.pytorch as pl
 import torch
+import torch.nn.functional as F
 
+from common.batch_utils import move_dataclass_tensors_to_device, select_primary_image_stream, temporal_frames_to_bcthw, uint8_image_streams_to_float32
 from foundation.backends.interfaces import BackendMode, FoundationBatch, VLABackend
 from foundation.backends.smolvla_shared.input_transform import normalize_vector_mean_std
 from foundation.constrained_decode import ActionTokenIds
@@ -47,7 +49,7 @@ class VLATokenBackendLightningModule(pl.LightningModule):
         self,
         *,
         backend: VLABackend,
-        code_provider: LatentCodeProvider,
+        code_provider: LatentCodeProvider | None,
         backend_mode: BackendMode = BackendMode.CODES,
         normalization_stats: dict[str, dict[str, Any]] | None = None,
         optimizer: VLAOptimizerConfig | None = None,
@@ -65,6 +67,13 @@ class VLATokenBackendLightningModule(pl.LightningModule):
 
         # Stashed for visualization callback (rank0 only reads it).
         self._last_val_sample: dict[str, Any] | None = None
+
+    def _require_code_provider(self) -> LatentCodeProvider:
+        if self.code_provider is None:
+            raise ValueError(
+                f"`code_provider` is required for backend_mode={self.backend_mode.value!r}."
+            )
+        return self.code_provider
 
     @property
     def vla_model(self) -> Any:
@@ -172,7 +181,7 @@ class VLATokenBackendLightningModule(pl.LightningModule):
         return stats
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        out, _codes, _vectors, _actions, _frames, _instructions = self._loss_and_targets_from_oxe_batch(batch)
+        out, _codes, _vectors, _actions, _frames, _instructions = self._loss_and_targets_from_batch(batch)
         self.log("train/loss", out.loss, prog_bar=True, sync_dist=True)
         for key, value in out.metrics.items():
             if key == "loss":
@@ -181,7 +190,7 @@ class VLATokenBackendLightningModule(pl.LightningModule):
         return out.loss
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        out, codes, vectors, actions, frames, instructions = self._loss_and_targets_from_oxe_batch(batch)
+        out, codes, vectors, actions, frames, instructions = self._loss_and_targets_from_batch(batch)
         self.log("val/loss", out.loss, prog_bar=True, sync_dist=True)
         for key, value in out.metrics.items():
             if key == "loss":
@@ -190,7 +199,12 @@ class VLATokenBackendLightningModule(pl.LightningModule):
 
         if batch_idx == 0:
             image_streams = self._extract_policy_image_streams(frames)
-            state = extract_oxe_initial_state({"initial_state": batch["initial_state"]})
+            if isinstance(batch, FoundationBatch):
+                state = batch.state
+                if state is None:
+                    raise ValueError("FoundationBatch must include state for validation.")
+            else:
+                state = extract_oxe_initial_state({"initial_state": batch["initial_state"]})
             state = normalize_vector_mean_std(
                 value=state,
                 stats=self.normalization_stats,
@@ -359,6 +373,132 @@ class VLATokenBackendLightningModule(pl.LightningModule):
 
         return out.loss
 
+    def transfer_batch_to_device(
+        self,
+        batch: Any,
+        device: torch.device,
+        dataloader_idx: int,
+    ) -> Any:
+        if isinstance(batch, FoundationBatch):
+            batch = move_dataclass_tensors_to_device(batch, device)
+            if batch.image_streams is not None:
+                batch = FoundationBatch(
+                    image_streams=uint8_image_streams_to_float32(batch.image_streams),
+                    image_padding_masks=batch.image_padding_masks,
+                    task_text=batch.task_text,
+                    subtask_text=batch.subtask_text,
+                    language_tokens=batch.language_tokens,
+                    language_attention_mask=batch.language_attention_mask,
+                    target_codes=batch.target_codes,
+                    target_latent_vectors=batch.target_latent_vectors,
+                    target_actions=batch.target_actions,
+                    action_is_pad=batch.action_is_pad,
+                    state=batch.state,
+                    meta=batch.meta,
+                )
+            return batch
+        return super().transfer_batch_to_device(batch, device, dataloader_idx)
+
+    @staticmethod
+    def _resize_laq_video(video: torch.Tensor, target_image_size: tuple[int, int]) -> torch.Tensor:
+        if video.ndim != 5:
+            raise ValueError(f"Expected LAQ video [B,C,T,H,W], got {tuple(video.shape)}")
+        target_hw = tuple(int(x) for x in target_image_size)
+        if tuple(int(x) for x in video.shape[3:]) == target_hw:
+            return video
+        b, c, t, h, w = video.shape
+        flat = video.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
+        flat = F.interpolate(flat, size=target_hw, mode="bilinear", align_corners=False)
+        return flat.reshape(b, t, c, target_hw[0], target_hw[1]).permute(0, 2, 1, 3, 4).contiguous()
+
+    @classmethod
+    def _laq_video_from_foundation_batch(
+        cls,
+        batch: FoundationBatch,
+        *,
+        target_image_size: tuple[int, int] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        frames = select_primary_image_stream(batch.image_streams or {})
+        video = temporal_frames_to_bcthw(frames, expected_time_steps=2)
+        if video.dtype == torch.uint8:
+            video = video.to(torch.float32) / 255.0
+        else:
+            video = video.to(torch.float32)
+        if target_image_size is not None:
+            video = cls._resize_laq_video(video, target_image_size)
+        return video, frames
+
+    def _loss_and_targets_from_foundation_batch(
+        self,
+        batch: FoundationBatch,
+    ) -> tuple[Any, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor, list[str]]:
+        target_image_size = None
+        if self.code_provider is not None:
+            raw_image_size = getattr(self.code_provider, "image_size", None)
+            if raw_image_size is not None:
+                target_image_size = tuple(int(x) for x in raw_image_size)
+        video, frames = self._laq_video_from_foundation_batch(
+            batch,
+            target_image_size=target_image_size,
+        )
+        instructions = [str(x) for x in (batch.task_text or [])]
+        actions: torch.Tensor | None = None
+        action_is_pad: torch.Tensor | None = None
+        codes: torch.Tensor | None = None
+        vectors: torch.Tensor | None = None
+        state = batch.state
+        if state is None:
+            raise ValueError("FoundationBatch must include state for current Stage 2 training.")
+
+        if self.backend_mode is BackendMode.CODES:
+            code_provider = self._require_code_provider()
+            codes = code_provider.codes_from_video(video).to(torch.long).detach().cpu()
+        elif self.backend_mode is BackendMode.LATENT_FLOW:
+            code_provider = self._require_code_provider()
+            codes, vectors = code_provider.codes_and_vectors_from_video(video)
+            codes = codes.to(torch.long).detach().cpu()
+            vectors = vectors.detach().cpu()
+        elif self.backend_mode is BackendMode.MULTITASK:
+            code_provider = self._require_code_provider()
+            codes, vectors = code_provider.codes_and_vectors_from_video(video)
+            codes = codes.to(torch.long).detach().cpu()
+            vectors = vectors.detach().cpu()
+            actions = None if batch.target_actions is None else batch.target_actions.detach().cpu()
+            action_is_pad = batch.action_is_pad
+        elif self.backend_mode is BackendMode.ACTIONS:
+            actions = None if batch.target_actions is None else batch.target_actions.detach().cpu()
+            action_is_pad = batch.action_is_pad
+        else:
+            raise NotImplementedError(f"Unsupported backend mode: {self.backend_mode}")
+
+        state = normalize_vector_mean_std(
+            value=state,
+            stats=self.normalization_stats,
+            key_candidates=["observation.state", "initial_state", "state"],
+        )
+        if actions is not None:
+            actions = normalize_vector_mean_std(
+                value=actions,
+                stats=self.normalization_stats,
+                key_candidates=["action", "ACTION"],
+            )
+
+        out = self.backend.loss_from_batch(
+            FoundationBatch(
+                image_streams=batch.image_streams,
+                image_padding_masks=batch.image_padding_masks,
+                task_text=instructions,
+                target_codes=codes,
+                target_latent_vectors=vectors,
+                target_actions=actions,
+                action_is_pad=action_is_pad,
+                state=state,
+                meta=batch.meta,
+            ),
+            mode=self.backend_mode,
+        )
+        return out, codes, vectors, actions, frames, instructions
+
     def _loss_and_targets_from_oxe_batch(
         self, batch: Any
     ) -> tuple[Any, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor, list[str]]:
@@ -375,13 +515,16 @@ class VLATokenBackendLightningModule(pl.LightningModule):
         state = extract_oxe_initial_state({"initial_state": batch["initial_state"]})
 
         if self.backend_mode is BackendMode.CODES:
-            codes = self.code_provider.codes_from_video(video).to(torch.long).detach().cpu()
+            code_provider = self._require_code_provider()
+            codes = code_provider.codes_from_video(video).to(torch.long).detach().cpu()
         elif self.backend_mode is BackendMode.LATENT_FLOW:
-            codes, vectors = self.code_provider.codes_and_vectors_from_video(video)
+            code_provider = self._require_code_provider()
+            codes, vectors = code_provider.codes_and_vectors_from_video(video)
             codes = codes.to(torch.long).detach().cpu()
             vectors = vectors.detach().cpu()
         elif self.backend_mode is BackendMode.MULTITASK:
-            codes, vectors = self.code_provider.codes_and_vectors_from_video(video)
+            code_provider = self._require_code_provider()
+            codes, vectors = code_provider.codes_and_vectors_from_video(video)
             codes = codes.to(torch.long).detach().cpu()
             vectors = vectors.detach().cpu()
             actions = extract_oxe_actions(batch).detach().cpu()
@@ -420,6 +563,13 @@ class VLATokenBackendLightningModule(pl.LightningModule):
             mode=self.backend_mode,
         )
         return out, codes, vectors, actions, frames, instructions
+
+    def _loss_and_targets_from_batch(
+        self, batch: Any
+    ) -> tuple[Any, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor, list[str]]:
+        if isinstance(batch, FoundationBatch):
+            return self._loss_and_targets_from_foundation_batch(batch)
+        return self._loss_and_targets_from_oxe_batch(batch)
 
     @torch.no_grad()
     def _predict_freeform_text(

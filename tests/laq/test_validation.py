@@ -6,6 +6,7 @@ import pytest
 import torch
 from unittest.mock import MagicMock, patch
 
+from common.lerobot_v3_types import Stage1Batch
 from laq.validation import (
     ValidationCache,
     ValidationStrategy,
@@ -746,6 +747,41 @@ class TestCompositionPattern:
         ]
         for strategy_type in expected_types:
             assert strategy_type in STRATEGY_REGISTRY, f"Missing: {strategy_type}"
+
+
+class TestStage1BatchValidationSupport:
+    def test_train_preview_buffer_accepts_stage1_batch(self):
+        cb = TrainPreviewBufferCallback(enabled=True, max_samples=8, samples_per_batch=2)
+        batch = Stage1Batch(
+            image_streams={"primary": torch.randint(0, 255, (3, 2, 3, 8, 8), dtype=torch.uint8)},
+            task_text=["pick", "place", "push"],
+            meta={"dataset_name": ["a", "b", "c"], "frame_idx": [1, 2, 3]},
+        )
+
+        cb.on_train_batch_end(MagicMock(), MagicMock(), None, batch, 0)
+
+        frames, metadata = cb.sample(2)
+        assert frames is not None
+        assert tuple(frames.shape[1:3]) == (3, 2)
+        assert metadata is not None
+        assert all("dataset_name" in meta for meta in metadata)
+
+    def test_validation_callback_accepts_stage1_batch(self):
+        cb = ValidationStrategyCallback(strategies=[], bucket_configs=None, num_fixed_samples=2)
+        batch = Stage1Batch(
+            image_streams={"primary": torch.randn(2, 2, 3, 8, 8)},
+            task_text=["pick", "place"],
+            meta={"dataset_name": ["a", "b"], "frame_idx": [10, 20]},
+        )
+
+        cb.on_validation_epoch_start(MagicMock(), MagicMock())
+        cb.on_validation_batch_end(MagicMock(), MagicMock(), None, batch, batch_idx=0)
+
+        all_frames = cb.global_cache.get_all_frames()
+        all_metadata = cb.global_cache.get_all_metadata()
+        assert all_frames is not None
+        assert tuple(all_frames.shape) == (2, 3, 2, 8, 8)
+        assert [meta["dataset_name"] for meta in all_metadata] == ["a", "b"]
 
 
 if __name__ == "__main__":

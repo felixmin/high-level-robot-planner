@@ -347,9 +347,10 @@ def normalize_vector_mean_std(
         target_dim = int(value.shape[-1])
         src_dim = int(mean_t.shape[0])
         if src_dim > target_dim:
-            raise ValueError(
-                f"Stats dimension {src_dim} exceeds value dimension {target_dim} for keys={list(key_candidates)}"
-            )
+            pad_shape = (*value.shape[:-1], src_dim - target_dim)
+            pad_value = mean_t[target_dim:].view(*([1] * (value.ndim - 1)), src_dim - target_dim)
+            value = torch.cat([value, pad_value.expand(pad_shape)], dim=-1)
+            target_dim = src_dim
         mean_pad = torch.zeros((target_dim,), device=value.device, dtype=value.dtype)
         std_pad = torch.ones((target_dim,), device=value.device, dtype=value.dtype)
         mean_pad[:src_dim] = mean_t
@@ -378,9 +379,13 @@ def unnormalize_vector_mean_std(
         target_dim = int(value.shape[-1])
         src_dim = int(mean_t.shape[0])
         if src_dim > target_dim:
-            raise ValueError(
-                f"Stats dimension {src_dim} exceeds value dimension {target_dim} for keys={list(key_candidates)}"
+            pad_value = torch.zeros(
+                (*value.shape[:-1], src_dim - target_dim),
+                device=value.device,
+                dtype=value.dtype,
             )
+            value = torch.cat([value, pad_value], dim=-1)
+            target_dim = src_dim
         mean_pad = torch.zeros((target_dim,), device=value.device, dtype=value.dtype)
         std_pad = torch.ones((target_dim,), device=value.device, dtype=value.dtype)
         mean_pad[:src_dim] = mean_t

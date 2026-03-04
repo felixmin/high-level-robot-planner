@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import lightning.pytorch as pl
 import torch
 import wandb
@@ -123,26 +124,20 @@ def main(cfg: DictConfig):
     )
 
     # Data: frame pairs + language.
-    if cfg.data.backend != "oxe_local_indexed":
-        raise ValueError(
-            "Stage 2 expects data.backend='oxe_local_indexed', "
-            f"got {cfg.data.backend!r}"
-        )
-
     datamodule = create_datamodule(cfg.data)
     datamodule.setup()
 
-    # LAQ: frozen label generator (encoder+VQ only; decoders pruned to reclaim VRAM)
-    laq_ckpt = cfg.model.laq.checkpoint
-    if not laq_ckpt:
-        raise ValueError(
-            "Set `model.laq.checkpoint=/path/to/laq.ckpt` for online LAQ labeling."
-        )
-    encoder_vq = load_laq_encoder_vq_inference_from_checkpoint(laq_ckpt)
-    laq_provider = LAQTaskCodeProvider(encoder_vq)
-
     backend_type = str(cfg.model.backend)
     backend_mode = BackendMode(str(cfg.model.training_mode))
+    laq_provider = None
+    if backend_mode is not BackendMode.ACTIONS:
+        laq_ckpt = cfg.model.laq.checkpoint
+        if not laq_ckpt:
+            raise ValueError(
+                "Set `model.laq.checkpoint=/path/to/laq.ckpt` for online LAQ labeling."
+            )
+        encoder_vq = load_laq_encoder_vq_inference_from_checkpoint(laq_ckpt)
+        laq_provider = LAQTaskCodeProvider(encoder_vq)
 
     model_name = cfg.model.vla.model_name
 
@@ -167,7 +162,10 @@ def main(cfg: DictConfig):
         image_size = tuple(int(x) for x in cfg.model.vla.image_size)
         flow_cfg = cfg.model.flow
 
-        latent_vector_dim = int(laq_provider.code_seq_len * laq_provider.codebook_dim)
+        if laq_provider is None:
+            latent_vector_dim = int(cfg.smolvla_core.latent.latent_vector_dim)
+        else:
+            latent_vector_dim = int(laq_provider.code_seq_len * laq_provider.codebook_dim)
         action_dim = int(flow_cfg.action_dim)
         action_chunk_size = int(flow_cfg.action_chunk_size)
 
@@ -216,10 +214,13 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"Unknown model.backend={backend_type!r}")
 
-    normalization_stats = OmegaConf.to_container(
-        cfg.model.vla.normalization_stats,
-        resolve=True,
-    )
+    if cfg.data.backend == "lerobot_v3":
+        normalization_stats = getattr(datamodule, "normalization_stats", None)
+    else:
+        normalization_stats = OmegaConf.to_container(
+            cfg.model.vla.normalization_stats,
+            resolve=True,
+        )
 
     module = VLATokenBackendLightningModule(
         backend=backend,

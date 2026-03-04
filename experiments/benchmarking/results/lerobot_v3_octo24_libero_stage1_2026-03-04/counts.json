@@ -1,0 +1,235 @@
+{
+  "num_sources": 25,
+  "total_episodes": 640831,
+  "train_episodes": 640781,
+  "val_episodes": 50,
+  "train_samples": 24320393,
+  "val_samples": 13774,
+  "sources": [
+    {
+      "repo_id": "FedorX8/fractal20220817_data_lerobot",
+      "weight": 20.544,
+      "total_episodes": 87212,
+      "train_episodes": 87210,
+      "val_episodes": 2,
+      "train_samples": 3699080,
+      "val_samples": 108
+    },
+    {
+      "repo_id": "FedorX8/bridge_v2_lerobot",
+      "weight": 20.544,
+      "total_episodes": 50418,
+      "train_episodes": 50416,
+      "val_episodes": 2,
+      "train_samples": 1750710,
+      "val_samples": 34
+    },
+    {
+      "repo_id": "FedorX8/bc_z_lerobot",
+      "weight": 10.997,
+      "total_episodes": 39350,
+      "train_episodes": 39348,
+      "val_episodes": 2,
+      "train_samples": 5432147,
+      "val_samples": 196
+    },
+    {
+      "repo_id": "FedorX8/stanford_hydra_dataset_lerobot",
+      "weight": 7.251,
+      "total_episodes": 570,
+      "train_episodes": 568,
+      "val_episodes": 2,
+      "train_samples": 356437,
+      "val_samples": 1227
+    },
+    {
+      "repo_id": "FedorX8/language_table_lerobot",
+      "weight": 7.13,
+      "total_episodes": 442226,
+      "train_episodes": 442224,
+      "val_episodes": 2,
+      "train_samples": 6603188,
+      "val_samples": 62
+    },
+    {
+      "repo_id": "HuggingFaceVLA/libero",
+      "weight": 5.0,
+      "total_episodes": 1693,
+      "train_episodes": 1691,
+      "val_episodes": 2,
+      "train_samples": 271525,
+      "val_samples": 247
+    },
+    {
+      "repo_id": "FedorX8/taco_play_lerobot",
+      "weight": 4.35,
+      "total_episodes": 3242,
+      "train_episodes": 3240,
+      "val_episodes": 2,
+      "train_samples": 210600,
+      "val_samples": 130
+    },
+    {
+      "repo_id": "FedorX8/furniture_bench_dataset_lerobot",
+      "weight": 3.988,
+      "total_episodes": 5100,
+      "train_episodes": 5098,
+      "val_episodes": 2,
+      "train_samples": 3941895,
+      "val_samples": 1062
+    },
+    {
+      "repo_id": "FedorX8/utaustin_mutex_lerobot",
+      "weight": 3.625,
+      "total_episodes": 1500,
+      "train_episodes": 1498,
+      "val_episodes": 2,
+      "train_samples": 359757,
+      "val_samples": 626
+    },
+    {
+      "repo_id": "FedorX8/austin_sailor_dataset_lerobot",
+      "weight": 3.505,
+      "total_episodes": 240,
+      "train_episodes": 238,
+      "val_episodes": 2,
+      "train_samples": 349019,
+      "val_samples": 3835
+    },
+    {
+      "repo_id": "FedorX8/roboturk_lerobot",
+      "weight": 3.384,
+      "total_episodes": 1796,
+      "train_episodes": 1794,
+      "val_episodes": 2,
+      "train_samples": 166419,
+      "val_samples": 208
+    },
+    {
+      "repo_id": "FedorX8/toto_lerobot",
+      "weight": 2.9,
+      "total_episodes": 902,
+      "train_episodes": 900,
+      "val_episodes": 2,
+      "train_samples": 292707,
+      "val_samples": 530
+    },
+    {
+      "repo_id": "lerobot/austin_sirius_dataset",
+      "weight": 2.779,
+      "total_episodes": 559,
+      "train_episodes": 557,
+      "val_episodes": 2,
+      "train_samples": 278292,
+      "val_samples": 1088
+    },
+    {
+      "repo_id": "FedorX8/berkeley_autolab_ur5_lerobot",
+      "weight": 1.813,
+      "total_episodes": 896,
+      "train_episodes": 894,
+      "val_episodes": 2,
+      "train_samples": 86676,
+      "val_samples": 211
+    },
+    {
+      "repo_id": "FedorX8/iamlab_cmu_pickup_insert_lerobot",
+      "weight": 1.45,
+      "total_episodes": 631,
+      "train_episodes": 629,
+      "val_episodes": 2,
+      "train_samples": 144943,
+      "val_samples": 667
+    },
+    {
+      "repo_id": "FedorX8/viola_lerobot",
+      "weight": 1.45,
+      "total_episodes": 135,
+      "train_episodes": 133,
+      "val_episodes": 2,
+      "train_samples": 67950,
+      "val_samples": 828
+    },
+    {
+      "repo_id": "lerobot/berkeley_fanuc_manipulation",
+      "weight": 1.208,
+      "total_episodes": 415,
+      "train_episodes": 413,
+      "val_episodes": 2,
+      "train_samples": 61879,
+      "val_samples": 319
+    },
+    {
+      "repo_id": "lerobot/nyu_franka_play_dataset",
+      "weight": 1.088,
+      "total_episodes": 456,
+      "train_episodes": 454,
+      "val_episodes": 2,
+      "train_samples": 44211,
+      "val_samples": 208
+    },
+    {
+      "repo_id": "lerobot/jaco_play",
+      "weight": 0.725,
+      "total_episodes": 1085,
+      "train_episodes": 1083,
+      "val_episodes": 2,
+      "train_samples": 76730,
+      "val_samples": 150
+    },
+    {
+      "repo_id": "FedorX8/berkeley_cable_routing_lerobot",
+      "weight": 0.363,
+      "total_episodes": 1482,
+      "train_episodes": 1480,
+      "val_episodes": 2,
+      "train_samples": 36671,
+      "val_samples": 87
+    },
+    {
+      "repo_id": "lerobot/austin_buds_dataset",
+      "weight": 0.363,
+      "total_episodes": 50,
+      "train_episodes": 48,
+      "val_episodes": 2,
+      "train_samples": 32747,
+      "val_samples": 1315
+    },
+    {
+      "repo_id": "lerobot/cmu_stretch",
+      "weight": 0.242,
+      "total_episodes": 135,
+      "train_episodes": 133,
+      "val_episodes": 2,
+      "train_samples": 24508,
+      "val_samples": 373
+    },
+    {
+      "repo_id": "lerobot/nyu_door_opening_surprising_effectiveness",
+      "weight": 0.121,
+      "total_episodes": 484,
+      "train_episodes": 482,
+      "val_episodes": 2,
+      "train_samples": 19851,
+      "val_samples": 70
+    },
+    {
+      "repo_id": "lerobot/dlr_edan_shared_control",
+      "weight": 0.121,
+      "total_episodes": 104,
+      "train_episodes": 102,
+      "val_episodes": 2,
+      "train_samples": 8683,
+      "val_samples": 141
+    },
+    {
+      "repo_id": "lerobot/ucsd_kitchen_dataset",
+      "weight": 0.06,
+      "total_episodes": 150,
+      "train_episodes": 148,
+      "val_episodes": 2,
+      "train_samples": 3768,
+      "val_samples": 52
+    }
+  ]
+}

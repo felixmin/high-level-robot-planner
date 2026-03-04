@@ -13,12 +13,6 @@ from foundation.backends.interfaces import (
     LossOutput,
     VLABackend,
 )
-from foundation.backends.smolvla_shared.config import (
-    SmolVLASharedBackendConfig,
-    SmolVLASharedCoreConfig,
-)
-from foundation.backends.smolvla_shared.model import SmolVLASharedCore
-from foundation.backends.smolvla_shared_backend import SmolVLASharedBackend
 
 __all__ = [
     "BackendMode",
@@ -26,8 +20,22 @@ __all__ = [
     "LatentOutput",
     "LossOutput",
     "VLABackend",
-    "SmolVLASharedBackendConfig",
-    "SmolVLASharedCoreConfig",
-    "SmolVLASharedCore",
-    "SmolVLASharedBackend",
 ]
+
+try:
+    from foundation.backends.smolvla_shared.config import (
+        SmolVLASharedBackendConfig,
+        SmolVLASharedCoreConfig,
+    )
+    from foundation.backends.smolvla_shared.model import SmolVLASharedCore
+    from foundation.backends.smolvla_shared_backend import SmolVLASharedBackend
+except ModuleNotFoundError:
+    # Keep lightweight interface imports usable in environments without full model deps.
+    pass
+else:
+    __all__ += [
+        "SmolVLASharedBackendConfig",
+        "SmolVLASharedCoreConfig",
+        "SmolVLASharedCore",
+        "SmolVLASharedBackend",
+    ]

@@ -1,0 +1,20 @@
+[
+  {
+    "batch_size": 32,
+    "num_workers": 4,
+    "warmup_steps": 2,
+    "measured_steps": 4,
+    "setup_s": 36.398472072032746,
+    "first_batch_s": 92.69262973900186,
+    "mean_batch_s": 0.923179088262259,
+    "p50_batch_s": 3.48615285474807e-05,
+    "p90_batch_s": 2.5848585242056297,
+    "p99_batch_s": 3.5818564110144497,
+    "batches_per_s": 1.083213444405835,
+    "samples_per_s": 34.66283022098672,
+    "approx_payload_mb": 12.00006103515625,
+    "rss_before_mb": 2146.3671875,
+    "rss_after_setup_mb": 3299.78515625,
+    "rss_after_run_mb": 3317.21875
+  }
+]

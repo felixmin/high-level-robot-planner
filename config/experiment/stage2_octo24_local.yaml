@@ -1,0 +1,51 @@
+# @package _global_
+
+defaults:
+  - /model/shared@smolvla_core: smolvla_core
+  - /model@model: foundation_smol_flow_shared
+  - /data@data: octo24
+  - /training@training: vla_lightning
+  - /cluster@cluster: local_dev
+  - optional /user_config: local
+
+experiment:
+  name: stage2_octo24_local
+  description: "Local Stage 2 latent-flow training on the default Octo24 mix"
+
+submit:
+  script: 4_train_foundation
+
+data:
+  loader:
+    batch_size: 16
+    num_workers: 8
+    pin_memory: true
+    prefetch_factor: 2
+  output_format: foundation
+  request:
+    image_requests:
+      primary:
+        deltas_steps: [0, 1]
+        required: true
+    state_request:
+      deltas_steps: [0]
+    include_task_text: true
+  adapter:
+    lerobot_v3:
+      steps_per_epoch: 5000
+
+smolvla_core:
+  vla:
+    image_size: [256, 256]
+
+training:
+  max_steps: 50000
+  validation:
+    check_interval: 1000
+    limit_batches: 20
+  checkpoint:
+    every_n_train_steps: 1000
+
+logging:
+  use_wandb: true
+  tags: ["stage2", "lerobot_v3", "octo24", "latent_flow", "local"]

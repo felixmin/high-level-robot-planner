@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Dict, Protocol
 
 import torch
 
+from common.batch_utils import temporal_frames_to_bcthw
+
 if TYPE_CHECKING:
     from laq.inference import LAQEncoderVQInference
 
@@ -27,25 +29,7 @@ def oxe_frames_to_laq_video(frames: torch.Tensor) -> torch.Tensor:
       - video: [B, 3, T, H, W] float32 in [0, 1]
     """
 
-    if frames.ndim != 5:
-        raise ValueError(f"Expected 5D frames tensor, got shape {tuple(frames.shape)}")
-
-    # Accept either [B, T, H, W, 3] or [B, T, 3, H, W] or [B, 3, T, H, W].
-    if frames.shape[-1] == 3:
-        # [B, T, H, W, 3] -> [B, T, 3, H, W]
-        video = frames.permute(0, 1, 4, 2, 3)
-        # [B, T, 3, H, W] -> [B, 3, T, H, W]
-        video = video.permute(0, 2, 1, 3, 4)
-    elif frames.shape[2] == 3:
-        # [B, T, 3, H, W] -> [B, 3, T, H, W]
-        video = frames.permute(0, 2, 1, 3, 4)
-    elif frames.shape[1] == 3:
-        video = frames
-    else:
-        raise ValueError(
-            "Unrecognized frames layout; expected last dim=3 (BHWC), or shape[2]=3 (BTCHW), or shape[1]=3 (BCTHW). "
-            f"Got {tuple(frames.shape)}"
-        )
+    video = temporal_frames_to_bcthw(frames)
 
     if video.dtype == torch.uint8:
         video = video.to(torch.float32) / 255.0
@@ -59,6 +43,7 @@ class LatentCodeProvider(Protocol):
     codebook_size: int
     code_seq_len: int
     codebook_dim: int
+    image_size: tuple[int, int]
 
     def codes_from_video(self, video: torch.Tensor) -> torch.Tensor:
         """Return codebook indices [B, code_seq_len] for a video batch."""
@@ -93,6 +78,10 @@ class LAQTaskCodeProvider(torch.nn.Module):
     @property
     def device(self) -> torch.device:
         return self._encoder_vq.device
+
+    @property
+    def image_size(self) -> tuple[int, int]:
+        return self._encoder_vq.image_size
 
     @torch.no_grad()
     def codes_from_video(self, video: torch.Tensor) -> torch.Tensor:

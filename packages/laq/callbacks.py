@@ -15,6 +15,40 @@ import torch
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import Callback
 
+from common.batch_utils import select_primary_image_stream, temporal_frames_to_bcthw
+from common.lerobot_v3_types import Stage1Batch
+
+
+def _stage1_batch_to_frames(batch: Stage1Batch) -> torch.Tensor:
+    return temporal_frames_to_bcthw(
+        select_primary_image_stream(batch.image_streams),
+        expected_time_steps=2,
+    )
+
+
+def _stage1_batch_to_metadata(batch: Stage1Batch) -> List[Dict[str, Any]]:
+    frames = _stage1_batch_to_frames(batch)
+    batch_size = int(frames.shape[0])
+    meta_dict = dict(batch.meta or {})
+    task_text = list(batch.task_text or [])
+    subtask_text = list(batch.subtask_text or [])
+    out: List[Dict[str, Any]] = []
+    for i in range(batch_size):
+        meta: Dict[str, Any] = {}
+        for key, value in meta_dict.items():
+            if isinstance(value, (list, tuple)):
+                if i < len(value):
+                    meta[key] = value[i]
+            else:
+                meta[key] = value
+        if i < len(task_text):
+            meta["language"] = task_text[i]
+            meta.setdefault("task", task_text[i])
+        if i < len(subtask_text):
+            meta["subtask"] = subtask_text[i]
+        out.append(meta)
+    return out
+
 
 class TrainPreviewBufferCallback(Callback):
     """
@@ -64,11 +98,18 @@ class TrainPreviewBufferCallback(Callback):
     ) -> None:
         if not self.enabled:
             return
-        if not isinstance(batch, dict):
+        if isinstance(batch, Stage1Batch):
+            frames = _stage1_batch_to_frames(batch)
+            metadata_list = _stage1_batch_to_metadata(batch)
+        elif isinstance(batch, dict):
+            frames = batch.get("frames")
+            metadata_list = None
+        else:
             return
-        frames = batch.get("frames")
         if not isinstance(frames, torch.Tensor) or frames.ndim == 0:
             return
+        if metadata_list is None:
+            metadata_list = [self._extract_metadata(batch, i) for i in range(int(frames.shape[0]))]
 
         batch_size = int(frames.shape[0])
         take = min(self.samples_per_batch, batch_size)
@@ -80,7 +121,7 @@ class TrainPreviewBufferCallback(Callback):
             if frame.dtype == torch.uint8:
                 frame = frame.to(dtype=torch.float32).div_(255.0)
             self._frames.append(frame)
-            self._metadata.append(self._extract_metadata(batch, i))
+            self._metadata.append(metadata_list[i])
 
     def sample(
         self,
@@ -298,7 +339,10 @@ class ValidationStrategyCallback(Callback):
     ) -> None:
         """Route samples to appropriate bucket caches."""
         # Extract frames and metadata
-        if isinstance(batch, dict):
+        if isinstance(batch, Stage1Batch):
+            frames = _stage1_batch_to_frames(batch)
+            metadata_list = _stage1_batch_to_metadata(batch)
+        elif isinstance(batch, dict):
             frames = batch["frames"]
             metadata_list = self._extract_metadata(batch)
         else:
