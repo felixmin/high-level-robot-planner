@@ -7,9 +7,11 @@ from typing import Sequence
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torch.distributed
 from torch.utils.data import DataLoader, Dataset
 
 from common.lerobot_v3_adapters import dataset_batch_to_foundation_batch, dataset_batch_to_stage1_batch
+from common.lerobot_v3_sampler import DistributedWeightedLeRobotTokenSampler
 from common.lerobot_v3_sampler import WeightedLeRobotTokenSampler
 from common.lerobot_v3_source import LeRobotSingleSource
 from common.lerobot_v3_stats import build_run_normalization_stats
@@ -256,6 +258,9 @@ class LeRobotV3DataModule(pl.LightningDataModule):
 
         batch_size = int(self.loader_cfg["batch_size"])
         steps_per_epoch = self.adapter_cfg.get("steps_per_epoch")
+        is_distributed = torch.distributed.is_available() and torch.distributed.is_initialized()
+        world_size = torch.distributed.get_world_size() if is_distributed else 1
+        rank = torch.distributed.get_rank() if is_distributed else 0
         if steps_per_epoch is None:
             train_num_samples = int(sum(index.episodes.valid_anchor_count.sum() for index in train_compiled))
         else:
@@ -265,22 +270,46 @@ class LeRobotV3DataModule(pl.LightningDataModule):
 
         self.train_dataset = LeRobotMixedMapDataset(sources=self.sources, split="train")
         self.val_dataset = LeRobotMixedMapDataset(sources=self.sources, split="val")
-        self.train_sampler = WeightedLeRobotTokenSampler(
-            compiled_sources=train_compiled,
-            source_weights=train_weights,
-            num_samples=train_num_samples,
-            seed=seed,
-            epoch=0,
-            resample_each_epoch=bool(self.adapter_cfg.get("resample_each_epoch", True)),
-        )
-        self.val_sampler = WeightedLeRobotTokenSampler(
-            compiled_sources=val_compiled,
-            source_weights=val_weights,
-            num_samples=val_num_samples,
-            seed=seed + 1,
-            epoch=0,
-            resample_each_epoch=False,
-        )
+        if is_distributed:
+            train_global_num_samples = train_num_samples * world_size
+            val_global_num_samples = ((val_num_samples + world_size - 1) // world_size) * world_size
+            self.train_sampler = DistributedWeightedLeRobotTokenSampler(
+                compiled_sources=train_compiled,
+                source_weights=train_weights,
+                global_num_samples=train_global_num_samples,
+                rank=rank,
+                world_size=world_size,
+                seed=seed,
+                epoch=0,
+                resample_each_epoch=bool(self.adapter_cfg.get("resample_each_epoch", True)),
+            )
+            self.val_sampler = DistributedWeightedLeRobotTokenSampler(
+                compiled_sources=val_compiled,
+                source_weights=val_weights,
+                global_num_samples=val_global_num_samples,
+                rank=rank,
+                world_size=world_size,
+                seed=seed + 1,
+                epoch=0,
+                resample_each_epoch=False,
+            )
+        else:
+            self.train_sampler = WeightedLeRobotTokenSampler(
+                compiled_sources=train_compiled,
+                source_weights=train_weights,
+                num_samples=train_num_samples,
+                seed=seed,
+                epoch=0,
+                resample_each_epoch=bool(self.adapter_cfg.get("resample_each_epoch", True)),
+            )
+            self.val_sampler = WeightedLeRobotTokenSampler(
+                compiled_sources=val_compiled,
+                source_weights=val_weights,
+                num_samples=val_num_samples,
+                seed=seed + 1,
+                epoch=0,
+                resample_each_epoch=False,
+            )
 
     def _adapt_batch(self, batch: BatchedDatasetSample):
         if self.output_format == "raw":

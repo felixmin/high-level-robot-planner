@@ -284,7 +284,12 @@ class VLATokenBackendLightningModule(pl.LightningModule):
                 self.log("val/gen_num_codes_parsed_mean", mean_codes, prog_bar=False, sync_dist=True)
 
             dataset_mix: dict[str, int] | None = None
-            dataset_names = batch.get("dataset_name") if isinstance(batch, dict) else None
+            batch_meta = batch.meta if isinstance(batch, FoundationBatch) and isinstance(batch.meta, dict) else None
+            dataset_names = (
+                batch.get("dataset_name")
+                if isinstance(batch, dict)
+                else batch_meta.get("dataset_name") if batch_meta is not None else None
+            )
             if isinstance(dataset_names, list) and dataset_names:
                 counts = Counter(str(x) if x is not None else "None" for x in dataset_names)
                 total = float(len(dataset_names))
@@ -330,9 +335,21 @@ class VLATokenBackendLightningModule(pl.LightningModule):
                     max_items = min(max_items, int(vectors.shape[0]))
                 if actions is not None:
                     max_items = min(max_items, int(actions.shape[0]))
-                episode_id = batch.get("episode_id") if isinstance(batch, dict) else None
-                frame_idx = batch.get("frame_idx") if isinstance(batch, dict) else None
-                dataset_name = batch.get("dataset_name") if isinstance(batch, dict) else None
+                episode_id = (
+                    batch.get("episode_id")
+                    if isinstance(batch, dict)
+                    else batch_meta.get("episode_id") if batch_meta is not None else None
+                )
+                frame_idx = (
+                    batch.get("frame_idx")
+                    if isinstance(batch, dict)
+                    else batch_meta.get("frame_idx") if batch_meta is not None else None
+                )
+                dataset_name = (
+                    batch.get("dataset_name")
+                    if isinstance(batch, dict)
+                    else batch_meta.get("dataset_name") if batch_meta is not None else None
+                )
                 pred_list: list[list[int]] | None = None
                 if isinstance(pred, torch.Tensor):
                     pred_list = pred[:max_items].detach().cpu().tolist()

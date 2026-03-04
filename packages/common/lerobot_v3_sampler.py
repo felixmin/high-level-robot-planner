@@ -7,18 +7,8 @@ import numpy as np
 import torch
 
 from common.lerobot_v3_source import CompiledSourceIndex
+from common.lerobot_v3_stats import normalize_weights
 from common.lerobot_v3_types import SampleToken
-
-
-def _normalize_weights(weights: np.ndarray) -> np.ndarray:
-    if weights.ndim != 1:
-        raise ValueError(f"Expected 1D weights, got shape {tuple(weights.shape)}")
-    if weights.size == 0:
-        raise ValueError("Expected at least one source weight")
-    total = float(weights.sum())
-    if total <= 0.0:
-        raise ValueError("Expected source weights to sum to a positive value")
-    return weights / total
 
 
 @dataclass
@@ -40,7 +30,7 @@ class WeightedLeRobotTokenSampler(torch.utils.data.Sampler[SampleToken]):
         resample_each_epoch: bool,
     ) -> None:
         self.compiled_sources = compiled_sources
-        self.source_weights = _normalize_weights(np.asarray(source_weights, dtype=np.float64))
+        self.source_weights = normalize_weights(np.asarray(source_weights, dtype=np.float64))
         if len(compiled_sources) != int(self.source_weights.shape[0]):
             raise ValueError("compiled_sources and source_weights length mismatch")
         self.num_samples = int(num_samples)

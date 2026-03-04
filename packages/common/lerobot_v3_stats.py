@@ -18,7 +18,7 @@ def load_source_stats(meta: Any) -> dict[str, dict[str, np.ndarray]]:
     return out
 
 
-def _normalize_weights(weights: np.ndarray) -> np.ndarray:
+def normalize_weights(weights: np.ndarray) -> np.ndarray:
     if weights.ndim != 1:
         raise ValueError(f"Expected 1D weights, got shape {tuple(weights.shape)}")
     if weights.size == 0:
@@ -59,7 +59,7 @@ def merge_weighted_stats(
     if len(stats_by_source) != int(source_weights.shape[0]):
         raise ValueError("stats_by_source and source_weights length mismatch")
 
-    weights = _normalize_weights(np.asarray(source_weights, dtype=np.float64))
+    weights = normalize_weights(np.asarray(source_weights, dtype=np.float64))
     merged: dict[str, dict[str, np.ndarray]] = {}
     feature_keys = {key for stats in stats_by_source for key in stats}
     for feature_key in feature_keys:

@@ -51,6 +51,14 @@ class _FakeFloatImageLeRobotDataset(_FakeLeRobotDataset):
         return item
 
 
+class _FakeCustomActionKeyLeRobotDataset(_FakeLeRobotDataset):
+    def __getitem__(self, index: int):
+        item = super().__getitem__(index)
+        item["actions"] = item.pop("action")
+        item["actions_is_pad"] = item.pop("action_is_pad")
+        return item
+
+
 def test_single_source_passes_video_backend_to_lerobot_dataset(monkeypatch) -> None:
     monkeypatch.setattr(
         "common.lerobot_v3_source.load_lerobot_meta",
@@ -164,3 +172,37 @@ def test_single_source_get_sample_accepts_float_image_streams(monkeypatch) -> No
     sample = source.get_sample(0)
     assert sample.image_streams is not None
     assert sample.image_streams["primary"].dtype == torch.uint8
+
+
+def test_single_source_uses_custom_action_key_pad_mask(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "common.lerobot_v3_source.load_lerobot_meta",
+        lambda repo_id, root, revision: make_test_meta(
+            repo_id=repo_id,
+            episodes=[{"episode_index": 0, "dataset_from_index": 0, "dataset_to_index": 8}],
+        ),
+    )
+    monkeypatch.setattr("common.lerobot_v3_source.LeRobotDataset", _FakeCustomActionKeyLeRobotDataset)
+
+    source = LeRobotSingleSource(
+        repo_id="test/repo",
+        root=None,
+        revision=None,
+        weight=1.0,
+        camera_map={"primary": "observation.images.image"},
+        state_key="observation.state",
+        action_key="actions",
+        video_backend="pyav",
+    )
+    source.compile(
+        make_test_request(
+            image_requests={"primary": (0, 1)},
+            action_deltas=(0, 1),
+        ),
+        train_episode_indices={0},
+        val_episode_indices={0},
+    )
+
+    sample = source.get_sample(0)
+
+    assert torch.equal(sample.action_is_pad, torch.tensor([False, True], dtype=torch.bool))

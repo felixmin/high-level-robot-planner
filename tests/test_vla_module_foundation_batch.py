@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import torch
 import pytest
@@ -362,3 +363,38 @@ def test_vla_module_validation_step_accepts_foundation_batch() -> None:
         backend.last_batch.state,
         torch.tensor([[[1.0, 1.0]], [[0.0, 0.0]]], dtype=torch.float32),
     )
+
+
+def test_vla_module_validation_step_reads_foundation_batch_metadata() -> None:
+    backend = _CaptureBackend()
+    module = VLATokenBackendLightningModule(
+        backend=backend,
+        code_provider=_DummyCodeProvider(),
+        backend_mode=BackendMode.LATENT_FLOW,
+        normalization_stats={
+            "observation.state": {"mean": [0.0, 0.0], "std": [1.0, 1.0]},
+        },
+        optimizer=VLAOptimizerConfig(lr=1e-4, weight_decay=0.0),
+    )
+    module.log = lambda *args, **kwargs: None
+    module.__dict__["_trainer"] = SimpleNamespace(global_step=7)
+
+    batch = FoundationBatch(
+        image_streams={"primary": torch.randint(0, 255, (2, 2, 3, 8, 8), dtype=torch.uint8)},
+        image_padding_masks={"primary": torch.ones((2, 2), dtype=torch.bool)},
+        task_text=["pick", "place"],
+        state=torch.tensor([[[1.0, 2.0]], [[3.0, 4.0]]], dtype=torch.float32),
+        meta={
+            "dataset_name": ["ds_a", "ds_b"],
+            "episode_id": [11, 12],
+            "frame_idx": [21, 22],
+        },
+    )
+
+    loss = module.validation_step(batch, batch_idx=0)
+
+    assert isinstance(loss, torch.Tensor)
+    assert module._last_val_sample is not None
+    assert module._last_val_sample["dataset_name"] == ["ds_a", "ds_b"]
+    assert module._last_val_sample["episode_id"] == [11, 12]
+    assert module._last_val_sample["frame_idx"] == [21, 22]

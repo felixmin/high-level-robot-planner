@@ -273,7 +273,7 @@ def main(cfg: DictConfig):
             )
         )
         flow_viz_cfg = OmegaConf.select(viz_cfg, "flow_decode")
-        if flow_viz_cfg and bool(flow_viz_cfg.enabled):
+        if flow_viz_cfg and bool(flow_viz_cfg.enabled) and laq_provider is not None:
             callbacks.append(
                 VLALatentFlowDecodeVisualizationCallback(
                     laq_checkpoint_path=str(laq_ckpt),

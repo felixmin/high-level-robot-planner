@@ -325,7 +325,9 @@ class LeRobotSingleSource:
             action = torch.as_tensor(raw[self.action_key])
             if action.ndim == 1:
                 action = action.unsqueeze(0)
-            action_is_pad = torch.as_tensor(raw.get("action_is_pad", torch.zeros((int(action.shape[0]),), dtype=torch.bool)))
+            action_is_pad = torch.as_tensor(
+                raw.get(f"{self.action_key}_is_pad", torch.zeros((int(action.shape[0]),), dtype=torch.bool))
+            )
 
         return DatasetSample(
             image_streams=image_streams or None,

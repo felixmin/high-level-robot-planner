@@ -33,8 +33,8 @@ def _compiled_index(*, repo_id: str, start: int, stop: int) -> CompiledSourceInd
 
 
 class _FakeSource:
-    def __init__(self, *, repo_id, root, revision, weight, camera_map, state_key, action_key, video_backend):
-        del root, revision, camera_map, state_key, action_key, video_backend
+    def __init__(self, *, repo_id, root, revision, weight, camera_map, state_key, action_key, video_backend, tolerance_s):
+        del root, revision, camera_map, state_key, action_key, video_backend, tolerance_s
         self.repo_id = repo_id
         self.weight = weight
         self.meta = SimpleNamespace(total_episodes=10, stats={}, repo_id=repo_id)
@@ -188,3 +188,27 @@ def test_lerobot_v3_datamodule_rejects_removed_stage1_legacy_output(monkeypatch)
     dm.setup()
     with pytest.raises(ValueError, match="Unsupported LeRobot output_format"):
         next(iter(dm.train_dataloader()))
+
+
+def test_lerobot_v3_datamodule_uses_distributed_sampler_when_initialized(monkeypatch) -> None:
+    monkeypatch.setattr("common.lerobot_v3_data.LeRobotSingleSource", _FakeSource)
+    monkeypatch.setattr("common.lerobot_v3_data.torch.distributed.is_available", lambda: True)
+    monkeypatch.setattr("common.lerobot_v3_data.torch.distributed.is_initialized", lambda: True)
+    monkeypatch.setattr("common.lerobot_v3_data.torch.distributed.get_world_size", lambda: 4)
+    monkeypatch.setattr("common.lerobot_v3_data.torch.distributed.get_rank", lambda: 1)
+
+    cfg = _cfg(num_sources=2)
+    dm = LeRobotV3DataModule(
+        sources=cfg["dataset"]["lerobot"]["sources"],
+        request=cfg["request"],
+        loader=cfg["loader"],
+        adapter=cfg["adapter"]["lerobot_v3"],
+        output_format="raw",
+    )
+    dm.setup()
+
+    assert dm.train_sampler.__class__.__name__ == "DistributedWeightedLeRobotTokenSampler"
+    assert dm.val_sampler.__class__.__name__ == "DistributedWeightedLeRobotTokenSampler"
+    assert dm.train_sampler.world_size == 4
+    assert dm.train_sampler.rank == 1
+    assert dm.train_sampler.global_num_samples == 48
