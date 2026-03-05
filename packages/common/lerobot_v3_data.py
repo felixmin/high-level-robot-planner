@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import torch.distributed
 from torch.utils.data import DataLoader, Dataset
 
-from common.lerobot_v3_adapters import dataset_batch_to_foundation_batch, dataset_batch_to_stage1_batch
+from common.lerobot_v3_adapters import dataset_batch_to_stage2_batch, dataset_batch_to_stage1_batch
 from common.lerobot_v3_sampler import DistributedWeightedLeRobotTokenSampler
 from common.lerobot_v3_sampler import WeightedLeRobotTokenSampler
 from common.lerobot_v3_source import LeRobotSingleSource
@@ -342,8 +342,8 @@ class LeRobotV3DataModule(pl.LightningDataModule):
             return batch
         if self.output_format == "stage1":
             return dataset_batch_to_stage1_batch(batch)
-        if self.output_format == "foundation":
-            return dataset_batch_to_foundation_batch(batch)
+        if self.output_format == "stage2":
+            return dataset_batch_to_stage2_batch(batch)
         raise ValueError(f"Unsupported LeRobot output_format {self.output_format!r}")
 
     def _collate_and_adapt(self, batch: list[DatasetSample]):

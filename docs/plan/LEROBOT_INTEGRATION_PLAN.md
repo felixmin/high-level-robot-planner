@@ -26,8 +26,8 @@ Do not re-plan these; they already exist in HLRP:
 - Qwen token backend: `packages/foundation/backends/qwen3vl_chat_backend.py`
 - Smol latent-head backend: `packages/foundation/backends/smol_latent_head_backend.py`
 - Backend-driven Lightning module: `packages/foundation/vla_backend_module.py`
-- Stage-2 training entrypoint using backends: `scripts/4_train_foundation.py`
-- Existing backend tests: `tests/test_vla_backend_interface.py`, `tests/test_smol_latent_head_backend.py`
+- Stage-2 training entrypoint using backends: `scripts/4_train_stage2_policy.py`
+- Existing backend tests: `tests/test_policy_backend_interface.py`, `tests/test_smol_latent_head_backend.py`
 
 What is not implemented yet:
 

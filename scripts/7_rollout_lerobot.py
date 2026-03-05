@@ -22,6 +22,7 @@ from omegaconf import DictConfig, OmegaConf
 workspace_root = Path(__file__).parent.parent
 sys.path.insert(0, str(workspace_root / "packages"))
 
+from common.libero_runtime import ensure_libero_config
 from common.run_context import setup_run_context
 
 
@@ -271,6 +272,7 @@ def main(cfg: DictConfig) -> None:
         if v is None:
             continue
         env[str(k)] = str(v)
+    ensure_libero_config(env=env, logger=logger)
 
     for editable_path in _editable_paths_from_cfg(cfg):
         logger.info("Installing editable package: %s", editable_path)

@@ -41,7 +41,7 @@ This approach bypasses Hydra's submitit launcher (which requires torch imports) 
 For local development/training, run the training script directly (no `sbatch`, no container directives):
 
 ```bash
-python scripts/2_train_laq.py experiment=laq_oxe_local
+python scripts/2_train_stage1_lam.py experiment=laq_oxe_local
 ```
 
 Use `scripts/submit_job.py` only when you want Slurm scheduling + enroot container execution on the cluster.
@@ -95,9 +95,9 @@ Sweeps submit multiple jobs with different parameter combinations.
 # @package _global_
 
 defaults:
-  - /model@model: laq
+  - /model@model: lam
   - /data@data: oxe_local_indexed
-  - /training@training: laq_optimizer
+  - /training@training: stage1_optimizer
   - /cluster@cluster: local_dev
 
 # Sweep parameters - comma-separated values
@@ -171,7 +171,7 @@ sweep:
 This script is a pure Hydra CLI. Common overrides:
 
 - `submit.dry_run=true` (print sbatch scripts, don’t submit)
-- `submit.script=4_train_foundation` (override which `scripts/*.py` entrypoint runs)
+- `submit.script=4_train_stage2_policy` (override which `scripts/*.py` entrypoint runs)
 - `submit.pre_commands=[...]` (run shell commands before training starts)
 - `cluster=<name>` (select cluster config)
 - `cluster.compute.gpus_per_node=...`
@@ -311,7 +311,7 @@ export NCCL_DEBUG=WARN
 nvidia-smi
 
 # Run training with overrides
-python scripts/2_train_laq.py experiment=laq_oxe_local_sweep cluster=lrz_h100 training.optimizer.lr=1e-4 seed=42
+python scripts/2_train_stage1_lam.py experiment=laq_oxe_local_sweep cluster=lrz_h100 training.optimizer.lr=1e-4 seed=42
 ```
 
 ---
@@ -407,7 +407,7 @@ We use a custom `submit_job.py` script instead of Hydra's built-in submitit laun
 
 **1. Training scripts import torch at module level**
 ```python
-# scripts/2_train_laq.py
+# scripts/2_train_stage1_lam.py
 import torch  # ← Fails on login node (no torch installed)
 
 @hydra.main(...)

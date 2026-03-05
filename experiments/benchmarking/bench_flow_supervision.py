@@ -47,7 +47,7 @@ def main() -> None:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise SystemExit("CUDA requested but not available")
 
-    from laq.models.flow import RAFTTeacher, FlowDecoder
+    from lam.models.flow import RAFTTeacher, FlowDecoder
 
     torch.manual_seed(0)
 
@@ -92,4 +92,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

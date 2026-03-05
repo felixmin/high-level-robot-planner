@@ -1,10 +1,10 @@
 # @package _global_
 
 defaults:
-  - /model/shared@smolvla_core: smolvla_core
-  - /model@model: foundation_smol_flow_shared
+  - /model/shared@stage2_policy_core: stage2_policy_core
+  - /model@model: stage2_smol_flow_shared
   - /data@data: octo24
-  - /training@training: vla_lightning
+  - /training@training: stage2_policy_lightning
   - /cluster@cluster: local_dev
   - optional /user_config: local
 
@@ -13,7 +13,7 @@ experiment:
   description: "Local Stage 2 latent-flow training on the default Octo24 mix"
 
 submit:
-  script: 4_train_foundation
+  script: 4_train_stage2_policy
 
 data:
   loader:
@@ -21,7 +21,7 @@ data:
     num_workers: 8
     pin_memory: true
     prefetch_factor: 2
-  output_format: foundation
+  output_format: stage2
   request:
     image_requests:
       primary:
@@ -34,8 +34,8 @@ data:
     lerobot_v3:
       steps_per_epoch: 5000
 
-smolvla_core:
-  vla:
+stage2_policy_core:
+  policy:
     image_size: [256, 256]
 
 training:

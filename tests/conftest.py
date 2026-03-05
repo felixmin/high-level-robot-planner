@@ -31,10 +31,10 @@ def test_data_path(workspace_root_path):
     return workspace_root_path / "tests" / "data"
 
 
-# Default configurations for LAQ components
+# Default configurations for LAM components
 @pytest.fixture
-def laq_config():
-    """Standard LAQ model configuration for testing."""
+def lam_config():
+    """Standard LAM model configuration for testing."""
     return {
         'dim': 1024,
         'quant_dim': 32,
@@ -50,8 +50,8 @@ def laq_config():
 
 
 @pytest.fixture
-def small_laq_config():
-    """Smaller LAQ config for faster tests."""
+def small_lam_config():
+    """Smaller LAM config for faster tests."""
     return {
         'dim': 256,
         'quant_dim': 16,

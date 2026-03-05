@@ -1,13 +1,13 @@
 """
 Tests for optical flow supervision module.
 
-Tests FlowConfig validation, FlowDecoder architecture, and integration with LAQ.
+Tests FlowConfig validation, FlowDecoder architecture, and integration with LAM.
 """
 
 import pytest
 import torch
 
-from laq.models.flow import (
+from lam.models.flow import (
     FlowConfig,
     FlowDecoder,
     RAFTTeacher,
@@ -312,8 +312,8 @@ class TestFlowSummaryLoss:
         assert loss_norm < loss_unnorm / 1000
 
 
-class TestLAQWithFlow:
-    """Integration tests for LAQ with flow supervision."""
+class TestLAMWithFlow:
+    """Integration tests for LAM with flow supervision."""
 
     @pytest.fixture
     def training_config(self):
@@ -335,8 +335,8 @@ class TestLAQWithFlow:
         })
 
     @pytest.fixture
-    def laq_config_with_flow(self):
-        """Create minimal LAQ config with flow for testing."""
+    def lam_config_with_flow(self):
+        """Create minimal LAM config with flow for testing."""
         from omegaconf import OmegaConf
         return OmegaConf.create({
             "dim": 64,
@@ -377,8 +377,8 @@ class TestLAQWithFlow:
         })
 
     @pytest.fixture
-    def laq_config_without_flow(self):
-        """Create minimal LAQ config without flow for testing."""
+    def lam_config_without_flow(self):
+        """Create minimal LAM config without flow for testing."""
         from omegaconf import OmegaConf
         return OmegaConf.create({
             "dim": 64,
@@ -410,8 +410,8 @@ class TestLAQWithFlow:
         })
 
     @pytest.fixture
-    def laq_config_with_flow_disabled(self):
-        """Create minimal LAQ config with flow explicitly disabled."""
+    def lam_config_with_flow_disabled(self):
+        """Create minimal LAM config with flow explicitly disabled."""
         from omegaconf import OmegaConf
         return OmegaConf.create({
             "dim": 64,
@@ -445,12 +445,12 @@ class TestLAQWithFlow:
             },
         })
 
-    def test_flow_config_parsed(self, laq_config_with_flow, training_config):
+    def test_flow_config_parsed(self, lam_config_with_flow, training_config):
         """Test that flow config is correctly parsed in task."""
-        from laq.task import LAQTask
+        from lam.task import LAMTask
 
-        task = LAQTask(
-            model_config=laq_config_with_flow,
+        task = LAMTask(
+            model_config=lam_config_with_flow,
             training_config=training_config,
         )
 
@@ -461,23 +461,23 @@ class TestLAQWithFlow:
         assert task.model.flow_decoder is not None
         assert task.model.flow_teacher is not None
 
-    def test_no_flow_when_not_configured(self, laq_config_without_flow, training_config):
+    def test_no_flow_when_not_configured(self, lam_config_without_flow, training_config):
         """Test that missing flow config fails fast."""
-        from laq.task import LAQTask
+        from lam.task import LAMTask
         from omegaconf.errors import ConfigAttributeError
 
         with pytest.raises(ConfigAttributeError):
-            LAQTask(
-                model_config=laq_config_without_flow,
+            LAMTask(
+                model_config=lam_config_without_flow,
                 training_config=training_config,
             )
 
-    def test_no_flow_when_explicitly_disabled(self, laq_config_with_flow_disabled, training_config):
+    def test_no_flow_when_explicitly_disabled(self, lam_config_with_flow_disabled, training_config):
         """Test that flow is disabled when configured with enabled=false."""
-        from laq.task import LAQTask
+        from lam.task import LAMTask
 
-        task = LAQTask(
-            model_config=laq_config_with_flow_disabled,
+        task = LAMTask(
+            model_config=lam_config_with_flow_disabled,
             training_config=training_config,
         )
 

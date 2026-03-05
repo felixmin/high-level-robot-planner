@@ -69,8 +69,8 @@ def test_scratch_mode_with_null_artifact_is_valid() -> None:
     assert cfg.stage2_artifact is None
 
 
-def test_latent_mode_requires_laq_fields() -> None:
-    with pytest.raises(ValueError, match="laq_checkpoint_path"):
+def test_latent_mode_requires_lam_fields() -> None:
+    with pytest.raises(ValueError, match="lam_checkpoint_path"):
         HLRPSmolVLASharedConfig(
             init_mode="scratch",
             stage3_training_mode="latent",
@@ -94,9 +94,9 @@ def test_alternating_mode_requires_schedule() -> None:
             action_subset_key="index",
             latent_scope="all",
             stage2_artifact=None,
-            laq_checkpoint_path=Path("/tmp/laq.ckpt"),
-            laq_future_frames=10,
-            laq_camera_keys=("observation.images.image",),
+            lam_checkpoint_path=Path("/tmp/lam.ckpt"),
+            lam_future_frames=10,
+            lam_camera_keys=("observation.images.image",),
         )
 
 

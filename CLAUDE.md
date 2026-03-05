@@ -31,17 +31,17 @@ Experiment tracking standard:
 ## Project Overview
 
 Three-stage robot learning system that learns policies from videos without action labels:
-1. **Stage 1 (LAQ)**: VQ-VAE compressing frame-to-frame transitions into discrete latent codes
-2. **Stage 2 (Foundation/VLA)**: Vision-Language model predicting latent actions from images + text
-3. **Stage 3 (LeRobot finetuning)**: Adapting the foundation model to output continuous robot commands
+1. **Stage 1 (LAM)**: VQ-VAE compressing frame-to-frame transitions into discrete latent codes
+2. **Stage 2 (Policy)**: Robot policy model predicting latent actions from images + text
+3. **Stage 3 (LeRobot finetuning)**: Adapting the policy model to output continuous robot commands
 
 ## Repo Map
 
 - `scripts/`: runnable entrypoints (environment setup, stage training, job submission).
 - `config/`: Hydra configs (experiments, model/data/training components, cluster presets).
 - `packages/`: core Python modules:
-  - `packages/laq`: stage-1 latent action training + validation logic.
-  - `packages/foundation`: stage-2 foundation/VLA model code.
+  - `packages/lam`: stage-1 latent action training + validation logic.
+  - `packages/stage2`: stage-2 robot policy model code.
   - `packages/common`: shared data adapters, logging, utilities.
   - `packages/low_level`: low-level/action-decoder related modules.
 - `lerobot_policy_hlrp/`: installable LeRobot policy plugin package used in stage-3 runs.
@@ -51,8 +51,8 @@ Three-stage robot learning system that learns policies from videos without actio
 
 ## Primary Scripts
 
-- Stage 1 (LAQ): `scripts/2_train_laq.py`
-- Stage 2 (VLA): `scripts/4_train_foundation.py`
+- Stage 1 (LAM): `scripts/2_train_stage1_lam.py`
+- Stage 2 (Policy): `scripts/4_train_stage2_policy.py`
 - Stage 3 (LeRobot): `scripts/6_train_lerobot.py`
 - Job submission: `scripts/submit_job.py`
 
@@ -73,13 +73,13 @@ Before deciding how to run anything, check `pwd` and `hostname` to determine if 
 ### Workstation (Local)
 
 - GPU: RTX 5090 (32 GB VRAM), System RAM: 64 GB
-- Use for smaller/short LAQ or low-scale training/debug runs.
+- Use for smaller/short LAM or low-scale training/debug runs.
 - Prefer local datasets on workstation:
   - Stage 1/2 LeRobot-v3 datasets via Hydra data configs (for example `data=octo24`)
   - Stage 3 local Libero snapshot: `/mnt/data/workspace/hflibero/datasets--HuggingFaceVLA--libero/snapshots/<snapshot>`
 - For larger runs, long runs, or shared reproducible jobs, prefer cluster.
 - Conda envs:
-  - `hlrp` for LAQ (stage-1) and VLA (stage-2) training
+  - `hlrp` for LAM (stage-1) and Stage-2 policy training
   - `lerobot` for LeRobot (stage-3) training
 
 ### Cluster (LRZ/MCML)
@@ -116,15 +116,15 @@ Uses Hydra (1.3+) for composable config. Experiments compose components with pac
 
 ```yaml
 defaults:
-  - /model@model: laq
+  - /model@model: lam
   - /data@data: laq_multi_dataset
-  - /training@training: laq_optimizer
+  - /training@training: stage1_optimizer
   - /cluster@cluster: local_dev
 ```
 
 Override from CLI:
 ```bash
-python scripts/2_train_laq.py experiment=stage1_octo24_local data.loader.batch_size=32 training.optimizer.lr=5e-5
+python scripts/2_train_stage1_lam.py experiment=stage1_octo24_local data.loader.batch_size=32 training.optimizer.lr=5e-5
 ```
 
 ## Submit Workflow
@@ -142,7 +142,7 @@ python scripts/submit_job.py experiment=<sweep_experiment>
 
 Local non-Slurm runs (common on workstation and cluster interactive sessions):
 ```bash
-python scripts/2_train_laq.py experiment=stage1_octo24_local
+python scripts/2_train_stage1_lam.py experiment=stage1_octo24_local
 ```
 
 See `docs/job_submission.md` for full documentation.
@@ -178,8 +178,8 @@ pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https
 - **Modular monorepo**: installable packages for tight coupling between stages.
 - **Hybrid training framework**: PyTorch Lightning for stages 1 & 3 (DDP), Lightning Fabric for stage 2 (FSDP multi-node).
 - **Data pipeline**: LeRobot-v3 source abstraction with weighted multi-dataset sampling.
-- **LAQ data loading**: unified LeRobot-v3 DataModule path for Stage 1 and Stage 2.
-- **Validation**: bucket-strategy binding via `ValidationStrategyCallback`. See config examples in `config/` and implementation in `packages/laq/`.
+- **LAM data loading**: unified LeRobot-v3 DataModule path for Stage 1 and Stage 2.
+- **Validation**: bucket-strategy binding via `ValidationStrategyCallback`. See config examples in `config/` and implementation in `packages/lam/`.
 
 ## Auth
 
@@ -200,7 +200,7 @@ pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https
 ## Containers
 
 - Two separate containers currently:
-  - Container A: LAQ (stage-1) and VLA (stage-2)
+  - Container A: LAM (stage-1) and Stage-2 policy training
   - Container B: LeRobot (stage-3)
 - This is work in progress and may be unified later.
 - Stage-1/2 image: `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/enroot/hlrp_stage12.sqsh`

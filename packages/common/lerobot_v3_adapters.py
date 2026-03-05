@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 
 from common.lerobot_v3_types import BatchedDatasetSample, Stage1Batch
-from foundation.backends.interfaces import FoundationBatch
+from stage2.backends.interfaces import Stage2Batch
 
 
 def dataset_batch_to_stage1_batch(
@@ -36,8 +36,8 @@ def dataset_batch_to_stage1_batch(
     )
 
 
-def dataset_batch_to_foundation_batch(batch: BatchedDatasetSample) -> FoundationBatch:
-    return FoundationBatch(
+def dataset_batch_to_stage2_batch(batch: BatchedDatasetSample) -> Stage2Batch:
+    return Stage2Batch(
         image_streams=None if batch.image_streams is None else dict(batch.image_streams),
         image_padding_masks=None if batch.image_padding_masks is None else dict(batch.image_padding_masks),
         task_text=batch.task_text,

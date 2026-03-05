@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from foundation.action_tokens import (
+from stage2.action_tokens import (
     ActionTokenConfig,
     add_action_tokens,
     allowed_action_token_ids,

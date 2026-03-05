@@ -49,11 +49,11 @@ The high-level idea mirrors LAPA Stage 2, but implemented in PyTorch/Lightning a
 - Qwen token-resize setup:
   - `packages/foundation/qwen3vl_setup.py`
 - Training entrypoint:
-  - `scripts/4_train_foundation.py`
+  - `scripts/4_train_stage2_policy.py`
 - Hydra configs:
-  - model: `config/model/foundation_cosmos2_tokens.yaml`
+  - model: `config/model/stage2_cosmos2_tokens.yaml`
   - experiment (debug): `config/experiment/vla_cosmos2_tokens_debug.yaml`
-  - training (debug): `config/training/vla_lightning_debug.yaml`
+  - training (debug): `config/training/stage2_policy_lightning_debug.yaml`
 
 ## How to run (local smoke run)
 
@@ -66,7 +66,7 @@ Prereqs:
 Command (example):
 ```bash
 conda activate hlrp
-python scripts/4_train_foundation.py \
+python scripts/4_train_stage2_policy.py \
   experiment=vla_cosmos2_tokens_debug \
   model.laq.checkpoint=/abs/path/to/laq.ckpt \
   data.loader.batch_size=2 \
@@ -86,8 +86,8 @@ pytest -q tests/test_action_tokens.py \
          tests/test_vla_inputs_prompt_mask.py \
          tests/test_online_laq.py \
          tests/test_constrained_decode.py \
-         tests/test_vla_module_cpu.py \
-         tests/test_vla_generation_metrics.py \
+         tests/test_policy_module_cpu.py \
+         tests/test_policy_generation_metrics.py \
          tests/test_image_adapters.py
 ```
 

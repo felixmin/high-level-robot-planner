@@ -9,7 +9,7 @@ Implemented and verified locally:
 - LeRobot-v3 source, sampler, stats merge, collate, and Stage 1 / Stage 2 adapters are in place.
 - Stage 1 now has a working native `Stage1Batch` path and the temporary `stage1_legacy` LeRobot-v3 output mode has been removed.
 - Stage 2 action-only training no longer requires a Stage-1 LAQ checkpoint.
-  - `scripts/4_train_foundation.py` now loads LAQ only when online latent-code supervision is actually needed.
+  - `scripts/4_train_stage2_policy.py` now loads LAQ only when online latent-code supervision is actually needed.
   - `VLATokenBackendLightningModule` now allows `code_provider=None` in `BackendMode.ACTIONS` and fails fast only for code-generating modes.
 - Stage 2 latent-flow training now handles LAQ/VLM image-size mismatch correctly.
   - `VLATokenBackendLightningModule` resizes only the temporary online-LAQ video tensor to `code_provider.image_size`.
@@ -24,15 +24,15 @@ Implemented and verified locally:
 Verified local commands:
 
 - Stage 1:
-  - `HF_LEROBOT_HOME=/mnt/data/workspace/runs_root/cache/huggingface/lerobot CONDA_NO_PLUGINS=true conda run -n hlrp python scripts/2_train_laq.py experiment=stage1_laq_lerobot_v3_smoke logging.use_wandb=false logging.root_dir=/tmp/hlrp_root logging.runs_dir=/tmp/hlrp_runs precision=32-true`
+  - `HF_LEROBOT_HOME=/mnt/data/workspace/runs_root/cache/huggingface/lerobot CONDA_NO_PLUGINS=true conda run -n hlrp python scripts/2_train_stage1_lam.py experiment=stage1_laq_lerobot_v3_smoke logging.use_wandb=false logging.root_dir=/tmp/hlrp_root logging.runs_dir=/tmp/hlrp_runs precision=32-true`
 - Stage 1 mixed local:
-  - `HF_LEROBOT_HOME=/mnt/data/workspace/runs_root/cache/huggingface/lerobot CONDA_NO_PLUGINS=true conda run -n hlrp python scripts/2_train_laq.py experiment=stage1_laq_lerobot_v3_mix_local logging.use_wandb=false logging.root_dir=/tmp/hlrp_root_mix logging.runs_dir=/tmp/hlrp_runs_mix precision=32-true training.max_steps=2 data.loader.batch_size=4 data.loader.num_workers=0 training.checkpoint.every_n_train_steps=1`
+  - `HF_LEROBOT_HOME=/mnt/data/workspace/runs_root/cache/huggingface/lerobot CONDA_NO_PLUGINS=true conda run -n hlrp python scripts/2_train_stage1_lam.py experiment=stage1_laq_lerobot_v3_mix_local logging.use_wandb=false logging.root_dir=/tmp/hlrp_root_mix logging.runs_dir=/tmp/hlrp_runs_mix precision=32-true training.max_steps=2 data.loader.batch_size=4 data.loader.num_workers=0 training.checkpoint.every_n_train_steps=1`
 - Stage 2 actions:
-  - `HF_LEROBOT_HOME=/mnt/data/workspace/runs_root/cache/huggingface/lerobot CONDA_NO_PLUGINS=true conda run -n hlrp python scripts/4_train_foundation.py experiment=stage2_smol_actions_lerobot_v3_smoke logging.use_wandb=false logging.root_dir=/tmp/hlrp_root logging.runs_dir=/tmp/hlrp_runs precision=32-true`
+  - `HF_LEROBOT_HOME=/mnt/data/workspace/runs_root/cache/huggingface/lerobot CONDA_NO_PLUGINS=true conda run -n hlrp python scripts/4_train_stage2_policy.py experiment=stage2_smol_actions_lerobot_v3_smoke logging.use_wandb=false logging.root_dir=/tmp/hlrp_root logging.runs_dir=/tmp/hlrp_runs precision=32-true`
 - Stage 2 actions mixed:
-  - `HF_LEROBOT_HOME=/mnt/data/workspace/runs_root/cache/huggingface/lerobot CONDA_NO_PLUGINS=true conda run -n hlrp python scripts/4_train_foundation.py experiment=stage2_smol_actions_lerobot_v3_mix_smoke logging.use_wandb=false logging.root_dir=/tmp/hlrp_root_action_mix logging.runs_dir=/tmp/hlrp_runs_action_mix precision=32-true`
+  - `HF_LEROBOT_HOME=/mnt/data/workspace/runs_root/cache/huggingface/lerobot CONDA_NO_PLUGINS=true conda run -n hlrp python scripts/4_train_stage2_policy.py experiment=stage2_smol_actions_lerobot_v3_mix_smoke logging.use_wandb=false logging.root_dir=/tmp/hlrp_root_action_mix logging.runs_dir=/tmp/hlrp_runs_action_mix precision=32-true`
 - Stage 2 latent-flow local:
-  - `HF_LEROBOT_HOME=/mnt/data/workspace/runs_root/cache/huggingface/lerobot CONDA_NO_PLUGINS=true conda run -n hlrp python scripts/4_train_foundation.py experiment=stage2_smol_flow_lerobot_v3_local logging.use_wandb=false logging.root_dir=/tmp/hlrp_root_flow logging.runs_dir=/tmp/hlrp_runs_flow model.laq.checkpoint=/tmp/hlrp_runs/checkpoints/last.ckpt training.max_steps=2 training.validation.check_interval=2 training.validation.limit_batches=1 data.loader.batch_size=2 data.loader.num_workers=0 training.checkpoint.every_n_train_steps=1`
+  - `HF_LEROBOT_HOME=/mnt/data/workspace/runs_root/cache/huggingface/lerobot CONDA_NO_PLUGINS=true conda run -n hlrp python scripts/4_train_stage2_policy.py experiment=stage2_smol_flow_lerobot_v3_local logging.use_wandb=false logging.root_dir=/tmp/hlrp_root_flow logging.runs_dir=/tmp/hlrp_runs_flow model.laq.checkpoint=/tmp/hlrp_runs/checkpoints/last.ckpt training.max_steps=2 training.validation.check_interval=2 training.validation.limit_batches=1 data.loader.batch_size=2 data.loader.num_workers=0 training.checkpoint.every_n_train_steps=1`
 
 Operational note:
 
@@ -127,9 +127,9 @@ Planned updates:
 
 - `packages/common/data_factory.py`
   - add backend switch for `lerobot_v3`
-- `scripts/2_train_laq.py`
+- `scripts/2_train_stage1_lam.py`
   - allow new backend
-- `scripts/4_train_foundation.py`
+- `scripts/4_train_stage2_policy.py`
   - allow new backend
 - `packages/foundation/vla_backend_module.py`
   - replace OXE-only assumptions with canonical adapter input

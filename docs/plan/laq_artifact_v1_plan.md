@@ -15,7 +15,7 @@ No LAQ artifact code is implemented in this change.
 
 In scope (future implementation):
 1. `packages/laq/artifact.py` with save/load utilities and manifest dataclass.
-2. Stage-1 export path in `scripts/2_train_laq.py`.
+2. Stage-1 export path in `scripts/2_train_stage1_lam.py`.
 3. Stage-2/Stage-3 loader paths updated to consume artifact instead of raw Lightning checkpoints.
 4. Strict tests for schema/version/load compatibility.
 

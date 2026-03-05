@@ -46,14 +46,7 @@ def get_available_configs() -> List[str]:
     if not config_dir.exists():
         return []
 
-    configs = []
-    for yaml_file in sorted(config_dir.glob("*.yaml")):
-        # Skip non-LAQ configs
-        name = yaml_file.stem
-        if name.startswith("laq_") or name == "latent_labeled":
-            configs.append(name)
-
-    return configs
+    return [yaml_file.stem for yaml_file in sorted(config_dir.glob("*.yaml"))]
 
 
 def load_config(config_name: str) -> Dict[str, Any]:
@@ -127,7 +120,7 @@ def create_datamodule(config: Dict[str, Any], batch_size: int, include_bridge: b
             if not config["dataset"]["local_files"]["sources"]:
                 logger.warning("No sources left after removing Bridge!")
 
-        logger.info(f"Creating LAQ DataModule (max_pairs={config['subset']['max_pairs']})")
+        logger.info(f"Creating Stage1/LAM DataModule (max_pairs={config['subset']['max_pairs']})")
         datamodule = create_from_cfg(config)
 
     logger.info("Calling datamodule.setup()...")
@@ -363,11 +356,9 @@ def main():
             st.error("No data configs found in config/data/")
             return
 
-        # Default to laq_multi_dataset or first OXE config
-        if "laq_multi_dataset" in configs:
-            default_idx = configs.index("laq_multi_dataset")
-        elif "laq_oxe" in configs:
-            default_idx = configs.index("laq_oxe")
+        # Default to the main local preset when available.
+        if "octo24" in configs:
+            default_idx = configs.index("octo24")
         else:
             default_idx = 0
         config_name = st.selectbox(
@@ -454,7 +445,7 @@ def main():
             with st.expander("Config Details"):
                 cfg = st.session_state.config
                 st.json({
-                    "type": "OXE" if is_oxe_config(cfg) else "LAQ",
+                    "type": "OXE" if is_oxe_config(cfg) else "Stage1/LAM",
                     "batch_size": cfg.get("batch_size", "N/A"),
                     "image_size": cfg.get("image_size", "N/A"),
                 })
@@ -585,7 +576,7 @@ def main():
         # Show available configs
         st.subheader("Available Configurations")
         for cfg_name in get_available_configs():
-            is_oxe = cfg_name.startswith("laq_oxe")
+            is_oxe = "oxe" in cfg_name.lower()
             cfg_type = "🌐 OXE Streaming" if is_oxe else "📁 Local Files"
             st.markdown(f"- `{cfg_name}` ({cfg_type})")
 

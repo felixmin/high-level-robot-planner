@@ -25,7 +25,7 @@ Backend code is split by responsibility:
 
 Use:
 
-- `config/model/foundation_smol_flow_shared.yaml`
+- `config/model/stage2_smol_flow_shared.yaml`
 - `config/experiment/vla_smol_flow_shared.yaml`
 
 Stage 2 mode is `model.training_mode=latent_flow`.
@@ -64,7 +64,7 @@ Optional Stage-2 checkpoint handoff, depending on policy init mode:
 ### Stage 2 -> Stage 3 Artifact Contract
 
 - Schema version: `smolvla_shared.v2`
-- Producer: `scripts/4_train_foundation.py` when `model.backend=smolvla_shared`
+- Producer: `scripts/4_train_stage2_policy.py` when `model.backend=smolvla_shared`
 - Default output path: `<run_dir>/artifacts/smolvla_shared_stage2_artifact.pt`
 - Payload:
   - `manifest`: model/flow/transform metadata (`model_name`, `torch_dtype`, `image_size`, `action_dim`, `action_chunk_size`, tokenizer/prompt settings, camera keys, flow params, source metadata)

@@ -8,7 +8,7 @@ sbatch scripts that run inside Enroot containers on compute nodes.
 Note:
     This is intended for cluster submissions (Slurm + container execution).
     For local runs, invoke the training script directly, e.g.:
-        python scripts/2_train_laq.py experiment=...
+        python scripts/2_train_stage1_lam.py experiment=...
 
 Usage:
     # Submit single job
@@ -21,10 +21,10 @@ Usage:
     python scripts/submit_job.py submit.dry_run=true experiment=stage1_octo24_local
 
     # Custom resources (Hydra overrides)
-    python scripts/submit_job.py cluster.compute.time_limit=01:00:00 cluster.compute.gpus_per_node=2 experiment=laq_full
+    python scripts/submit_job.py cluster.compute.time_limit=01:00:00 cluster.compute.gpus_per_node=2 experiment=lam_full
 
     # Sweep (reads sweep.params from experiment config)
-    python scripts/submit_job.py experiment=laq_lr_sweep
+    python scripts/submit_job.py experiment=lam_lr_sweep
     # Submits one job per parameter combination
 """
 
@@ -288,7 +288,7 @@ def main():
         cfg = compose(config_name="config", overrides=overrides)
 
     # Submission defaults (can be overridden via config/experiment/*.yaml or CLI)
-    script = OmegaConf.select(cfg, "submit.script") or "2_train_laq"
+    script = OmegaConf.select(cfg, "submit.script") or "2_train_stage1_lam"
     dry_run = bool(OmegaConf.select(cfg, "submit.dry_run") or False)
 
     script_path = PROJECT_ROOT / "scripts" / f"{script}.py"
@@ -471,13 +471,13 @@ def main():
     if candidate.exists():
         hf_token_path = candidate
 
-    # External artifact paths that must be visible inside the container (e.g., LAQ checkpoint).
+    # External artifact paths that must be visible inside the container (e.g., Stage-1 checkpoint).
     extra_mounts: list[Path] = []
-    laq_ckpt = OmegaConf.select(cfg, "model.laq.checkpoint")
-    if laq_ckpt:
-        laq_ckpt_path = Path(str(laq_ckpt))
-        if laq_ckpt_path.is_absolute():
-            extra_mounts.append(laq_ckpt_path.parent)
+    stage1_ckpt = OmegaConf.select(cfg, "model.stage1.checkpoint")
+    if stage1_ckpt:
+        stage1_ckpt_path = Path(str(stage1_ckpt))
+        if stage1_ckpt_path.is_absolute():
+            extra_mounts.append(stage1_ckpt_path.parent)
     resume_ckpt = OmegaConf.select(cfg, "training.resume_from_checkpoint")
     if resume_ckpt:
         resume_ckpt_path = Path(str(resume_ckpt))

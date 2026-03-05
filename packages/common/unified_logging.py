@@ -97,7 +97,7 @@ def resolve_runs_dir(
     Resolve the runs directory from logging config values.
 
     Priority:
-    1. logging_runs_dir (explicit run directory, e.g., runs/2026-01-15_191650_laq_debug)
+    1. logging_runs_dir (explicit run directory, e.g., runs/2026-01-15_191650_lam_debug)
     2. <logging_root_dir>/runs/<timestamp>_<experiment> (if logging_root_dir is set)
     3. <workspace_root>/runs/<timestamp>_<experiment> (fallback to project root)
 

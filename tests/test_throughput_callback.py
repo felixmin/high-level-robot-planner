@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("lightning")
 import lightning.pytorch as pl
 
-from foundation.callbacks import ThroughputLoggingCallback, ThroughputLoggingConfig
+from stage2.callbacks import ThroughputLoggingCallback, ThroughputLoggingConfig
 
 
 class DummyModule(pl.LightningModule):

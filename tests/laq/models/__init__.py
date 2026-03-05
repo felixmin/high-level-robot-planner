@@ -1,1 +1,0 @@
-# LAQ models tests

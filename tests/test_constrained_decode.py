@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from foundation.constrained_decode import ActionTokenIds, make_prefix_allowed_tokens_fn
+from stage2.constrained_decode import ActionTokenIds, make_prefix_allowed_tokens_fn
 
 
 def test_constrained_decode_state_machine():

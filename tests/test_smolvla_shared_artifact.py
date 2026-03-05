@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import pytest
 
-from foundation.backends.smolvla_shared.artifact import (
+from stage2.backends.smolvla_shared.artifact import (
     SMOLVLA_SHARED_ARTIFACT_SCHEMA_VERSION,
     SmolVLASharedArtifactManifest,
     load_smolvla_shared_artifact,

@@ -7,8 +7,8 @@ import sys
 
 import torch
 
-from foundation.backends.interfaces import BackendMode, FoundationBatch, LatentOutput, LossOutput
-from foundation.vla_backend_module import VLATokenBackendLightningModule, VLAOptimizerConfig
+from stage2.backends.interfaces import BackendMode, Stage2Batch, LatentOutput, LossOutput
+from stage2.policy_module import PolicyLightningModule, PolicyOptimizerConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lerobot_policy_hlrp" / "src"))
 from lerobot_policy_hlrp.policies.hlrp_smolvla_shared.modeling_hlrp_smolvla_shared import (
@@ -21,18 +21,18 @@ class _CaptureBackend:
     code_seq_len = 1
 
     def __init__(self) -> None:
-        self.last_batch: FoundationBatch | None = None
+        self.last_batch: Stage2Batch | None = None
         self.last_mode: BackendMode | None = None
 
     def setup(self, *, device: torch.device) -> None:
         del device
 
-    def loss_from_batch(self, batch: FoundationBatch, *, mode: BackendMode) -> LossOutput:
+    def loss_from_batch(self, batch: Stage2Batch, *, mode: BackendMode) -> LossOutput:
         self.last_batch = batch
         self.last_mode = mode
         return LossOutput(loss=torch.tensor(0.0), metrics={"loss": 0.0})
 
-    def latent_from_batch(self, batch: FoundationBatch, *, mode: BackendMode) -> LatentOutput:
+    def latent_from_batch(self, batch: Stage2Batch, *, mode: BackendMode) -> LatentOutput:
         del batch, mode
         return LatentOutput()
 
@@ -51,15 +51,15 @@ def test_stage2_stage3_adapter_parity_for_core_inputs() -> None:
     }
 
     backend = _CaptureBackend()
-    module = VLATokenBackendLightningModule(
+    module = PolicyLightningModule(
         backend=backend,
         code_provider=_DummyCodeProvider(),
         backend_mode=BackendMode.ACTIONS,
         normalization_stats=stats,
-        optimizer=VLAOptimizerConfig(lr=1e-4, weight_decay=0.0),
+        optimizer=PolicyOptimizerConfig(lr=1e-4, weight_decay=0.0),
     )
 
-    stage2_input = FoundationBatch(
+    stage2_input = Stage2Batch(
         image_streams={"primary": torch.randint(0, 255, (2, 2, 3, 8, 8), dtype=torch.uint8)},
         image_padding_masks={"primary": torch.ones((2, 2), dtype=torch.bool)},
         task_text=["pick", "place"],
@@ -88,7 +88,7 @@ def test_stage2_stage3_adapter_parity_for_core_inputs() -> None:
         "action": torch.tensor([[3.0, 6.0], [1.0, 2.0]], dtype=torch.float32),
         "action_is_pad": torch.zeros((2, 1), dtype=torch.bool),
     }
-    stage3_batch = HLRPSmolVLASharedPolicy._to_foundation_batch(
+    stage3_batch = HLRPSmolVLASharedPolicy._to_stage2_batch(
         policy,
         lerobot_batch,
         require_action_is_pad=True,
@@ -122,7 +122,7 @@ def test_stage3_policy_accepts_actions_id_pad_alias() -> None:
         "observation.state": torch.zeros((2, 2), dtype=torch.float32),
         "actions_id_pad": torch.tensor([[False], [True]], dtype=torch.bool),
     }
-    out = HLRPSmolVLASharedPolicy._to_foundation_batch(
+    out = HLRPSmolVLASharedPolicy._to_stage2_batch(
         policy,
         batch,
         require_action_is_pad=True,
@@ -150,7 +150,7 @@ def test_stage3_policy_rejects_conflicting_mask_aliases() -> None:
         "actions_id_pad": torch.tensor([[True]], dtype=torch.bool),
     }
     try:
-        HLRPSmolVLASharedPolicy._to_foundation_batch(
+        HLRPSmolVLASharedPolicy._to_stage2_batch(
             policy,
             batch,
             require_action_is_pad=True,
@@ -178,7 +178,7 @@ def test_stage3_policy_inference_batch_allows_missing_action_mask() -> None:
         "task": ["pick", "place"],
         "observation.state": torch.zeros((2, 2), dtype=torch.float32),
     }
-    out = HLRPSmolVLASharedPolicy._to_foundation_batch(
+    out = HLRPSmolVLASharedPolicy._to_stage2_batch(
         policy,
         batch,
         require_action_is_pad=False,
@@ -202,7 +202,7 @@ def test_stage3_policy_inference_batch_allows_missing_image_is_pad() -> None:
         "task": ["pick", "place"],
         "observation.state": torch.zeros((2, 2), dtype=torch.float32),
     }
-    out = HLRPSmolVLASharedPolicy._to_foundation_batch(
+    out = HLRPSmolVLASharedPolicy._to_stage2_batch(
         policy,
         batch,
         require_action_is_pad=False,

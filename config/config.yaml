@@ -55,7 +55,7 @@ paths:
 # Job submission defaults (used by scripts/submit_job.py)
 submit:
   # Training entrypoint (without .py). Experiments can override this.
-  script: 2_train_laq
+  script: 2_train_stage1_lam
   # If true, prints the generated sbatch script(s) but does not submit.
   dry_run: false
   # Where to persist pretrained model downloads (HF + torch/torchvision).

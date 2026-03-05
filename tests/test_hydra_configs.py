@@ -13,7 +13,7 @@ def config_dir():
 
 
 class TestExperimentConfigs:
-    def test_vla_smol_flow_shared_config(self, config_dir):
+    def test_stage2_smol_flow_shared_config(self, config_dir):
         with initialize_config_dir(version_base=None, config_dir=config_dir):
             cfg = compose(
                 config_name="config", overrides=["experiment=stage2_smol_flow"]
@@ -22,7 +22,7 @@ class TestExperimentConfigs:
             assert cfg.experiment.name == "latent_smolvla"
             assert cfg.model.training_mode == "latent_flow"
             assert cfg.data.backend == "lerobot_v3"
-            assert cfg.data.output_format == "foundation"
+            assert cfg.data.output_format == "stage2"
 
     def test_stage1_octo24_local_config(self, config_dir):
         with initialize_config_dir(version_base=None, config_dir=config_dir):
@@ -41,9 +41,9 @@ class TestExperimentConfigs:
 
             assert cfg.experiment.name == "stage2_octo24_local"
             assert cfg.data.backend == "lerobot_v3"
-            assert cfg.data.output_format == "foundation"
+            assert cfg.data.output_format == "stage2"
             assert len(cfg.data.dataset.lerobot.sources) == 24
-            assert cfg.smolvla_core.vla.image_size == [256, 256]
+            assert cfg.stage2_policy_core.policy.image_size == [256, 256]
 
     def test_stage1_octo24_libero_data_override(self, config_dir):
         with initialize_config_dir(version_base=None, config_dir=config_dir):

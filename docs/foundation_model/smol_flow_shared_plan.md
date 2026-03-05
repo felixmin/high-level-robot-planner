@@ -33,7 +33,7 @@ Stage 2 is trained online (no offline relabeling): each OXE batch is passed thro
 - `multitask`: flow latent + action multitask mode (new default for this plan).
 
 ## New Configs
-- Model config: `config/model/foundation_smol_flow_shared.yaml`
+- Model config: `config/model/stage2_smol_flow_shared.yaml`
 - Experiment config: `config/experiment/vla_smol_flow_shared.yaml`
 
 ## End-to-End Commands

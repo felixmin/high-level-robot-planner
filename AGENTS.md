@@ -4,7 +4,7 @@
 This file captures the practical workflow used in this repo for:
 - Cluster access and job monitoring
 - Submitting training jobs via `scripts/submit_job.py`
-- Multi-stage training pipeline (`LAQ` -> `VLA` -> `LeRobot`)
+- Multi-stage training pipeline (`LAM` -> `Stage2 Policy` -> `LeRobot`)
 - Dual-queue strategy (`lrz_x100` and `mcml_x100`) with cancel-on-first-start
 
 ## Research Engineering Principles
@@ -59,8 +59,8 @@ When operating on cluster systems:
 - `scripts/`: runnable entrypoints (environment setup, stage training, job submission).
 - `config/`: Hydra configs (experiments, model/data/training components, cluster presets, user overrides).
 - `packages/`: core Python modules:
-  - `packages/laq`: stage-1 latent action training + validation logic.
-  - `packages/foundation`: stage-2 foundation/VLA model code.
+  - `packages/lam`: stage-1 latent action training + validation logic.
+  - `packages/stage2`: stage-2 robot policy model code.
   - `packages/common`: shared data adapters, logging, utilities.
   - `packages/low_level`: low-level/action-decoder related modules.
 - `lerobot_policy_hlrp/`: installable LeRobot policy plugin package used in stage-3 runs.
@@ -82,21 +82,21 @@ Decision rule:
 Workstation capability reference (for local non-Slurm runs):
 - GPU: RTX 5090 (32 GB VRAM)
 - System RAM: 64 GB
-- Use local workstation for smaller/short LAQ or low-scale training/debug runs when resources are sufficient.
+- Use local workstation for smaller/short LAM or low-scale training/debug runs when resources are sufficient.
 - Prefer local datasets on workstation:
   - Stage 1/2 LeRobot-v3 datasets via Hydra data configs (for example `data=octo24`)
   - Stage 3 local Libero snapshot root: `/mnt/data/workspace/hflibero/datasets--HuggingFaceVLA--libero/snapshots/<snapshot>`
 - "Not representative for cluster behavior" is not, by itself, a reason to reject local training runs when the goal is local training.
 - For larger runs, long runs, or shared reproducible jobs, prefer cluster.
 - Conda env selection on workstation:
-  - Use `hlrp` conda env for latent action model (LAQ) and VLA/stage-2 training.
+  - Use `hlrp` conda env for latent action model (LAM) and Stage-2 policy training.
   - Use `lerobot` conda env for LeRobot/stage-3 training.
 
 ## Primary Scripts
 - Stage 1 (Latent Action Model pretraining):
-  - `scripts/2_train_laq.py`
-- Stage 2 (Foundation/VLA training):
-  - `scripts/4_train_foundation.py`
+  - `scripts/2_train_stage1_lam.py`
+- Stage 2 (Policy training):
+  - `scripts/4_train_stage2_policy.py`
 - Stage 3 (LeRobot fine-tune/eval integration):
   - `scripts/6_train_lerobot.py`
 - Unified Slurm submission entrypoint:
@@ -119,7 +119,7 @@ Workstation capability reference (for local non-Slurm runs):
 - Runtime-downloaded datasets/assets that should be documented:
   - `HuggingFaceVLA/libero` dataset cache (`HF_DATASETS_CACHE`).
   - LIBERO environment assets cache (`~/.cache/libero/assets`) if missing.
-  - Hugging Face model/checkpoint cache (`HF_HUB_CACHE`) for model weights used by Stage 2/3 and LAQ dependencies.
+  - Hugging Face model/checkpoint cache (`HF_HUB_CACHE`) for model weights used by Stage 2/3 and LAM dependencies.
 
 ## Cluster Access + Basic Operations
 - Connect:
@@ -152,7 +152,7 @@ Workstation capability reference (for local non-Slurm runs):
   - preview generated jobs:
     - `python scripts/submit_job.py submit.dry_run=true experiment=<sweep_experiment>`
 - Local non-Slurm run path (when suitable):
-  - run training scripts directly, e.g. `python scripts/2_train_laq.py ...`
+  - run training scripts directly, e.g. `python scripts/2_train_stage1_lam.py ...`
   - this is common on workstation and sometimes in cluster interactive sessions
 
 ## Dual-Queue Strategy (Faster Start)
@@ -171,7 +171,7 @@ Typical sequence:
 
 ## Container/Image Notes
 - Current state: two separate containers are used.
-  - Container A: latent action model (stage-1) and VLA/stage-2 training.
+  - Container A: latent action model (stage-1) and Stage-2 policy training.
   - Container B: LeRobot/stage-3 environment.
   - This is work in progress and may be unified later.
 - Stage-1/2 image:

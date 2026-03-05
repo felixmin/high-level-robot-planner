@@ -13,9 +13,9 @@ def autoquote_override_value(override: str) -> str:
     Quote override values that contain an unquoted `=` so Hydra can parse them.
 
     Example:
-      model.vla.checkpoint=/path/vla-stepstep=079000.ckpt
+      model.policy.checkpoint=/path/stage2-policy-step=079000.ckpt
     becomes:
-      model.vla.checkpoint="/path/vla-stepstep=079000.ckpt"
+      model.policy.checkpoint="/path/stage2-policy-step=079000.ckpt"
     """
     if "=" not in override:
         return override
@@ -34,4 +34,3 @@ def autoquote_override_value(override: str) -> str:
 
 def normalize_overrides(overrides: list[str]) -> list[str]:
     return [autoquote_override_value(o) for o in overrides]
-

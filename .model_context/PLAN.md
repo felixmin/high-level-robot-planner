@@ -131,7 +131,7 @@ srun python "$@"  # Pass all args to Python script
 
 **Usage:**
 ```bash
-sbatch slurm/train.sbatch scripts/2_train_laq.py \
+sbatch slurm/train.sbatch scripts/2_train_stage1_lam.py \
   experiment=laq_full cluster.num_nodes=1
 ```
 
@@ -157,7 +157,7 @@ config/
 │   ├── sthv2_webdataset.yaml
 │   └── bridge_webdataset.yaml
 ├── training/
-│   ├── laq_optimizer.yaml
+│   ├── stage1_optimizer.yaml
 │   └── vla_fsdp.yaml
 └── cluster/
     ├── lrz_h100.yaml
@@ -171,7 +171,7 @@ config/
 defaults:
   - override /model: laq
   - override /data: openx_webdataset
-  - override /training: laq_optimizer
+  - override /training: stage1_optimizer
   - override /cluster: lrz_h100
 
 experiment_name: laq_openx_v1
@@ -180,7 +180,7 @@ seed: 42
 
 **CLI Overrides:**
 ```bash
-python scripts/2_train_laq.py experiment=laq_full \
+python scripts/2_train_stage1_lam.py experiment=laq_full \
   data.batch_size=512 training.lr=5e-5
 ```
 
@@ -382,7 +382,7 @@ model:
     out_channels: 3
 ```
 
-**Training Config (`config/training/laq_optimizer.yaml`):**
+**Training Config (`config/training/stage1_optimizer.yaml`):**
 ```yaml
 training:
   epochs: 100
@@ -1148,7 +1148,7 @@ class ActionFinetuneTask(pl.LightningModule):
 
 **Task 1.7: Training Script** (2 days)
 - **Owner:** Junior Dev 1
-- **Description:** Implement `scripts/2_train_laq.py`
+- **Description:** Implement `scripts/2_train_stage1_lam.py`
 - **Requirements:**
   - Hydra integration
   - Lightning Trainer setup

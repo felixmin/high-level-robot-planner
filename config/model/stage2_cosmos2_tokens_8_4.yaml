@@ -1,0 +1,27 @@
+# Stage 2 token-based policy model using Cosmos-Reason2 (Qwen3-VL).
+#
+# This variant is for Stage-1 LAM checkpoints with codebook_size=8 and code_seq_len=4
+# (e.g. from `stage1_octo24_local`).
+
+name: stage2_policy_cosmos2_tokens
+
+backend: qwen3vl_chat_tokens
+training_mode: codes
+
+policy:
+  model_name: nvidia/Cosmos-Reason2-2B
+  torch_dtype: bf16  # bf16, fp16, fp32
+  attn_implementation: sdpa
+
+stage1:
+  checkpoint: ""  # required at runtime (Stage 1 LAM checkpoint)
+
+action_tokens:
+  codebook_size: 8
+  code_seq_len: 4
+  action_start: "<ACTION>"
+  action_end: "</ACTION>"
+  token_fmt: "<ACT_{i}>"
+
+chat:
+  system_prompt: "You are a robot policy. Reply only with action tokens."

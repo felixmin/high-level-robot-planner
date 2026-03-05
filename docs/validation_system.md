@@ -99,7 +99,7 @@ Routing model:
 ## Configuration Surface
 
 Primary training validation config lives in:
-- `config/training/laq_optimizer.yaml` under `training.validation`
+- `config/training/stage1_optimizer.yaml` under `training.validation`
 
 Main knobs:
 - `check_interval`
@@ -125,6 +125,6 @@ Current split behavior for LeRobot-v3-backed Stage 1/2 is implemented in:
 - `packages/laq/validation/analysis.py`
 - `packages/laq/validation/scatter.py`
 - `packages/laq/validation/flow.py`
-- `config/training/laq_optimizer.yaml`
+- `config/training/stage1_optimizer.yaml`
 
 Training-time validation is intentionally lightweight and periodic during training.

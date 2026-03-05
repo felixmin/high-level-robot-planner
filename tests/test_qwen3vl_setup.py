@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from foundation.action_tokens import ActionTokenConfig
-from foundation.legacy.qwen3vl_setup import prepare_action_token_training
+from stage2.action_tokens import ActionTokenConfig
+from stage2.legacy.qwen3vl_setup import prepare_action_token_training
 
 
 class DummyTokenizer:

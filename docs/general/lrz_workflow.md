@@ -82,8 +82,8 @@ sinfo -p mcml-hgx-h100-94x4
 
 ```bash
 # Submit training job (see README.md for available experiments)
-sbatch slurm/train.sbatch scripts/2_train_laq.py experiment=laq_oxe_cluster
-sbatch slurm/train.sbatch scripts/4_train_foundation.py experiment=vla_smol_flow_shared
+sbatch slurm/train.sbatch scripts/2_train_stage1_lam.py experiment=laq_oxe_cluster
+sbatch slurm/train.sbatch scripts/4_train_stage2_policy.py experiment=vla_smol_flow_shared
 ```
 
 ### Monitor Jobs
@@ -108,7 +108,7 @@ scancel <JOB_ID> -M mcml-hgx-h100
 
 ```bash
 # Multi-node training configured in experiment config
-sbatch slurm/train.sbatch scripts/4_train_foundation.py experiment=vla_smol_flow_shared
+sbatch slurm/train.sbatch scripts/4_train_stage2_policy.py experiment=vla_smol_flow_shared
 ```
 
 Configure nodes in `config/experiment/vla_smol_flow_shared.yaml` via:

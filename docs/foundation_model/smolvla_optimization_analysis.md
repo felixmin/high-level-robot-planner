@@ -252,7 +252,7 @@ vla:
   image_size: [384, 384]
 ```
 
-**scripts/4_train_foundation.py:**
+**scripts/4_train_stage2_policy.py:**
 - Added `use_gpu_preprocessing` and `image_size` config parsing
 
 ## Technical Details

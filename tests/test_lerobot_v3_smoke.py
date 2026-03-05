@@ -8,7 +8,7 @@ import torch
 
 from common.lerobot_v3_data import LeRobotV3DataModule
 from common.lerobot_v3_types import Stage1Batch
-from foundation.backends.interfaces import FoundationBatch
+from stage2.backends.interfaces import Stage2Batch
 
 
 def _source_cfg(
@@ -71,7 +71,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_real_single_source_stage1_and_foundation_batches() -> None:
+def test_real_single_source_stage1_and_stage2_batches() -> None:
     common_kwargs = dict(
         sources=[
             _source_cfg(
@@ -92,15 +92,15 @@ def test_real_single_source_stage1_and_foundation_batches() -> None:
     assert tuple(stage1_batch.image_streams["primary"].shape[:3]) == (4, 2, 3)
     assert len(stage1_batch.task_text) == 4
 
-    foundation_dm = LeRobotV3DataModule(output_format="foundation", **common_kwargs)
-    foundation_dm.setup()
-    foundation_batch = next(iter(foundation_dm.train_dataloader()))
-    assert isinstance(foundation_batch, FoundationBatch)
-    assert tuple(foundation_batch.image_streams["primary"].shape[:3]) == (4, 2, 3)
-    assert tuple(foundation_batch.state.shape) == (4, 1, 7)
-    assert tuple(foundation_batch.target_actions.shape) == (4, 3, 7)
-    assert foundation_dm.normalization_stats is not None
-    assert "action" in foundation_dm.normalization_stats
+    stage2_dm = LeRobotV3DataModule(output_format="stage2", **common_kwargs)
+    stage2_dm.setup()
+    stage2_batch = next(iter(stage2_dm.train_dataloader()))
+    assert isinstance(stage2_batch, Stage2Batch)
+    assert tuple(stage2_batch.image_streams["primary"].shape[:3]) == (4, 2, 3)
+    assert tuple(stage2_batch.state.shape) == (4, 1, 7)
+    assert tuple(stage2_batch.target_actions.shape) == (4, 3, 7)
+    assert stage2_dm.normalization_stats is not None
+    assert "action" in stage2_dm.normalization_stats
 
 
 def test_real_mixed_source_yields_samples_from_both_sources() -> None:

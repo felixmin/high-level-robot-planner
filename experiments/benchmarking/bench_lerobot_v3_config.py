@@ -26,7 +26,7 @@ sys.path.insert(0, str(workspace_root / "lerobot" / "src"))
 
 from common.lerobot_v3_data import LeRobotV3DataModule
 from common.lerobot_v3_types import BatchedDatasetSample, Stage1Batch
-from foundation.backends.interfaces import FoundationBatch
+from stage2.backends.interfaces import Stage2Batch
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,7 @@ def _estimate_sample_payload_bytes(batch: Any) -> int:
         return sum(_estimate_sample_payload_bytes(value) for value in batch.values())
     if isinstance(batch, (list, tuple)):
         return sum(_estimate_sample_payload_bytes(value) for value in batch)
-    if isinstance(batch, (BatchedDatasetSample, Stage1Batch, FoundationBatch)):
+    if isinstance(batch, (BatchedDatasetSample, Stage1Batch, Stage2Batch)):
         return sum(_estimate_sample_payload_bytes(value) for value in vars(batch).values())
     return 0
 

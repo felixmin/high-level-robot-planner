@@ -8,25 +8,25 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from foundation.action_tokens import ActionTokenConfig
-from foundation.backends.interfaces import FoundationBatch
-from foundation.backends.smolvla_shared.artifact import (
+from stage2.action_tokens import ActionTokenConfig
+from stage2.backends.interfaces import Stage2Batch
+from stage2.backends.smolvla_shared.artifact import (
     SmolVLASharedArtifactManifest,
     load_smolvla_shared_artifact,
 )
-from foundation.backends.smolvla_shared.config import SmolVLASharedCoreConfig
-from foundation.backends.smolvla_shared.input_transform import (
+from stage2.backends.smolvla_shared.config import SmolVLASharedCoreConfig
+from stage2.backends.smolvla_shared.input_transform import (
     resolve_action_pad_field,
     resolve_action_pad_mask,
     to_action_chunk,
 )
-from foundation.backends.smolvla_shared.input_transform import (
+from stage2.backends.smolvla_shared.input_transform import (
     normalize_vector_mean_std,
     unnormalize_vector_mean_std,
 )
-from foundation.backends.smolvla_shared.model import SmolVLASharedCore
-from foundation.backends.smolvla_shared.preprocess import pad_vector
-from foundation.vla_inputs import ChatConfig
+from stage2.backends.smolvla_shared.model import SmolVLASharedCore
+from stage2.backends.smolvla_shared.preprocess import pad_vector
+from stage2.policy_inputs import ChatConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_STATE
 
@@ -50,7 +50,7 @@ def _dtype_from_name(name: str) -> torch.dtype:
 
 
 class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
-    """LeRobot policy adapter for the shared SmolVLA implementation in packages/foundation."""
+    """LeRobot policy adapter for the shared SmolVLA implementation in packages/stage2."""
 
     config_class = HLRPSmolVLASharedConfig
     name = "hlrp_smolvla_shared"
@@ -126,8 +126,8 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         else:
             logger.info("Initialized policy in scratch mode (no stage2 artifact load).")
 
-        self._laq_teacher = None
-        self._laq_image_size: tuple[int, int] | None = None
+        self._stage1_teacher = None
+        self._stage1_image_size: tuple[int, int] | None = None
         self._train_forward_calls = 0
         self._queues: dict[str, deque[torch.Tensor]] = {}
         self.reset()
@@ -296,17 +296,17 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
             device=device,
         )
 
-    def _extract_laq_frame_pairs(
+    def _extract_stage1_frame_pairs(
         self,
         batch: dict[str, Any],
     ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
-        if self.config.laq_camera_keys is None:
-            raise RuntimeError("laq_camera_keys must be set for latent supervision modes")
+        if self.config.lam_camera_keys is None:
+            raise RuntimeError("lam_camera_keys must be set for latent supervision modes")
         frame_pairs: dict[str, torch.Tensor] = {}
         valid_pair: torch.Tensor | None = None
-        for key in self.config.laq_camera_keys:
+        for key in self.config.lam_camera_keys:
             if key not in batch:
-                raise KeyError(f"LAQ camera key {key!r} is missing from batch")
+                raise KeyError(f"Stage-1 LAM camera key {key!r} is missing from batch")
             frames = batch[key]
             if not torch.is_tensor(frames):
                 raise TypeError(f"Expected tensor for camera key {key!r}, got {type(frames)}")
@@ -316,14 +316,14 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
                 )
             if int(frames.shape[1]) != 2:
                 raise ValueError(
-                    f"Expected exactly 2 observation steps for LAQ key {key!r}, got T={int(frames.shape[1])}"
+                    f"Expected exactly 2 observation steps for Stage-1 LAM key {key!r}, got T={int(frames.shape[1])}"
                 )
             if int(frames.shape[2]) == 3:
                 frames_t = frames
             elif int(frames.shape[-1]) == 3:
                 frames_t = frames.permute(0, 1, 4, 2, 3)
             else:
-                raise ValueError(f"Unsupported LAQ frame layout for key {key!r}: {tuple(frames.shape)}")
+                raise ValueError(f"Unsupported Stage-1 LAM frame layout for key {key!r}: {tuple(frames.shape)}")
             if frames_t.dtype == torch.uint8:
                 frames_t = frames_t.to(torch.float32) / 255.0
             else:
@@ -345,19 +345,19 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
             valid_pair = keep if valid_pair is None else (valid_pair & keep)
 
         if valid_pair is None:
-            raise RuntimeError("LAQ camera extraction produced no camera streams.")
+            raise RuntimeError("Stage-1 LAM camera extraction produced no camera streams.")
         return frame_pairs, valid_pair
 
-    def _ensure_laq_teacher(self) -> None:
-        if self._laq_teacher is not None:
+    def _ensure_stage1_teacher(self) -> None:
+        if self._stage1_teacher is not None:
             return
-        if self.config.laq_checkpoint_path is None:
-            raise RuntimeError("laq_checkpoint_path must be set for latent supervision modes")
-        from laq.checkpoints import load_laq_encoder_vq_inference_from_checkpoint
+        if self.config.lam_checkpoint_path is None:
+            raise RuntimeError("lam_checkpoint_path must be set for latent supervision modes")
+        from lam import load_lam_encoder_vq_inference_from_checkpoint
 
         device = next(self.core.parameters()).device
-        teacher = load_laq_encoder_vq_inference_from_checkpoint(
-            checkpoint_path=str(self.config.laq_checkpoint_path),
+        teacher = load_lam_encoder_vq_inference_from_checkpoint(
+            checkpoint_path=str(self.config.lam_checkpoint_path),
             map_location=device,
             strict=True,
             prune_decoders=True,
@@ -370,42 +370,42 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         latent_dim = int(teacher.code_seq_len) * int(teacher.codebook_dim)
         if latent_dim != int(self.config.latent_vector_dim):
             raise ValueError(
-                f"LAQ latent dim mismatch: config.latent_vector_dim={self.config.latent_vector_dim} "
+                f"Stage-1 LAM latent dim mismatch: config.latent_vector_dim={self.config.latent_vector_dim} "
                 f"but teacher provides {latent_dim} (code_seq_len={teacher.code_seq_len}, codebook_dim={teacher.codebook_dim})"
             )
         if int(teacher.code_seq_len) != int(self.config.code_seq_len):
             raise ValueError(
-                f"LAQ code_seq_len mismatch: config.code_seq_len={self.config.code_seq_len} "
+                f"Stage-1 LAM code_seq_len mismatch: config.code_seq_len={self.config.code_seq_len} "
                 f"teacher.code_seq_len={teacher.code_seq_len}"
             )
 
-        self._laq_teacher = teacher
-        self._laq_image_size = tuple(int(x) for x in teacher.image_size)
+        self._stage1_teacher = teacher
+        self._stage1_image_size = tuple(int(x) for x in teacher.image_size)
 
     def _compute_latent_targets_online(
         self,
         batch: dict[str, Any],
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        self._ensure_laq_teacher()
-        if self._laq_teacher is None or self._laq_image_size is None:
-            raise RuntimeError("LAQ teacher is not initialized.")
+        self._ensure_stage1_teacher()
+        if self._stage1_teacher is None or self._stage1_image_size is None:
+            raise RuntimeError("Stage-1 LAM teacher is not initialized.")
 
-        frame_pairs, valid_pair = self._extract_laq_frame_pairs(batch)
+        frame_pairs, valid_pair = self._extract_stage1_frame_pairs(batch)
         if len(frame_pairs) != 1:
             raise NotImplementedError(
-                f"Current Stage-3 LAQ path supports exactly one camera key, got {tuple(frame_pairs.keys())}"
+                f"Current Stage-3 Stage-1 LAM path supports exactly one camera key, got {tuple(frame_pairs.keys())}"
             )
         pair = next(iter(frame_pairs.values()))
         b, t, c, h, w = pair.shape
-        if (int(h), int(w)) != self._laq_image_size:
+        if (int(h), int(w)) != self._stage1_image_size:
             pair = F.interpolate(
                 pair.reshape(b * t, c, h, w),
-                size=self._laq_image_size,
+                size=self._stage1_image_size,
                 mode="bilinear",
                 align_corners=False,
-            ).reshape(b, t, c, self._laq_image_size[0], self._laq_image_size[1])
+            ).reshape(b, t, c, self._stage1_image_size[0], self._stage1_image_size[1])
         video = pair.permute(0, 2, 1, 3, 4)
-        _, vectors = self._laq_teacher.codes_and_vectors_from_video(video)
+        _, vectors = self._stage1_teacher.codes_and_vectors_from_video(video)
         vectors = vectors.reshape(vectors.shape[0], -1)
         if int(vectors.shape[1]) != int(self.config.latent_vector_dim):
             raise ValueError(
@@ -414,7 +414,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         return vectors, valid_pair
 
     @staticmethod
-    def _slice_foundation_batch(batch: FoundationBatch, keep: torch.Tensor) -> FoundationBatch:
+    def _slice_stage2_batch(batch: Stage2Batch, keep: torch.Tensor) -> Stage2Batch:
         if keep.ndim != 1:
             raise ValueError(f"keep mask must be rank 1, got {tuple(keep.shape)}")
         keep = keep.to(dtype=torch.bool)
@@ -433,7 +433,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         if batch.task_text is not None:
             task_text = [text for text, flag in zip(batch.task_text, keep_cpu) if flag]
 
-        return FoundationBatch(
+        return Stage2Batch(
             image_streams=image_streams,
             image_padding_masks=image_padding_masks,
             task_text=task_text,
@@ -454,14 +454,14 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
             meta=batch.meta,
         )
 
-    def _to_foundation_batch(
+    def _to_stage2_batch(
         self,
         batch: dict[str, Any],
         *,
         require_action_is_pad: bool,
         require_image_padding_masks: bool,
         conditioning_step_index: int,
-    ) -> FoundationBatch:
+    ) -> Stage2Batch:
         raw_streams = self._extract_image_streams(batch)
         image_streams = self._extract_conditioning_streams(
             raw_streams,
@@ -491,7 +491,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         action_is_pad = None
         if require_action_is_pad:
             action_is_pad = self._extract_action_is_pad(batch, batch_size=batch_size)
-        return FoundationBatch(
+        return Stage2Batch(
             image_streams=image_streams,
             image_padding_masks=self._extract_image_padding_masks(
                 batch,
@@ -628,7 +628,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
     def forward(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict | None]:
         active_mode = self._training_mode_for_step()
         needs_action_targets = active_mode in {"action", "multitask"}
-        foundation_batch = self._to_foundation_batch(
+        stage2_batch = self._to_stage2_batch(
             batch,
             require_action_is_pad=needs_action_targets,
             require_image_padding_masks=True,
@@ -647,7 +647,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
             )
             action_supervised_count = int(action_keep.sum().item())
             if action_supervised_count > 0:
-                action_batch = self._slice_foundation_batch(foundation_batch, action_keep)
+                action_batch = self._slice_stage2_batch(stage2_batch, action_keep)
                 action_loss = self.core.action_flow_loss(
                     batch=action_batch,
                     target_actions=target_action[action_keep],
@@ -670,7 +670,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
                 )
             latent_supervised_count = int(keep.sum().item())
             if latent_supervised_count > 0:
-                latent_batch = self._slice_foundation_batch(foundation_batch, keep)
+                latent_batch = self._slice_stage2_batch(stage2_batch, keep)
                 latent_loss = self.core.latent_flow_loss(
                     batch=latent_batch,
                     target_vectors=target_latent[keep],
@@ -711,13 +711,13 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         return total, metrics
 
     def predict_action_chunk(self, batch: dict[str, torch.Tensor], **kwargs) -> torch.Tensor:
-        foundation_batch = self._to_foundation_batch(
+        stage2_batch = self._to_stage2_batch(
             batch,
             require_action_is_pad=False,
             require_image_padding_masks=False,
             conditioning_step_index=self._conditioning_step_index(),
         )
-        pred_chunk = self.core.sample_action_chunk(batch=foundation_batch)
+        pred_chunk = self.core.sample_action_chunk(batch=stage2_batch)
         pred_chunk = pred_chunk[:, :, : self._action_dim]
         pred_chunk = pred_chunk[:, : self.config.n_action_steps, :]
         pred_chunk = unnormalize_vector_mean_std(

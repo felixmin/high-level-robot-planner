@@ -6,9 +6,9 @@ This code is build on [LAPA](https://github.com/LatentActionPretraining/LAPA).
 A three-stage robot learning system that learns policies from videos without action labels.
 
 **Three Training Stages:**
-1. **Stage 1 (LAQ)**: VQ-VAE compressing frame-to-frame transitions into discrete latent codes
-2. **Stage 2 (Foundation)**: Vision-Language model predicting latent actions from images + text
-3. **Stage 3 (Finetuning)**: Adapting the foundation model to output continuous robot commands
+1. **Stage 1 (LAM)**: VQ-VAE compressing frame-to-frame transitions into discrete latent codes
+2. **Stage 2 (Policy)**: Robot policy model predicting latent actions from images + text
+3. **Stage 3 (Finetuning)**: Adapting the policy model to output continuous robot commands
 
 ## Performance and resource efficiency
 Performance benchmark of the training pipeline on an Desktop Nvidia 5090 GPU. With the current setup we achieve full GPU utilization.
@@ -38,8 +38,8 @@ https://github.com/user-attachments/assets/0cc694b1-ff8c-406d-b5a7-a6815fe8c1af
 ```
 ├── packages/              # Installable Python packages
 │   ├── common/           # Shared utilities, logging, data interfaces
-│   ├── laq/              # Stage 1: Latent action quantization (VQ-VAE)
-│   ├── foundation/       # Stage 2: Vision-Language-Action model
+│   ├── lam/              # Stage 1: Latent action model (VQ-VAE)
+│   ├── stage2/           # Stage 2: Robot policy model + validation
 ├── config/               # Hydra configurations (modular, composable)
 │   ├── experiment/       # Complete experiment setups
 │   ├── model/, data/, training/, cluster/  # Config components
@@ -72,11 +72,11 @@ python scripts/0_setup_environment.py
 ### Running Training
 
 ```bash
-# Stage 1 (LAQ) local
-python scripts/2_train_laq.py experiment=stage1_octo24_local
+# Stage 1 (LAM) local
+python scripts/2_train_stage1_lam.py experiment=stage1_octo24_local
 
-# Stage 2 (foundation SmolVLA flow) local
-python scripts/4_train_foundation.py experiment=stage2_smol_flow
+# Stage 2 (policy SmolVLA flow) local
+python scripts/4_train_stage2_policy.py experiment=stage2_smol_flow
 
 # Stage 3 (LeRobot action-only) local
 python scripts/6_train_lerobot.py experiment=stage3_hlrp_libero_action_scratch
@@ -91,7 +91,7 @@ Uses [Hydra](https://hydra.cc) for composable configuration. Experiments compose
 
 ```bash
 # Override from CLI
-python scripts/2_train_laq.py experiment=stage1_octo24_local data.loader.batch_size=32 training.optimizer.lr=5e-5
+python scripts/2_train_stage1_lam.py experiment=stage1_octo24_local data.loader.batch_size=32 training.optimizer.lr=5e-5
 ```
 
 See `CLAUDE.md` for architecture and config structure details.

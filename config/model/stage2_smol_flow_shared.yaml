@@ -1,0 +1,56 @@
+# Stage 2 shared-trunk SmolVLM policy backend:
+# - flow-matching latent-vector head (LAM codebook vectors)
+# - real-action head is initialized but not trained in Stage 2
+
+name: stage2_policy_smol_flow_shared
+
+backend: smolvla_shared
+training_mode: latent_flow
+
+policy:
+  model_name: ${stage2_policy_core.policy.model_name}
+  torch_dtype: bf16  # bf16, fp16, fp32
+  trust_remote_code: true
+  freeze_vlm: true
+  freeze_vision_encoder: ${stage2_policy_core.policy.freeze_vision_encoder}
+  load_vlm_weights: ${stage2_policy_core.policy.load_vlm_weights}
+  attention_mode: ${stage2_policy_core.policy.attention_mode}
+  num_expert_layers: ${stage2_policy_core.policy.num_expert_layers}
+  num_vlm_layers: ${stage2_policy_core.policy.num_vlm_layers}
+  self_attn_every_n_layers: ${stage2_policy_core.policy.self_attn_every_n_layers}
+  expert_width_multiplier: ${stage2_policy_core.policy.expert_width_multiplier}
+  add_image_special_tokens: ${stage2_policy_core.policy.add_image_special_tokens}
+  tokenizer_max_length: ${stage2_policy_core.policy.tokenizer_max_length}
+  pad_language_to: ${stage2_policy_core.policy.pad_language_to}
+  max_state_dim: ${stage2_policy_core.policy.max_state_dim}
+  prefix_length: ${stage2_policy_core.policy.prefix_length}
+  use_gpu_preprocessing: ${stage2_policy_core.policy.use_gpu_preprocessing}
+  image_size: ${stage2_policy_core.policy.image_size}
+  camera_keys: ${stage2_policy_core.policy.camera_keys}
+  empty_cameras: ${stage2_policy_core.policy.empty_cameras}
+  normalization_stats: {}
+
+stage1:
+  checkpoint: ""  # required at runtime (Stage 1 LAM checkpoint)
+
+action_tokens:
+  codebook_size: 2048
+  code_seq_len: 1
+  action_start: "<ACTION>"
+  action_end: "</ACTION>"
+  token_fmt: "<ACT_{i}>"
+
+flow:
+  action_dim: ${stage2_policy_core.flow.max_action_dim}
+  action_chunk_size: ${stage2_policy_core.flow.chunk_size}
+  flow_hidden_dim: ${stage2_policy_core.flow.flow_hidden_dim}
+  flow_steps: ${stage2_policy_core.flow.flow_steps}
+  latent_loss_weight: 1.0
+  action_loss_weight: 0.0
+  min_period: ${stage2_policy_core.flow.min_period}
+  max_period: ${stage2_policy_core.flow.max_period}
+  time_beta_alpha: ${stage2_policy_core.flow.time_beta_alpha}
+  time_beta_beta: ${stage2_policy_core.flow.time_beta_beta}
+
+chat:
+  system_prompt: null

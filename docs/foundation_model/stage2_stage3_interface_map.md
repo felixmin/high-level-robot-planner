@@ -7,7 +7,7 @@ Stage 3 supports two strict initialization modes:
 - `init_mode=artifact`: load Stage-2 artifact (strict contract checks).
 - `init_mode=scratch`: do not load Stage-2 artifact.
 
-- Stage 2 (`scripts/4_train_foundation.py`) writes:
+- Stage 2 (`scripts/4_train_stage2_policy.py`) writes:
   - `<run_dir>/artifacts/smolvla_shared_stage2_artifact.pt`
 - Stage 3 (`scripts/6_train_lerobot.py`) forwards:
   - `--policy.init_mode=artifact|scratch`

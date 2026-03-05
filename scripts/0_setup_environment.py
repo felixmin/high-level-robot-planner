@@ -100,7 +100,7 @@ def check_hydra_config():
     
     try:
         with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
-            cfg = compose(config_name="config", overrides=["experiment=laq_debug"])
+            cfg = compose(config_name="config", overrides=["experiment=lam_debug"])
             console.print("[green]✓ Hydra configuration is valid[/green]")
             console.print(f"  Experiment: {cfg.experiment.name}")
             console.print(f"  Data batch size: {cfg.data.loader.batch_size}")
@@ -117,8 +117,8 @@ def check_directories():
     
     required_dirs = [
         "packages/common",
-        "packages/laq",
-        "packages/foundation",
+        "packages/lam",
+        "packages/stage2",
         "packages/low_level",
         "config/experiment",
         "config/model",

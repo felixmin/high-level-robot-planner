@@ -9,8 +9,8 @@ from PIL import Image
 
 pytest.importorskip("lightning")
 
-from foundation.validation_checks import CHECK_TYPES, Stage2ValidationCheck
-from foundation.validation_pipeline_callback import Stage2ValidationPipelineCallback
+from stage2.validation_checks import CHECK_TYPES, Stage2ValidationCheck
+from stage2.validation_pipeline_callback import Stage2ValidationPipelineCallback
 
 
 class _DummyModule:
@@ -200,14 +200,14 @@ def test_pipeline_startup_rejects_unknown_bucket_binding():
         )
 
 
-def test_pipeline_startup_requires_laq_checkpoint_for_enabled_flow_decode():
-    with pytest.raises(ValueError, match="requires non-empty laq_checkpoint_path"):
+def test_pipeline_startup_requires_lam_checkpoint_for_enabled_flow_decode():
+    with pytest.raises(ValueError, match="requires non-empty lam_checkpoint_path"):
         Stage2ValidationPipelineCallback(
             checks_config={
                 "flow": {
                     "type": "latent_flow_decode",
                     "enabled": True,
-                    "laq_checkpoint_path": "",
+                    "lam_checkpoint_path": "",
                 }
             }
         )
@@ -339,7 +339,7 @@ def test_pipeline_counts_no_output_result_as_skip(tmp_path, caplog):
         callback.on_validation_epoch_start(trainer, module)
         module.enqueue_payload({"records": [_make_record(gt_codes=[1, 2, 3, 4])]})
         callback.on_validation_batch_end(trainer, module, outputs=None, batch=None, batch_idx=0)
-        with caplog.at_level(logging.INFO, logger="foundation.training"):
+        with caplog.at_level(logging.INFO, logger="stage2.training"):
             callback.on_validation_epoch_end(trainer, module)
 
         text = caplog.text

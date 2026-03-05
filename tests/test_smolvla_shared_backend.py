@@ -5,11 +5,11 @@ from typing import Any
 
 import torch
 
-from foundation.action_tokens import ActionTokenConfig
-from foundation.backends.interfaces import BackendMode, FoundationBatch
-from foundation.backends.smolvla_shared.config import SmolVLASharedBackendConfig
-from foundation.backends.smolvla_shared_backend import SmolVLASharedBackend
-from foundation.vla_inputs import ChatConfig
+from stage2.action_tokens import ActionTokenConfig
+from stage2.backends.interfaces import BackendMode, Stage2Batch
+from stage2.backends.smolvla_shared.config import SmolVLASharedBackendConfig
+from stage2.backends.smolvla_shared_backend import SmolVLASharedBackend
+from stage2.policy_inputs import ChatConfig
 
 
 class FakeTokenizer:
@@ -129,8 +129,8 @@ def _make_backend() -> SmolVLASharedBackend:
     )
 
 
-def _make_batch() -> FoundationBatch:
-    return FoundationBatch(
+def _make_batch() -> Stage2Batch:
+    return Stage2Batch(
         image_streams={
             "observation.images.rgb": torch.randint(0, 256, (2, 2, 16, 16, 3), dtype=torch.uint8),
         },
@@ -201,7 +201,7 @@ def test_action_flow_loss_mean_uses_global_masked_mean() -> None:
     mask = torch.zeros((b, t), dtype=torch.bool)
     mask[0, 1:] = True  # sample 0: only 1 valid step; sample 1: all 50 valid steps
 
-    batch = FoundationBatch(
+    batch = Stage2Batch(
         image_streams={"observation.images.rgb": torch.randint(0, 256, (b, 2, 16, 16, 3), dtype=torch.uint8)},
         image_padding_masks={"observation.images.rgb": torch.ones((b, 2), dtype=torch.bool)},
         task_text=["pick", "place"],

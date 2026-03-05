@@ -1,1 +1,0 @@
-# LAQ tests

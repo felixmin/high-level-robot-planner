@@ -6,15 +6,15 @@ from typing import Any, List
 
 import torch
 
-from foundation.action_tokens import ActionTokenConfig
-from foundation.backends.interfaces import BackendMode, FoundationBatch
-from foundation.legacy.backends.smol_latent_head_backend import (
+from stage2.action_tokens import ActionTokenConfig
+from stage2.backends.interfaces import BackendMode, Stage2Batch
+from stage2.legacy.backends.smol_latent_head_backend import (
     SmolFlowActionBackend,
     SmolFlowActionBackendConfig,
     SmolLatentHeadBackend,
     SmolLatentHeadBackendConfig,
 )
-from foundation.vla_inputs import ChatConfig
+from stage2.policy_inputs import ChatConfig
 
 
 class FakeProcessor:
@@ -96,7 +96,7 @@ def test_smol_latent_head_backend_loss_and_latents():
     )
     backend.setup(device=torch.device("cpu"))
 
-    batch = FoundationBatch(
+    batch = Stage2Batch(
         image_streams={
             "observation.images.rgb": torch.randint(0, 256, (2, 2, 8, 8, 3), dtype=torch.uint8),
         },
@@ -131,7 +131,7 @@ def test_smol_latent_head_backend_handles_dtype_mismatch():
     )
     backend.setup(device=torch.device("cpu"))
 
-    batch = FoundationBatch(
+    batch = Stage2Batch(
         image_streams={
             "observation.images.rgb": torch.randint(0, 256, (2, 2, 8, 8, 3), dtype=torch.uint8),
         },
@@ -166,7 +166,7 @@ def test_smol_flow_action_backend_multitask():
     )
     backend.setup(device=torch.device("cpu"))
 
-    batch = FoundationBatch(
+    batch = Stage2Batch(
         image_streams={
             "observation.images.rgb": torch.randint(0, 256, (2, 2, 8, 8, 3), dtype=torch.uint8),
         },

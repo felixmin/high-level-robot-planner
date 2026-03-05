@@ -6,7 +6,7 @@ import torch
 
 from common.callbacks import DatasetUsageLoggerCallback
 from common.lerobot_v3_types import Stage1Batch
-from foundation.backends.interfaces import FoundationBatch
+from stage2.backends.interfaces import Stage2Batch
 
 
 def test_dataset_usage_logger_counts_and_prints_on_validation(capsys):
@@ -102,10 +102,10 @@ def test_dataset_usage_logger_accepts_stage1_batch_meta(capsys):
     assert "robonet=1" in out
 
 
-def test_dataset_usage_logger_accepts_foundation_batch_meta(capsys):
+def test_dataset_usage_logger_accepts_stage2_batch_meta(capsys):
     cb = DatasetUsageLoggerCallback(enabled=True, log_on_validation_end=False, log_every_n_steps=1)
     trainer = SimpleNamespace(global_step=0)
-    batch = FoundationBatch(meta={"dataset_name": ["nyu", "asu"]})
+    batch = Stage2Batch(meta={"dataset_name": ["nyu", "asu"]})
     cb.on_train_batch_end(trainer, None, outputs=None, batch=batch, batch_idx=0)
     out = capsys.readouterr().out
     assert "[Train][DatasetUsage]" in out

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from foundation.image_adapters import oxe_first_frames_to_pil
+from stage2.image_adapters import oxe_first_frames_to_pil
 
 
 def test_oxe_first_frames_to_pil_from_b2hwc3():

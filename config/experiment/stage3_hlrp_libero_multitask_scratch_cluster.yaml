@@ -3,7 +3,7 @@
 defaults:
   - /cluster@cluster: mcml_x100
   - /runtime: stage3_cluster
-  - /model/shared@smolvla_core: smolvla_core
+  - /model/shared@stage2_policy_core: stage2_policy_core
   - optional /user_config: local
 
 experiment:
@@ -52,36 +52,36 @@ lerobot:
     latent_scope: all
     action_subset_ratio: 1.0
     action_subset_key: episode_index
-    laq_checkpoint_path: /mnt/data/workspace/code/high-level-robot-planner/runs/2026-02-24_10-41-51_laq_oxe_local/checkpoints/last.ckpt
-    laq_future_frames: 10
-    laq_camera_keys: [observation.images.image]
-    model_name: ${smolvla_core.vla.model_name}
-    load_vlm_weights: ${smolvla_core.vla.load_vlm_weights}
+    lam_checkpoint_path: /mnt/data/workspace/code/high-level-robot-planner/runs/2026-02-24_10-41-51_lam_oxe_local/checkpoints/last.ckpt
+    lam_future_frames: 10
+    lam_camera_keys: [observation.images.image]
+    model_name: ${stage2_policy_core.policy.model_name}
+    load_vlm_weights: ${stage2_policy_core.policy.load_vlm_weights}
     train_expert_only: true
-    freeze_vision_encoder: ${smolvla_core.vla.freeze_vision_encoder}
-    attention_mode: ${smolvla_core.vla.attention_mode}
-    num_expert_layers: ${smolvla_core.vla.num_expert_layers}
-    num_vlm_layers: ${smolvla_core.vla.num_vlm_layers}
-    self_attn_every_n_layers: ${smolvla_core.vla.self_attn_every_n_layers}
-    expert_width_multiplier: ${smolvla_core.vla.expert_width_multiplier}
-    add_image_special_tokens: ${smolvla_core.vla.add_image_special_tokens}
-    max_state_dim: ${smolvla_core.vla.max_state_dim}
-    prefix_length: ${smolvla_core.vla.prefix_length}
-    use_gpu_preprocessing: ${smolvla_core.vla.use_gpu_preprocessing}
-    image_size: ${smolvla_core.vla.image_size}
-    empty_cameras: ${smolvla_core.vla.empty_cameras}
-    latent_vector_dim: ${smolvla_core.latent.latent_vector_dim}
-    max_action_dim: ${smolvla_core.flow.max_action_dim}
-    flow_hidden_dim: ${smolvla_core.flow.flow_hidden_dim}
-    flow_steps: ${smolvla_core.flow.flow_steps}
-    chunk_size: ${smolvla_core.flow.chunk_size}
-    tokenizer_max_length: ${smolvla_core.vla.tokenizer_max_length}
-    pad_language_to: ${smolvla_core.vla.pad_language_to}
-    n_action_steps: ${smolvla_core.flow.chunk_size}
-    min_period: ${smolvla_core.flow.min_period}
-    max_period: ${smolvla_core.flow.max_period}
-    time_beta_alpha: ${smolvla_core.flow.time_beta_alpha}
-    time_beta_beta: ${smolvla_core.flow.time_beta_beta}
+    freeze_vision_encoder: ${stage2_policy_core.policy.freeze_vision_encoder}
+    attention_mode: ${stage2_policy_core.policy.attention_mode}
+    num_expert_layers: ${stage2_policy_core.policy.num_expert_layers}
+    num_vlm_layers: ${stage2_policy_core.policy.num_vlm_layers}
+    self_attn_every_n_layers: ${stage2_policy_core.policy.self_attn_every_n_layers}
+    expert_width_multiplier: ${stage2_policy_core.policy.expert_width_multiplier}
+    add_image_special_tokens: ${stage2_policy_core.policy.add_image_special_tokens}
+    max_state_dim: ${stage2_policy_core.policy.max_state_dim}
+    prefix_length: ${stage2_policy_core.policy.prefix_length}
+    use_gpu_preprocessing: ${stage2_policy_core.policy.use_gpu_preprocessing}
+    image_size: ${stage2_policy_core.policy.image_size}
+    empty_cameras: ${stage2_policy_core.policy.empty_cameras}
+    latent_vector_dim: ${stage2_policy_core.latent.latent_vector_dim}
+    max_action_dim: ${stage2_policy_core.flow.max_action_dim}
+    flow_hidden_dim: ${stage2_policy_core.flow.flow_hidden_dim}
+    flow_steps: ${stage2_policy_core.flow.flow_steps}
+    chunk_size: ${stage2_policy_core.flow.chunk_size}
+    tokenizer_max_length: ${stage2_policy_core.policy.tokenizer_max_length}
+    pad_language_to: ${stage2_policy_core.policy.pad_language_to}
+    n_action_steps: ${stage2_policy_core.flow.chunk_size}
+    min_period: ${stage2_policy_core.flow.min_period}
+    max_period: ${stage2_policy_core.flow.max_period}
+    time_beta_alpha: ${stage2_policy_core.flow.time_beta_alpha}
+    time_beta_beta: ${stage2_policy_core.flow.time_beta_beta}
 
   dataset:
     repo_id: HuggingFaceVLA/libero

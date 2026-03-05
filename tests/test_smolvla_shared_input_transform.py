@@ -3,8 +3,8 @@ from __future__ import annotations
 import torch
 import pytest
 
-from foundation.backends.interfaces import FoundationBatch
-from foundation.backends.smolvla_shared.input_transform import (
+from stage2.backends.interfaces import Stage2Batch
+from stage2.backends.smolvla_shared.input_transform import (
     ImageTransformConfig,
     LanguageTransformConfig,
     normalize_vector_mean_std,
@@ -36,7 +36,7 @@ class _FakeTokenizer:
 
 def test_prepare_language_inputs_uses_newline_and_system_prompt() -> None:
     tokenizer = _FakeTokenizer()
-    batch = FoundationBatch(task_text=["pick cube", "place cube"])
+    batch = Stage2Batch(task_text=["pick cube", "place cube"])
     tokens, mask = prepare_language_inputs(
         batch=batch,
         tokenizer=tokenizer,
@@ -55,7 +55,7 @@ def test_prepare_language_inputs_uses_newline_and_system_prompt() -> None:
 
 
 def test_prepare_image_inputs_supports_multi_camera_and_empty_camera() -> None:
-    batch = FoundationBatch(
+    batch = Stage2Batch(
         image_streams={
             "cam_front": torch.randint(0, 255, (2, 2, 16, 16, 3), dtype=torch.uint8),
             "cam_wrist": torch.randint(0, 255, (2, 1, 16, 16, 3), dtype=torch.uint8),
@@ -86,7 +86,7 @@ def test_prepare_image_inputs_supports_multi_camera_and_empty_camera() -> None:
 def test_prepare_image_inputs_default_camera_order_preserves_stream_insertion() -> None:
     cam_b = torch.zeros((1, 1, 8, 8, 3), dtype=torch.uint8)
     cam_a = torch.full((1, 1, 8, 8, 3), 255, dtype=torch.uint8)
-    batch = FoundationBatch(
+    batch = Stage2Batch(
         image_streams={
             "cam_b": cam_b,
             "cam_a": cam_a,
@@ -115,7 +115,7 @@ def test_prepare_language_inputs_requires_task_text_without_pretokenized_inputs(
     tokenizer = _FakeTokenizer()
     with pytest.raises(ValueError, match="task_text"):
         prepare_language_inputs(
-            batch=FoundationBatch(),
+            batch=Stage2Batch(),
             tokenizer=tokenizer,
             device=torch.device("cpu"),
             config=LanguageTransformConfig(
@@ -129,7 +129,7 @@ def test_prepare_language_inputs_requires_task_text_without_pretokenized_inputs(
 def test_prepare_image_inputs_requires_image_streams() -> None:
     with pytest.raises(ValueError, match="image_streams"):
         prepare_image_inputs(
-            batch=FoundationBatch(),
+            batch=Stage2Batch(),
             device=torch.device("cpu"),
             config=ImageTransformConfig(
                 image_size=(32, 32),

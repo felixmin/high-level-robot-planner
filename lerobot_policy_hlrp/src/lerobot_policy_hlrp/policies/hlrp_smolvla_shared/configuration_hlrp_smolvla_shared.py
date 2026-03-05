@@ -60,9 +60,9 @@ class HLRPSmolVLASharedConfig(PreTrainedConfig):
     time_beta_beta: float = 1.0
 
     stage2_artifact: Path | None = MISSING
-    laq_checkpoint_path: Path | None = None
-    laq_future_frames: int | None = None
-    laq_camera_keys: tuple[str, ...] | None = None
+    lam_checkpoint_path: Path | None = None
+    lam_future_frames: int | None = None
+    lam_camera_keys: tuple[str, ...] | None = None
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -122,17 +122,17 @@ class HLRPSmolVLASharedConfig(PreTrainedConfig):
             )
         uses_latent_targets = self.stage3_training_mode in {"latent", "multitask", "alternating"}
         if uses_latent_targets:
-            if self.laq_checkpoint_path is None:
+            if self.lam_checkpoint_path is None:
                 raise ValueError(
-                    "laq_checkpoint_path is required when stage3_training_mode uses latent targets"
+                    "lam_checkpoint_path is required when stage3_training_mode uses latent targets"
                 )
-            if self.laq_future_frames is None or self.laq_future_frames <= 0:
+            if self.lam_future_frames is None or self.lam_future_frames <= 0:
                 raise ValueError(
-                    "laq_future_frames must be > 0 when stage3_training_mode uses latent targets"
+                    "lam_future_frames must be > 0 when stage3_training_mode uses latent targets"
                 )
-            if self.laq_camera_keys is None or len(self.laq_camera_keys) == 0:
+            if self.lam_camera_keys is None or len(self.lam_camera_keys) == 0:
                 raise ValueError(
-                    "laq_camera_keys must be set to one or more camera keys when "
+                    "lam_camera_keys must be set to one or more camera keys when "
                     "stage3_training_mode uses latent targets"
                 )
 
@@ -149,9 +149,9 @@ class HLRPSmolVLASharedConfig(PreTrainedConfig):
     @property
     def observation_delta_indices(self) -> list[int]:
         if self.stage3_training_mode in {"latent", "multitask", "alternating"}:
-            if self.laq_future_frames is None:
-                raise ValueError("laq_future_frames must be set for latent target modes")
-            return [0, int(self.laq_future_frames)]
+            if self.lam_future_frames is None:
+                raise ValueError("lam_future_frames must be set for latent target modes")
+            return [0, int(self.lam_future_frames)]
         return list(range(1 - self.n_obs_steps, 1))
 
     @property
