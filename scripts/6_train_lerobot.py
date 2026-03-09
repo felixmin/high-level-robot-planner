@@ -373,7 +373,7 @@ def _lerobot_run_command_from_cfg(cfg: DictConfig) -> list[str]:
         cfg,
         cfg_path="lerobot.dataset",
         cli_prefix="dataset",
-        skip_keys={"repo_id", "episodes"},
+        skip_keys={"id", "repo_id", "episodes"},
     )
     _append_group_args(
         cmd,
