@@ -5,6 +5,10 @@ Tests the DINOFeatureExtractor, DINOEncoder, and DINOWrapper modules,
 as well as their integration with LAM.
 """
 
+import os
+from pathlib import Path
+import warnings
+
 import pytest
 import torch
 import torch.nn as nn
@@ -12,6 +16,24 @@ import torch.nn as nn
 
 # Skip all tests if transformers not available
 pytest.importorskip("transformers")
+
+
+def _has_hf_auth_token() -> bool:
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    if token:
+        return True
+    return (Path.home() / ".huggingface" / "token").exists()
+
+
+if not _has_hf_auth_token():
+    message = (
+        "DINO tests require Hugging Face auth for the gated model "
+        "`facebook/dinov3-vits16-pretrain-lvd1689m`. "
+        "Set `HF_TOKEN` or `HUGGINGFACE_HUB_TOKEN`, or create `~/.huggingface/token`. "
+        "Skipping the DINO test module."
+    )
+    warnings.warn(message)
+    pytest.skip(message, allow_module_level=True)
 
 
 @pytest.fixture
