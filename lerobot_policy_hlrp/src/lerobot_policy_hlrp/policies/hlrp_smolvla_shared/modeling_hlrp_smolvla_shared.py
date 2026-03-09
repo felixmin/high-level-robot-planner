@@ -9,7 +9,6 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from lerobot.datasets.utils import serialize_dict
 from stage2.action_tokens import ActionTokenConfig
 from stage2.backends.interfaces import Stage2Batch
 from stage2.backends.smolvla_shared.artifact import (
@@ -32,13 +31,17 @@ from stage2.policy_inputs import ChatConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_STATE
 
+from lerobot_policy_hlrp.policies.hlrp_smolvla_shared.checkpoint_stats import (
+    NORMALIZATION_STATS_FILENAME,
+    require_saved_normalization_stats,
+    write_normalization_stats,
+)
 from lerobot_policy_hlrp.policies.hlrp_smolvla_shared.configuration_hlrp_smolvla_shared import (
     HLRPSmolVLASharedConfig,
 )
 
 
 logger = getLogger(__name__)
-NORMALIZATION_STATS_FILENAME = "hlrp_normalization_stats.json"
 
 
 def _dtype_from_name(name: str) -> torch.dtype:
@@ -64,6 +67,7 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         config: HLRPSmolVLASharedConfig,
         dataset_stats: dict[str, dict[str, torch.Tensor]] | None = None,
         dataset_meta=None,
+        load_stage2_artifact: bool = True,
         **kwargs,
     ):
         super().__init__(config)
@@ -122,10 +126,15 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         )
 
         self.core.setup(device=torch.device(str(self.config.device)))
-        if self.config.init_mode == "artifact":
+        if self.config.init_mode == "artifact" and load_stage2_artifact:
             if self.config.stage2_artifact is None:
                 raise RuntimeError("init_mode='artifact' requires stage2_artifact")
             self._try_load_stage2_artifact(stage2_artifact_path=self.config.stage2_artifact)
+        elif self.config.init_mode == "artifact":
+            logger.info(
+                "Skipping stage2 artifact initialization while loading checkpoint weights from %s.",
+                self.config.pretrained_path,
+            )
         else:
             logger.info("Initialized policy in scratch mode (no stage2 artifact load).")
 
@@ -138,39 +147,33 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
     def _save_pretrained(self, save_directory: Path) -> None:
         super()._save_pretrained(save_directory)
         if self.normalization_stats is None:
-            return
-        with open(save_directory / NORMALIZATION_STATS_FILENAME, "w") as f:
-            json.dump(serialize_dict(self.normalization_stats), f, indent=2, sort_keys=True)
-
-    @classmethod
-    def _load_saved_normalization_stats(
-        cls,
-        pretrained_name_or_path: str | Path,
-    ) -> dict[str, dict[str, Any]] | None:
-        stats_path = Path(pretrained_name_or_path) / NORMALIZATION_STATS_FILENAME
-        if not stats_path.is_file():
-            return None
-        with open(stats_path) as f:
-            loaded = json.load(f)
-        if not isinstance(loaded, dict):
-            raise ValueError(
-                f"Expected normalization stats mapping in {stats_path}, got {type(loaded).__name__}"
+            raise RuntimeError(
+                "Refusing to save HLRP checkpoint without normalization stats. "
+                f"Expected {NORMALIZATION_STATS_FILENAME} to be written alongside the checkpoint."
             )
-        return loaded
+        write_normalization_stats(
+            save_directory=save_directory,
+            stats=self.normalization_stats,
+        )
 
     @classmethod
     def from_pretrained(cls, pretrained_name_or_path: str | Path, **kwargs):
+        kwargs.setdefault("load_stage2_artifact", False)
         policy = super().from_pretrained(pretrained_name_or_path, **kwargs)
-        saved_stats = cls._load_saved_normalization_stats(pretrained_name_or_path)
+        saved_stats = require_saved_normalization_stats(
+            pretrained_name_or_path,
+            init_mode=str(policy.config.init_mode),
+            force_download=kwargs.get("force_download", False),
+            resume_download=kwargs.get("resume_download"),
+            proxies=kwargs.get("proxies"),
+            token=kwargs.get("token"),
+            cache_dir=kwargs.get("cache_dir"),
+            local_files_only=kwargs.get("local_files_only", False),
+            revision=kwargs.get("revision"),
+        )
         if saved_stats is not None:
             policy.dataset_stats = saved_stats
             policy.normalization_stats = saved_stats
-        elif str(policy.config.init_mode) == "scratch":
-            logger.warning(
-                "No saved normalization stats found at %s. Scratch-mode checkpoint inference may "
-                "use unnormalized state/action values.",
-                Path(pretrained_name_or_path) / NORMALIZATION_STATS_FILENAME,
-            )
         return policy
 
     @staticmethod
