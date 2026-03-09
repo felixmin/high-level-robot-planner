@@ -9,6 +9,7 @@ packages and then execute `lerobot-eval`.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -254,13 +255,71 @@ def _command_from_cfg(cfg: DictConfig) -> list[str]:
     extra_args = OmegaConf.select(cfg, "lerobot_eval.extra_args") or []
     if not (OmegaConf.is_list(extra_args) or isinstance(extra_args, (list, tuple))):
         raise ValueError("lerobot_eval.extra_args must be a list of strings")
+    stripped_extra_args: list[str] = []
     for i, arg in enumerate(extra_args):
         if not isinstance(arg, str):
             raise ValueError(f"lerobot_eval.extra_args[{i}] must be a string")
         if arg.strip():
-            cmd.append(arg.strip())
+            stripped_extra_args.append(arg.strip())
+
+    cmd.extend(
+        _inherit_train_env_args(
+            policy_path=Path(str(policy_path)),
+            explicit_args=cmd + stripped_extra_args,
+        )
+    )
+    cmd.extend(stripped_extra_args)
 
     return cmd
+
+
+def _inherit_train_env_args(
+    *,
+    policy_path: Path,
+    explicit_args: list[str],
+) -> list[str]:
+    train_config_path = policy_path / "train_config.json"
+    if not train_config_path.is_file():
+        return []
+
+    with open(train_config_path) as f:
+        train_cfg = json.load(f)
+    env_cfg = train_cfg.get("env")
+    if not isinstance(env_cfg, dict):
+        return []
+
+    inherited_keys = (
+        "obs_type",
+        "render_mode",
+        "camera_name",
+        "camera_name_mapping",
+        "init_states",
+        "observation_height",
+        "observation_width",
+        "control_mode",
+        "episode_length",
+    )
+    explicit_env_keys = {
+        arg.split("=", 1)[0][len("--env.") :]
+        for arg in explicit_args
+        if arg.startswith("--env.") and "=" in arg
+    }
+
+    inherited_args: list[str] = []
+    for key in inherited_keys:
+        if key in explicit_env_keys:
+            continue
+        value = env_cfg.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            rendered = "true" if value else "false"
+        elif isinstance(value, (list, dict)):
+            rendered = json.dumps(value, separators=(",", ":"))
+        else:
+            rendered = str(value)
+        inherited_args.append(f"--env.{key}={rendered}")
+    return inherited_args
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")

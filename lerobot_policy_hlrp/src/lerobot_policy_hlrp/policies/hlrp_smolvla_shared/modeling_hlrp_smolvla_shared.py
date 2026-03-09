@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+import json
 from logging import getLogger
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from lerobot.datasets.utils import serialize_dict
 from stage2.action_tokens import ActionTokenConfig
 from stage2.backends.interfaces import Stage2Batch
 from stage2.backends.smolvla_shared.artifact import (
@@ -36,6 +38,7 @@ from lerobot_policy_hlrp.policies.hlrp_smolvla_shared.configuration_hlrp_smolvla
 
 
 logger = getLogger(__name__)
+NORMALIZATION_STATS_FILENAME = "hlrp_normalization_stats.json"
 
 
 def _dtype_from_name(name: str) -> torch.dtype:
@@ -131,6 +134,44 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
         self._train_forward_calls = 0
         self._queues: dict[str, deque[torch.Tensor]] = {}
         self.reset()
+
+    def _save_pretrained(self, save_directory: Path) -> None:
+        super()._save_pretrained(save_directory)
+        if self.normalization_stats is None:
+            return
+        with open(save_directory / NORMALIZATION_STATS_FILENAME, "w") as f:
+            json.dump(serialize_dict(self.normalization_stats), f, indent=2, sort_keys=True)
+
+    @classmethod
+    def _load_saved_normalization_stats(
+        cls,
+        pretrained_name_or_path: str | Path,
+    ) -> dict[str, dict[str, Any]] | None:
+        stats_path = Path(pretrained_name_or_path) / NORMALIZATION_STATS_FILENAME
+        if not stats_path.is_file():
+            return None
+        with open(stats_path) as f:
+            loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            raise ValueError(
+                f"Expected normalization stats mapping in {stats_path}, got {type(loaded).__name__}"
+            )
+        return loaded
+
+    @classmethod
+    def from_pretrained(cls, pretrained_name_or_path: str | Path, **kwargs):
+        policy = super().from_pretrained(pretrained_name_or_path, **kwargs)
+        saved_stats = cls._load_saved_normalization_stats(pretrained_name_or_path)
+        if saved_stats is not None:
+            policy.dataset_stats = saved_stats
+            policy.normalization_stats = saved_stats
+        elif str(policy.config.init_mode) == "scratch":
+            logger.warning(
+                "No saved normalization stats found at %s. Scratch-mode checkpoint inference may "
+                "use unnormalized state/action values.",
+                Path(pretrained_name_or_path) / NORMALIZATION_STATS_FILENAME,
+            )
+        return policy
 
     @staticmethod
     def _resolve_image_keys(config: HLRPSmolVLASharedConfig) -> list[str]:
