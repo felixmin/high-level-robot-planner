@@ -214,6 +214,17 @@ def _resize_image_stream_to_uint8(image: torch.Tensor, image_size: tuple[int, in
     return image_f.round().clamp_(0.0, 255.0).to(torch.uint8)
 
 
+def _restrict_dataset_video_features(dataset: LeRobotDataset, requested_video_keys: set[str]) -> None:
+    if not requested_video_keys:
+        return
+    filtered_features = {
+        key: value
+        for key, value in dataset.meta.info["features"].items()
+        if key not in dataset.meta.video_keys or key in requested_video_keys
+    }
+    dataset.meta.info["features"] = filtered_features
+
+
 class LeRobotSingleSource:
     def __init__(
         self,
@@ -288,6 +299,12 @@ class LeRobotSingleSource:
                 video_backend=self.video_backend,
                 tolerance_s=self.tolerance_s if self.tolerance_s is not None else 1e-4,
             )
+            requested_video_keys = {
+                dataset_key
+                for role, dataset_key in self.camera_map.items()
+                if role in self.request.image_requests
+            }
+            _restrict_dataset_video_features(dataset, requested_video_keys)
             self._runtime = LeRobotSourceRuntime(
                 dataset=dataset,
                 compiled_index=self.compiled_train_index,
