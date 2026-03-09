@@ -11,9 +11,23 @@ from tests.common.lerobot_v3_fixtures import make_test_meta, make_test_request
 
 class _FakeLeRobotDataset:
     init_kwargs = None
+    last_instance = None
 
     def __init__(self, **kwargs):
         type(self).init_kwargs = dict(kwargs)
+        type(self).last_instance = self
+        self.meta = SimpleNamespace(
+            info={
+                "features": {
+                    "observation.images.image": {"dtype": "video"},
+                    "observation.images.wrist": {"dtype": "video"},
+                    "observation.state": {"dtype": "float32"},
+                    "action": {"dtype": "float32"},
+                    "actions": {"dtype": "float32"},
+                }
+            },
+            video_keys=["observation.images.image", "observation.images.wrist"],
+        )
 
     def __getitem__(self, index: int):
         del index
@@ -89,7 +103,14 @@ def test_single_source_passes_video_backend_to_lerobot_dataset(monkeypatch) -> N
     source.get_sample(0)
 
     assert _FakeLeRobotDataset.init_kwargs is not None
+    assert _FakeLeRobotDataset.last_instance is not None
     assert _FakeLeRobotDataset.init_kwargs["video_backend"] == "pyav"
+    assert set(_FakeLeRobotDataset.last_instance.meta.info["features"]) == {
+        "observation.images.image",
+        "observation.state",
+        "action",
+        "actions",
+    }
 
 
 def test_single_source_get_sample_shapes_images_masks_and_metadata(monkeypatch) -> None:
