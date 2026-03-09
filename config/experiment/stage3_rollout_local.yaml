@@ -1,0 +1,11 @@
+# @package _global_
+
+defaults:
+  - _stage3_rollout_base
+  - /cluster@cluster: local_dev
+  - /runtime: stage3_local
+  - optional /user_config: local
+
+experiment:
+  name: stage3_rollout_local
+  description: "Local Stage 3 rollout run (LeRobot eval + HLRP shared SmolVLA policy)"

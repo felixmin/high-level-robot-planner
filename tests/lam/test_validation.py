@@ -577,7 +577,7 @@ class TestValidationStrategyCallbackAccounting:
 
         trainer = MagicMock()
         pl_module = MagicMock()
-        with caplog.at_level(logging.INFO, logger="lam.training"):
+        with caplog.at_level(logging.INFO, logger="stage1.training"):
             cb.on_validation_epoch_end(trainer, pl_module)
 
         text = caplog.text
@@ -613,7 +613,7 @@ class TestValidationStrategyCallbackAccounting:
 
         trainer = MagicMock()
         pl_module = MagicMock()
-        with caplog.at_level(logging.INFO, logger="lam.training"):
+        with caplog.at_level(logging.INFO, logger="stage1.training"):
             cb.on_validation_epoch_end(trainer, pl_module)
 
         text = caplog.text

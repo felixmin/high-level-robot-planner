@@ -8,6 +8,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
+from common.lerobot_v3_types import Stage1Batch
 from lam.task import LAMTask, separate_weight_decayable_params
 
 
@@ -79,6 +80,17 @@ def training_config():
 def synthetic_batch():
     """Synthetic frame pair batch [B, C, 2, H, W]."""
     return torch.randn(2, 3, 2, 256, 256)
+
+
+def _make_stage1_batch(frames: torch.Tensor) -> Stage1Batch:
+    batch_size = int(frames.shape[0])
+    time_steps = int(frames.shape[2])
+    return Stage1Batch(
+        image_streams={"primary": frames},
+        image_padding_masks={"primary": torch.ones((batch_size, time_steps), dtype=torch.bool, device=frames.device)},
+        task_text=["test-task"] * batch_size,
+        meta={"dataset_name": [f"dataset_{i}" for i in range(batch_size)]},
+    )
 
 
 class TestSeparateWeightDecayableParams:
@@ -224,14 +236,14 @@ class TestLAMTaskForward:
 class TestLAMTaskTrainingStep:
     """Test LAMTask training step."""
 
-    def test_training_step_tensor(self, model_config, training_config, synthetic_batch, device):
-        """Test training step with tensor batch."""
+    def test_training_step_stage1_batch(self, model_config, training_config, synthetic_batch, device):
+        """Test training step with Stage1Batch input."""
         task = LAMTask(
             model_config=model_config,
             training_config=training_config,
         ).to(device)
 
-        batch = synthetic_batch.to(device)
+        batch = _make_stage1_batch(synthetic_batch.to(device))
 
         # Training step
         loss = task.training_step(batch, batch_idx=0)
@@ -240,10 +252,10 @@ class TestLAMTaskTrainingStep:
         assert loss.ndim == 0
         assert loss.item() >= 0
 
-        print(f"✓ Training step (tensor): loss={loss.item():.4f}")
+        print(f"✓ Training step (Stage1Batch): loss={loss.item():.4f}")
 
-    def test_training_step_dict(self, model_config, training_config, synthetic_batch, device):
-        """Test training step with metadata dict batch."""
+    def test_training_step_rejects_legacy_dict_batch(self, model_config, training_config, synthetic_batch, device):
+        """Test training step rejects legacy dict batches."""
         task = LAMTask(
             model_config=model_config,
             training_config=training_config,
@@ -255,13 +267,8 @@ class TestLAMTaskTrainingStep:
             "scene_idx": [0, 1],
         }
 
-        # Training step
-        loss = task.training_step(batch_dict, batch_idx=0)
-
-        assert isinstance(loss, torch.Tensor)
-        assert loss.item() >= 0
-
-        print(f"✓ Training step (dict): loss={loss.item():.4f}")
+        with pytest.raises(TypeError, match="Stage 1 expects Stage1Batch"):
+            task.training_step(batch_dict, batch_idx=0)
 
 
 class TestLAMTaskValidationStep:
@@ -274,7 +281,7 @@ class TestLAMTaskValidationStep:
             training_config=training_config,
         ).to(device)
 
-        batch = synthetic_batch.to(device)
+        batch = _make_stage1_batch(synthetic_batch.to(device))
 
         # Validation step
         loss = task.validation_step(batch, batch_idx=0)
@@ -335,7 +342,7 @@ class TestLAMTaskGradients:
             training_config=training_config,
         ).to(device)
 
-        batch = synthetic_batch.to(device)
+        batch = _make_stage1_batch(synthetic_batch.to(device))
 
         # Forward + backward
         loss = task.training_step(batch, batch_idx=0)

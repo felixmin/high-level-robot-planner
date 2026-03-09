@@ -143,15 +143,29 @@ class TestExperimentConsistency:
             assert cfg.lerobot.policy.type is not None
             assert cfg.lerobot.policy.init_mode in {"artifact", "scratch"}
 
-    def test_stage3_rollout_experiment_loads(self, config_dir):
+    @pytest.mark.parametrize(
+        ("experiment", "cluster_name", "mujoco_gl"),
+        [
+            ("stage3_rollout", "mcml_h100", "osmesa"),
+            ("stage3_rollout_local", "local_dev", "egl"),
+            ("stage3_rollout_cluster", "mcml_h100", "osmesa"),
+        ],
+    )
+    def test_stage3_rollout_experiments_load(self, config_dir, experiment, cluster_name, mujoco_gl):
         with initialize_config_dir(version_base=None, config_dir=config_dir):
-            cfg = compose(config_name="config", overrides=["experiment=stage3_rollout"])
+            cfg = compose(config_name="config", overrides=[f"experiment={experiment}"])
 
             assert hasattr(cfg, "experiment")
             assert hasattr(cfg, "lerobot_eval")
             assert hasattr(cfg, "cluster")
-            assert cfg.experiment.name == "stage3_rollout"
+            assert cfg.experiment.name == experiment
+            assert cfg.cluster.name == cluster_name
             assert cfg.lerobot_eval.command is not None
+            assert cfg.lerobot_eval.env.MUJOCO_GL == mujoco_gl
+            assert cfg.lerobot_eval.env_task == "libero_spatial,libero_object,libero_goal,libero_10"
+            assert cfg.lerobot_eval.eval_batch_size == 1
+            assert cfg.lerobot_eval.eval_n_episodes == 10
+            assert cfg.lerobot_eval.extra_args == ["--env.max_parallel_tasks=1"]
 
     def test_stage3_sweep_experiment_loads(self, config_dir):
         with initialize_config_dir(version_base=None, config_dir=config_dir):
