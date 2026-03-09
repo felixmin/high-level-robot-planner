@@ -9,3 +9,6 @@
 
 - check whether research about when interpolation between training samples works and when they are "too far" is a promising direction
   - what was done for robotics or other directions
+
+
+- rollouts are shit... check why they are shit... i suppose there must be an error somehwere... script 7 taking different normalization or whatever than script 6
