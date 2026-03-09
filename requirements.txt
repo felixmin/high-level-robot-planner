@@ -10,7 +10,8 @@ lightning-fabric
 accelerate
 einops
 timm
-transformers
+transformers==4.57.3
+huggingface-hub==0.35.3
 
 # Deep Learning (TensorFlow - for OXE datasets)
 tensorflow
@@ -36,3 +37,4 @@ pytest-cov
 black
 ruff
 beartype
+lerobot==0.4.3
