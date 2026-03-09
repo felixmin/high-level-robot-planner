@@ -107,9 +107,18 @@ See `CLAUDE.md` for architecture and config structure details.
 
 ## Dataset Sources and Downloads
 
+- Optional predownload step for Stage 1/2:
+  - `python scripts/1_download_configured_datasets.py experiment=stage1_local`
+  - This script is optional. Stage 1/2 can also download on demand through the normal LeRobot/Hugging Face cache flow.
+  - Use it when you want to prefetch the LeRobot-v3 sources selected by your Hydra config before starting training.
+- Custom dataset root for script 1:
+  - Override with `download.root=/your/path`.
+  - If `download.root` is unset, script 1 writes into `HF_LEROBOT_HOME` (normally derived from `paths.cache_dir`).
+  - This root stores the predownloaded LeRobot-v3 dataset contents for each configured `repo_id`, organized under `<root>/<owner>/<dataset>/`.
+  - Each dataset directory contains the downloaded `meta/`, `data/`, and `videos/` trees used by the LeRobot-v3 loader.
 - Workstation/local training usually uses local dataset paths:
   - Stage 1/2 LeRobot-v3 mix via Hydra data config (default in `stage1_local` / `stage2_local`)
-  - LeRobot cache root defaults to `${LEROBOT_HOME}` (set explicitly when needed)
+  - LeRobot cache root defaults to `${HF_LEROBOT_HOME}` (set explicitly when needed)
   - Stage 3 Libero snapshot: `/mnt/data/workspace/hflibero/datasets--HuggingFaceVLA--libero/snapshots/<snapshot>`
 - Cluster training:
   - Stage 1/2 uses LeRobot datasets and Hugging Face cache on cluster storage.
@@ -118,6 +127,7 @@ See `CLAUDE.md` for architecture and config structure details.
   - `HuggingFaceVLA/libero` dataset cache (`HF_DATASETS_CACHE`)
   - LIBERO environment assets (`~/.cache/libero/assets`) if missing
   - Hugging Face model/checkpoint cache (`HF_HUB_CACHE`)
+  - By default, `paths.cache_dir` is also where `HF_LEROBOT_HOME` lives, so it holds LeRobot dataset cache data unless you override `download.root` for script 1.
 
 ## Development
 
