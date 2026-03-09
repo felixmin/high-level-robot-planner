@@ -1,0 +1,4 @@
+interface:
+  display_name: "HLRP Code Quality"
+  short_description: "Run and repair the repo QA sequence."
+  default_prompt: "Use this skill to resolve a working local Python runner first, then run the HLRP QA sequence, fixing failures and rerunning each step until script 0, ruff, black, and pytest pass. Add the documented coverage run when the user asks for full QA."
