@@ -109,6 +109,7 @@ Important:
    - intended run dir
    - purpose
    - config delta versus default
+   - upstream artifacts and checkpoints used
 6. Launch the stage script directly, not through `scripts/submit_job.py`.
 
 Local command pattern:
@@ -132,6 +133,9 @@ Use:
 4. Create `docs/runs/<stem>.md` from `docs/runs/TEMPLATE.md`.
 5. Fill in the metadata before launch, including the logical target cluster.
    Record the current code commit reference from `git rev-parse HEAD`. If the worktree is dirty, note that explicitly in the docs entry.
+   Also record every reused upstream artifact or checkpoint with both:
+   - the documented run stem it came from, when known
+   - the explicit resolved path used at launch time
 6. Submit through `scripts/submit_job.py`.
 
 When the user says `cluster`, default to the logical `lrz cluster` flow:
@@ -202,6 +206,7 @@ Before launch, the docs note must state:
 - the canonical config name
 - the base experiment it was derived from
 - the exact config delta from the default base experiment
+- every reused upstream artifact or checkpoint, including both the source run stem and the explicit path
 - the intended run directory or directories
 - the purpose of the run
 
@@ -209,6 +214,19 @@ After launch, update the same note with:
 - job IDs
 - the winning cluster submission, if applicable
 - final run directory
+
+## Artifact and checkpoint provenance
+
+Document reused artifacts explicitly.
+
+Rules:
+- Stage 1 usually has no upstream checkpoint. State that clearly when none is used.
+- Stage 2, Stage 3, and rollout runs usually depend on an earlier pipeline artifact or checkpoint. Record that provenance before launch.
+- For each reused artifact or checkpoint, include both:
+  - the source documented run stem, for example `2026-03-10_14-20-00_stage1_local_5pct_real_action`
+  - the explicit path used at launch time
+- If the source run is not documented, still record the explicit path and say that the source run stem is unknown.
+- If multiple upstream artifacts are used, list all of them separately.
 
 ## Resume runs
 

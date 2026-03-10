@@ -27,6 +27,13 @@
 
 -
 
+## Upstream Artifacts / Checkpoints
+
+- Type:  # For example `stage1 checkpoint`, `stage2 artifact`, `policy path`, or `rollout input`.
+  Source Run:  # Documented run stem such as `2026-03-10_14-20-00_stage1_local_5pct_real_action`; write `none` or `unknown` when applicable.
+  Path:  # Explicit filesystem path used for this run.
+  Notes:  # Optional short note on how this artifact is used in the current run.
+
 ## Launch Command
 
 ```bash
