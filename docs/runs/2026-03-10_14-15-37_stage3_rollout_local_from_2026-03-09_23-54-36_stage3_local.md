@@ -22,6 +22,7 @@
 ## Purpose
 
 - Run dedicated local Stage 3 rollouts for the final checkpoint from `2026-03-09_23-54-36_stage3_local`.
+- The source Stage 3 training run used the `libero_5pct` dataset subset rather than the full Libero training data.
 - Evaluate the exported LeRobot policy with `scripts/7_rollout_lerobot.py` instead of relying only on training-time evals.
 
 ## Config Delta Vs Default
@@ -36,7 +37,7 @@
 - Type: `policy path`
   Source Run: `2026-03-09_23-54-36_stage3_local`
   Path: `/mnt/data/workspace/runs_root/runs/2026-03-09_23-54-36_stage3_local/lerobot/checkpoints/last/pretrained_model`
-  Notes: Final saved Stage 3 policy used as rollout input.
+  Notes: Final saved Stage 3 policy used as rollout input; the source training run used the `libero_5pct` dataset subset.
 
 ## Launch Command
 
