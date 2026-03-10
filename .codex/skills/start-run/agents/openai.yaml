@@ -1,0 +1,5 @@
+interface:
+  display_name: "start run"
+  short_description: "Start documented or debug HLRP runs"
+  default_prompt: "Use $start-run to launch a documented local or cluster run for one HLRP stage or rollout."
+

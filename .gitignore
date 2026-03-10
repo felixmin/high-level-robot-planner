@@ -60,7 +60,6 @@ Thumbs.db
 # Logging and experiment tracking
 wandb/
 logs/
-runs/
 mlruns/
 lightning_logs/
 *.log

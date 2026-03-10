@@ -1,0 +1,5 @@
+interface:
+  display_name: "evaluate run"
+  short_description: "Inspect and summarize HLRP runs"
+  default_prompt: "Use $evaluate-run to inspect a run, job id, documented run stem, or the last run on this system."
+
