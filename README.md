@@ -145,8 +145,6 @@ That file is gitignored and is the right place for things like:
 
 Start from `config/user_config/local.yaml.example` if you need to create or update your local file.
 
-See `CLAUDE.md` for architecture and config structure details.
-
 ## Dataset Sources and Downloads
 
 - Optional predownload step for Stage 1/2:
