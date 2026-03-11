@@ -779,11 +779,23 @@ class HLRPSmolVLASharedPolicy(PreTrainedPolicy):
             metrics["action_loss"] = float(action_loss.detach().cpu())
             metrics["action_supervised_samples"] = float(action_supervised_count)
             metrics["action_supervised_fraction"] = float(action_supervised_count / int(target_action.shape[0]))
+            metrics["batch_action_supervised_samples"] = float(action_supervised_count)
+            metrics["batch_action_supervised_denominator"] = float(int(target_action.shape[0]))
+            metrics["batch_action_supervised_fraction"] = float(
+                action_supervised_count / int(target_action.shape[0])
+            )
+            metrics["_action_supervised_denominator"] = float(int(target_action.shape[0]))
         if latent_loss is not None:
             metrics["latent_loss"] = float(latent_loss.detach().cpu())
             metrics["latent_valid_pairs"] = float(latent_valid_pairs)
             metrics["latent_supervised_samples"] = float(latent_supervised_count)
             metrics["latent_supervised_fraction"] = float(latent_supervised_count / int(target_latent.shape[0]))
+            metrics["batch_latent_supervised_samples"] = float(latent_supervised_count)
+            metrics["batch_latent_supervised_denominator"] = float(int(target_latent.shape[0]))
+            metrics["batch_latent_supervised_fraction"] = float(
+                latent_supervised_count / int(target_latent.shape[0])
+            )
+            metrics["_latent_supervised_denominator"] = float(int(target_latent.shape[0]))
         return total, metrics
 
     def predict_action_chunk(self, batch: dict[str, torch.Tensor], **kwargs) -> torch.Tensor:
