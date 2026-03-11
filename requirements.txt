@@ -37,4 +37,4 @@ pytest-cov
 black
 ruff
 beartype
-lerobot==0.4.3
+lerobot==0.4.4

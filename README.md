@@ -114,12 +114,38 @@ installed build does not support the GPU's SM architecture yet. Typical symptoms
 are warnings about unsupported compute capability such as `sm_120` or runtime
 errors like `CUDA error: no kernel image is available for execution on the device`.
 
-If that happens, reinstall PyTorch with a newer CUDA build. For example:
+If that happens, reinstall PyTorch with a newer **stable** CUDA build from the
+official selector. Avoid nightly builds unless you explicitly need them and can
+also align all video decoding dependencies.
+
+For this repo, if you use `torchvision>=0.24` then `torchvision.io.VideoReader`
+may be unavailable; LeRobot video decoding then requires a `torchcodec` build
+compatible with your exact PyTorch version.
+
+Recommended stable reinstall pattern:
 
 ```bash
 pip uninstall -y torch torchvision torchaudio
-pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install -U torchcodec
+conda install -n hlrp -c conda-forge ffmpeg -y
 ```
+
+If `torchcodec` fails to import with errors about missing libraries like
+`libavutil.so.*` / `libavcodec.so.*`, FFmpeg runtime libraries are missing in
+the environment. Install FFmpeg as shown above.
+
+Known-working nightly matrix (example used by collaborators):
+
+```bash
+pip uninstall -y torch torchvision torchaudio torchcodec
+pip install --pre torch==2.11.0.dev20260121+cu128 torchvision==0.25.0.dev20260121+cu128 torchaudio==2.11.0.dev20260122+cu128 --index-url https://download.pytorch.org/whl/nightly/cu128
+pip install torchcodec==0.5
+conda install -n hlrp -c conda-forge ffmpeg -y
+```
+
+Important: keep `torch`, `torchvision`, `torchaudio`, and `torchcodec` aligned.
+Mixing arbitrary nightly dates with latest torchcodec wheels can break decoding.
 
 Check the official PyTorch install selector for the current recommended command:
 https://pytorch.org/get-started/locally/

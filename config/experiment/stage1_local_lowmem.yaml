@@ -15,10 +15,8 @@ logging:
 
 data:
   loader:
-    batch_size: 8
     num_workers: 4
 
-precision: "16-mixed"
 
 model:
   flow:
