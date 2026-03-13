@@ -380,12 +380,64 @@ class TestCodeOnlyPath:
             indices_direct = lam_model.vq.get_indices(first_tokens, last_tokens)
         assert torch.equal(indices_forward, indices_direct)
 
+    def test_inference_codebook_ids_match_forward_code_only(self, lam_model, device):
+        """Inference index path must match the side-effect-free forward code-only path."""
+        video = torch.randn(2, 3, 2, 256, 256, device=device)
+        with torch.no_grad():
+            indices_forward = lam_model(video, return_only_codebook_ids=True)
+            indices_inference = lam_model.inference(
+                video, return_only_codebook_ids=True
+            )
+        assert torch.equal(indices_forward, indices_inference)
+
     def test_normal_forward_still_updates_counter(self, lam_model, device):
         """Standard training forward must still increment codebooks_used."""
         lam_model.vq.codebooks_used.zero_()
         video = torch.randn(2, 3, 2, 256, 256, device=device)
         lam_model(video, step=0)
         assert lam_model.vq.codebooks_used.sum().item() > 0
+
+
+class TestInferenceCompatibility:
+    """Regression tests for inference-only compatibility semantics."""
+
+    def test_inference_returns_none_without_aux_decoder(self, lam_model_config, device):
+        """Aux-disabled inference must keep returning None."""
+        lam_model_config.pop("device")
+        lam_model_config["use_aux_decoder"] = False
+        model = LatentActionModel(**lam_model_config).to(device)
+        video = torch.randn(2, 3, 2, 256, 256, device=device)
+
+        with torch.no_grad():
+            recon = model.inference(video)
+
+        assert recon is None
+
+    def test_lam_encoder_vq_inference_prunes_decoder_attrs(self, lam_model):
+        """Stage-2 pruning must drop decoder attrs but keep shared encoder projection state."""
+        from lam.inference import LAMEncoderVQInference
+
+        original_state_keys = set(lam_model.state_dict().keys())
+        assert any(key.startswith("aux_decoder.") for key in original_state_keys)
+        assert any(key.startswith("decoder_context_projection.") for key in original_state_keys)
+        assert lam_model.decoder_context_projection is lam_model.pixel_projection
+        assert lam_model.encoder_projection is lam_model.pixel_projection
+
+        wrapper = LAMEncoderVQInference(lam_model, prune_decoders=True)
+
+        assert wrapper._model.aux_decoder is None
+        assert wrapper._model.aux_to_pixels is None
+        assert wrapper._model.dino_decoder is None
+        assert wrapper._model.decoder_context_projection is None
+        assert wrapper._model.pixel_projection is not None
+        assert wrapper._model.encoder_projection is not None
+
+        pruned_state_keys = set(wrapper._model.state_dict().keys())
+        assert not any(key.startswith("aux_decoder.") for key in pruned_state_keys)
+        assert not any(
+            key.startswith("decoder_context_projection.") for key in pruned_state_keys
+        )
+        assert any(key.startswith("pixel_projection.") for key in pruned_state_keys)
 
 
 if __name__ == "__main__":

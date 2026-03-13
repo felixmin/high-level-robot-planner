@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import torch
 
-from lam.models.forward_core import normalize_video_input
 from lam.models.latent_action_model import LatentActionModel
 
 # Decoder/teacher attributes not needed for encoder+VQ inference.
@@ -67,7 +66,7 @@ class LAMEncoderVQInference(torch.nn.Module):
     def codes_from_video(self, video: torch.Tensor) -> torch.Tensor:
         """Return codebook indices [B, code_seq_len] for a video batch."""
         video = video.to(self.device)
-        video = normalize_video_input(self._model, video)
+        video = self._model._normalize_video_input(video)
         first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
         _, _, first_tokens, last_tokens = self._model._encode_frames(
             first_frame, rest_frames

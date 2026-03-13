@@ -4,13 +4,38 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 
-from lam.models.forward_core import EncodedBatch
+def _decode_spatial_tokens(
+    *,
+    decoder,
+    context_tokens: torch.Tensor,
+    action_tokens: torch.Tensor,
+    attn_bias: torch.Tensor,
+    batch_size: int,
+    h_dec: int,
+    w_dec: int,
+) -> torch.Tensor:
+    video_shape = tuple(context_tokens.shape[:-1])
+    context_tokens_flat = rearrange(context_tokens, "b t h w d -> (b t) (h w) d")
+    action_tokens_flat = rearrange(action_tokens, "b t h w d -> (b t) (h w) d")
+    pred_tokens = decoder(
+        context_tokens_flat,
+        attn_bias=attn_bias,
+        video_shape=video_shape,
+        context=action_tokens_flat,
+    )
+    return rearrange(
+        pred_tokens,
+        "(b t) (h w) d -> b t h w d",
+        b=batch_size,
+        h=h_dec,
+        w=w_dec,
+    )
 
 
 def compute_dino_loss(
     model: Any,
     *,
-    encoded: EncodedBatch,
+    encoded,
     action_tokens: torch.Tensor,
     attn_bias: torch.Tensor,
     h_dec: int,
@@ -26,22 +51,14 @@ def compute_dino_loss(
     if dino_weight == 0.0:
         return None
 
-    dino_context = encoded.enc_first_frame_tokens
-    video_shape = tuple(dino_context.shape[:-1])
-    dino_context_flat = rearrange(dino_context, "b t h w d -> (b t) (h w) d")
-    dino_action_flat = rearrange(action_tokens, "b t h w d -> (b t) (h w) d")
-    pred_dino_tokens = model.dino_decoder(
-        dino_context_flat,
+    pred_dino_tokens = _decode_spatial_tokens(
+        decoder=model.dino_decoder,
+        context_tokens=encoded.enc_first_frame_tokens,
+        action_tokens=action_tokens,
         attn_bias=attn_bias,
-        video_shape=video_shape,
-        context=dino_action_flat,
-    )
-    pred_dino_tokens = rearrange(
-        pred_dino_tokens,
-        "(b t) (h w) d -> b t h w d",
-        b=encoded.batch_size,
-        h=h_dec,
-        w=w_dec,
+        batch_size=encoded.batch_size,
+        h_dec=h_dec,
+        w_dec=w_dec,
     )
     target_dino_tokens = encoded.enc_rest_frames_tokens.detach()
     dino_loss = F.mse_loss(pred_dino_tokens, target_dino_tokens)
@@ -66,21 +83,14 @@ def compute_pixel_loss(
     if pixel_context is None:
         raise RuntimeError("pixel_context is required when pixel decoder is enabled")
 
-    video_shape = tuple(pixel_context.shape[:-1])
-    pixel_context_flat = rearrange(pixel_context, "b t h w d -> (b t) (h w) d")
-    pixel_action_flat = rearrange(action_tokens, "b t h w d -> (b t) (h w) d")
-    pred_pixel_tokens = model.pixel_decoder(
-        pixel_context_flat,
+    pred_pixel_tokens = _decode_spatial_tokens(
+        decoder=model.pixel_decoder,
+        context_tokens=pixel_context,
+        action_tokens=action_tokens,
         attn_bias=attn_bias,
-        video_shape=video_shape,
-        context=pixel_action_flat,
-    )
-    pred_pixel_tokens = rearrange(
-        pred_pixel_tokens,
-        "(b t) (h w) d -> b t h w d",
-        b=batch_size,
-        h=h_dec,
-        w=w_dec,
+        batch_size=batch_size,
+        h_dec=h_dec,
+        w_dec=w_dec,
     )
     pred_pixels = model.pixel_to_pixels(pred_pixel_tokens)
     pixel_loss = F.mse_loss(rest_frames, pred_pixels)
@@ -102,28 +112,18 @@ def compute_aux_outputs(
     metrics: Dict[str, Any],
 ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
     if model.aux_decoder is None:
-        if return_recons_only:
-            return None, None
         return None, None
     if pixel_context is None:
         raise RuntimeError("pixel_context is required when aux decoder is enabled")
 
-    aux_actions = action_tokens.detach()
-    video_shape = tuple(pixel_context.shape[:-1])
-    aux_context_flat = rearrange(pixel_context, "b t h w d -> (b t) (h w) d")
-    aux_action_flat = rearrange(aux_actions, "b t h w d -> (b t) (h w) d")
-    aux_tokens = model.aux_decoder(
-        aux_context_flat,
+    aux_tokens = _decode_spatial_tokens(
+        decoder=model.aux_decoder,
+        context_tokens=pixel_context,
+        action_tokens=action_tokens.detach(),
         attn_bias=attn_bias,
-        video_shape=video_shape,
-        context=aux_action_flat,
-    )
-    aux_tokens = rearrange(
-        aux_tokens,
-        "(b t) (h w) d -> b t h w d",
-        b=batch_size,
-        h=h_dec,
-        w=w_dec,
+        batch_size=batch_size,
+        h_dec=h_dec,
+        w_dec=w_dec,
     )
     recon_video = model.aux_to_pixels(aux_tokens)
 

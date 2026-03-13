@@ -1,18 +1,20 @@
 """
-Latent Action Quantization (LAM) Model.
+Latent Action Model (LAM).
 
-A VQ-VAE that encodes frame-to-frame transitions into discrete latent action codes.
-Supports modular decoder objectives: DINO, Pixel, Flow (training) and Aux (interpretability).
+A VQ-backed model that encodes frame-to-frame transitions into discrete latent
+action codes. Supports modular decoder objectives for reconstruction,
+representation supervision, and motion supervision.
 
-Decoder Types:
-- DINO decoder: Predicts next frame's DINO tokens (renamed from dec_spatial_transformer)
-- Pixel decoder: Predicts next frame's pixels with gradients flowing to encoder
+Decoder types:
+- DINO decoder: Predicts next-frame DINO tokens
+- Pixel decoder: Predicts next-frame pixels with gradients flowing to the encoder
 - Flow decoder: Predicts optical flow via RAFT knowledge distillation
-- Aux decoder: Predicts pixels for visualization only (gradients detached from encoder)
+- Aux decoder: Predicts pixels for visualization only with detached gradients
 """
 
 import logging
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -30,14 +32,6 @@ from lam.models.decoder_losses import (
     compute_pixel_loss,
 )
 from lam.models.dino import DINOEncoder, DINOFeatureExtractor, DINOWrapper
-from lam.models.forward_core import (
-    build_decoder_shared_inputs,
-    encode_and_quantize,
-    initialize_metrics,
-    normalize_video_input,
-    prepare_action_tokens,
-    update_codebook_stats,
-)
 from lam.models.nsvq import NSVQ
 
 logger = logging.getLogger(__name__)
@@ -74,9 +68,38 @@ class DinoConfig:
         return self.loss_weight * warmup_factor
 
 
+@dataclass
+class EncodedFrames:
+    batch_size: int
+    device: torch.device
+    first_frame: torch.Tensor
+    rest_frames: torch.Tensor
+    enc_first_frame_tokens: torch.Tensor
+    enc_rest_frames_tokens: torch.Tensor
+    first_tokens: torch.Tensor
+    last_tokens: torch.Tensor
+
+
+@dataclass
+class EncodedBatch(EncodedFrames):
+    tokens: torch.Tensor
+    indices: torch.Tensor
+    perplexity: torch.Tensor
+
+
+@dataclass
+class CodebookStats:
+    current_threshold: float
+    window_total: torch.Tensor
+    codebook_replaced: float
+    replaced_count: float
+    used_count: float
+    min_count: float
+
+
 class LatentActionModel(nn.Module):
     """
-    Latent Action Quantization (LAM) model.
+    Latent Action Model.
 
     Encodes frame pairs into discrete latent action codes using VQ-VAE style
     quantization. Uses transformer-based encoder/decoder with modular objectives.
@@ -142,6 +165,88 @@ class LatentActionModel(nn.Module):
 
         super().__init__()
 
+        self._store_core_configuration(
+            latent_ablation=latent_ablation,
+            metrics_num_unique_codes_every_n_steps=metrics_num_unique_codes_every_n_steps,
+            vq_discarding_threshold=vq_discarding_threshold,
+            vq_discarding_threshold_schedule=vq_discarding_threshold_schedule,
+            code_seq_len=code_seq_len,
+            image_size=image_size,
+            patch_size=patch_size,
+            codebook_replace_schedule=codebook_replace_schedule,
+        )
+
+        self._configure_decoder_flags(
+            dino_config=dino_config,
+            use_dino_decoder=use_dino_decoder,
+            use_pixel_decoder=use_pixel_decoder,
+            use_aux_decoder=use_aux_decoder,
+            flow_config=flow_config,
+        )
+
+        image_height, image_width = self.image_size
+        patch_height, patch_width = self.patch_size
+        self._initialize_encoder_stack(
+            dim=dim,
+            channels=channels,
+            image_height=image_height,
+            image_width=image_width,
+            patch_height=patch_height,
+            patch_width=patch_width,
+            use_dinov3_encoder=use_dinov3_encoder,
+            dinov3_model_name=dinov3_model_name,
+            dinov3_pool_to_grid=dinov3_pool_to_grid,
+            spatial_depth=spatial_depth,
+            temporal_depth=temporal_depth,
+            dim_head=dim_head,
+            heads=heads,
+            attn_dropout=attn_dropout,
+            ff_dropout=ff_dropout,
+        )
+        self._initialize_vq(
+            dim=dim,
+            quant_dim=quant_dim,
+            codebook_size=codebook_size,
+            vq_discarding_threshold=vq_discarding_threshold,
+        )
+
+        eff_patch_h, eff_patch_w = self._effective_patch_shape(
+            image_height=image_height,
+            image_width=image_width,
+            grid_size=self._effective_grid_size,
+        )
+        self._initialize_decoder_modules(
+            spatial_depth=spatial_depth,
+            dim=dim,
+            dim_head=dim_head,
+            heads=heads,
+            channels=channels,
+            attn_dropout=attn_dropout,
+            ff_dropout=ff_dropout,
+            eff_patch_h=eff_patch_h,
+            eff_patch_w=eff_patch_w,
+        )
+        self._initialize_flow_components(
+            dim=dim,
+            dim_head=dim_head,
+            heads=heads,
+            attn_dropout=attn_dropout,
+            ff_dropout=ff_dropout,
+        )
+        self._action_shape = self._derive_action_shape(code_seq_len)
+
+    def _store_core_configuration(
+        self,
+        *,
+        latent_ablation,
+        metrics_num_unique_codes_every_n_steps: int,
+        vq_discarding_threshold: float,
+        vq_discarding_threshold_schedule,
+        code_seq_len: int,
+        image_size,
+        patch_size,
+        codebook_replace_schedule,
+    ) -> None:
         if latent_ablation not in ("none", "permute_batch"):
             raise ValueError(
                 f"latent_ablation must be one of ['none', 'permute_batch'], got {latent_ablation!r}"
@@ -157,34 +262,6 @@ class LatentActionModel(nn.Module):
         if float(vq_discarding_threshold) < 0.0:
             raise ValueError("vq_discarding_threshold must be >= 0")
 
-        # Store decoder flags and validate consistency.
-        self.use_dino_decoder = bool(use_dino_decoder)
-        if self.use_dino_decoder and dino_config is None:
-            raise ValueError("dino_config is required when use_dino_decoder=true")
-        if (not self.use_dino_decoder) and dino_config is not None:
-            raise ValueError("dino_config must be null when use_dino_decoder=false")
-        self.dino_config = dino_config
-        self.use_pixel_decoder = bool(use_pixel_decoder)
-        self.use_aux_decoder = bool(use_aux_decoder)
-        self.flow_config = flow_config
-
-        # Validate at least one training decoder is enabled
-        training_decoders = self._get_enabled_training_decoders()
-        if not training_decoders:
-            raise ValueError(
-                "At least one training decoder must be enabled. "
-                "Set dino.enabled=true, use_pixel_decoder=true, or provide flow_config."
-            )
-        logger.info(f"Enabled training decoders: {training_decoders}")
-        if self.dino_config is not None:
-            logger.info(
-                "DINO supervision enabled (weight=%s, warmup_steps=%s)",
-                self.dino_config.loss_weight,
-                self.dino_config.warmup_steps,
-            )
-        if use_aux_decoder:
-            logger.info("Aux decoder enabled for interpretability")
-
         self.codebook_replace_schedule = list(codebook_replace_schedule or [])
         self.vq_discarding_threshold = float(vq_discarding_threshold)
         self.vq_discarding_threshold_schedule = (
@@ -195,60 +272,121 @@ class LatentActionModel(nn.Module):
         self.code_seq_len = code_seq_len
         self.image_size = pair(image_size)
         self.patch_size = pair(patch_size)
-        patch_height, patch_width = self.patch_size
 
+    def _initialize_encoder_stack(
+        self,
+        *,
+        dim: int,
+        channels: int,
+        image_height: int,
+        image_width: int,
+        patch_height: int,
+        patch_width: int,
+        spatial_depth: int,
+        temporal_depth: int,
+        dim_head: int,
+        heads: int,
+        attn_dropout: float,
+        ff_dropout: float,
+        use_dinov3_encoder: bool,
+        dinov3_model_name: str,
+        dinov3_pool_to_grid,
+    ) -> None:
         self.spatial_rel_pos_bias = ContinuousPositionBias(dim=dim, heads=heads)
-
-        image_height, image_width = self.image_size
-        assert (image_height % patch_height) == 0 and (image_width % patch_width) == 0
-
-        if use_dinov3_encoder:
-            logger.info(f"Using DINOv3 Encoder: {dinov3_model_name}")
-            self.dino_feature_extractor = DINOFeatureExtractor(
-                model_name=dinov3_model_name,
-                target_size=self.image_size[0],  # Assuming square
-            )
-            # DINOEncoder returns [B, 1, h, w, d]
-            # Pool to match original grid size if specified (reduces memory 16x for attention)
-            self.dino_encoder = DINOEncoder(
-                self.dino_feature_extractor,
-                dim,
-                pool_to_grid=dinov3_pool_to_grid,
-            )
-
-            self.encoder_projection = DINOWrapper(self.dino_encoder)
-
-            # Use encoder's output grid size (accounts for pooling)
-            output_grid = self.dino_encoder.output_grid_size
-            self._effective_grid_size = (output_grid, output_grid)
-            logger.info(f"  - Effective grid size: {self._effective_grid_size}")
-        else:
-            self._effective_grid_size = (
-                image_height // patch_height,
-                image_width // patch_width,
-            )
-            self.encoder_projection = None
-
-        # Decoder Pixel Projection (Also used for Encoder if DINO is disabled)
-        # Ensure patch size matches the effective grid size (critical if DINO pooling is used)
-        eff_h, eff_w = self._effective_grid_size
-        pixel_p1 = image_height // eff_h
-        pixel_p2 = image_width // eff_w
-
-        self.pixel_projection = nn.Sequential(
-            Rearrange(
-                "b c 1 (h p1) (w p2) -> b 1 h w (c p1 p2)", p1=pixel_p1, p2=pixel_p2
-            ),
-            nn.LayerNorm(channels * pixel_p1 * pixel_p2),
-            nn.Linear(channels * pixel_p1 * pixel_p2, dim),
-            nn.LayerNorm(dim),
+        self._initialize_encoder_projections(
+            dim=dim,
+            channels=channels,
+            image_height=image_height,
+            image_width=image_width,
+            patch_height=patch_height,
+            patch_width=patch_width,
+            use_dinov3_encoder=use_dinov3_encoder,
+            dinov3_model_name=dinov3_model_name,
+            dinov3_pool_to_grid=dinov3_pool_to_grid,
+        )
+        self.enc_spatial_transformer = self._build_transformer(
+            depth=spatial_depth,
+            dim=dim,
+            dim_head=dim_head,
+            heads=heads,
+            attn_dropout=attn_dropout,
+            ff_dropout=ff_dropout,
+        )
+        self.enc_temporal_transformer = self._build_transformer(
+            depth=temporal_depth,
+            dim=dim,
+            dim_head=dim_head,
+            heads=heads,
+            attn_dropout=attn_dropout,
+            ff_dropout=ff_dropout,
         )
 
-        self.decoder_context_projection = self.pixel_projection
+    def _initialize_vq(
+        self,
+        *,
+        dim: int,
+        quant_dim: int,
+        codebook_size: int,
+        vq_discarding_threshold: float,
+    ) -> None:
+        self.vq = NSVQ(
+            dim=dim,
+            num_embeddings=codebook_size,
+            embedding_dim=quant_dim,
+            discarding_threshold=vq_discarding_threshold,
+            code_seq_len=self.code_seq_len,
+            patch_size=self.patch_size,
+            image_size=self.image_size,
+            grid_size=self._effective_grid_size,
+        )
 
-        if self.encoder_projection is None:
-            self.encoder_projection = self.pixel_projection
+    def _configure_decoder_flags(
+        self,
+        *,
+        dino_config,
+        use_dino_decoder,
+        use_pixel_decoder,
+        use_aux_decoder,
+        flow_config,
+    ) -> None:
+        self.use_dino_decoder = bool(use_dino_decoder)
+        if self.use_dino_decoder and dino_config is None:
+            raise ValueError("dino_config is required when use_dino_decoder=true")
+        if (not self.use_dino_decoder) and dino_config is not None:
+            raise ValueError("dino_config must be null when use_dino_decoder=false")
+        self.dino_config = dino_config
+        self.use_pixel_decoder = bool(use_pixel_decoder)
+        self.use_aux_decoder = bool(use_aux_decoder)
+        self.flow_config = flow_config
 
+        training_decoders = self._get_enabled_training_decoders()
+        if not training_decoders:
+            raise ValueError(
+                "At least one training decoder must be enabled. "
+                "Set dino.enabled=true, use_pixel_decoder=true, or provide flow_config."
+            )
+
+        logger.info("Enabled training decoders: %s", training_decoders)
+        if self.dino_config is not None:
+            logger.info(
+                "DINO supervision enabled (weight=%s, warmup_steps=%s)",
+                self.dino_config.loss_weight,
+                self.dino_config.warmup_steps,
+            )
+        if self.use_aux_decoder:
+            logger.info("Aux decoder enabled for interpretability")
+
+    @staticmethod
+    def _build_transformer(
+        *,
+        depth,
+        dim,
+        dim_head,
+        heads,
+        attn_dropout,
+        ff_dropout,
+        has_cross_attn: bool = False,
+    ) -> Transformer:
         transformer_kwargs = dict(
             dim=dim,
             dim_head=dim_head,
@@ -258,128 +396,224 @@ class LatentActionModel(nn.Module):
             peg=True,
             peg_causal=True,
         )
+        if has_cross_attn:
+            transformer_kwargs["has_cross_attn"] = True
+            transformer_kwargs["dim_context"] = dim
+        return Transformer(depth=depth, **transformer_kwargs)
 
-        transformer_with_action_kwargs = dict(
+    @staticmethod
+    def _effective_patch_shape(
+        *,
+        image_height: int,
+        image_width: int,
+        grid_size: tuple[int, int],
+    ) -> tuple[int, int]:
+        eff_h, eff_w = grid_size
+        return image_height // eff_h, image_width // eff_w
+
+    def _build_pixel_projection(
+        self,
+        *,
+        dim: int,
+        channels: int,
+        image_height: int,
+        image_width: int,
+        grid_size: tuple[int, int],
+    ) -> nn.Sequential:
+        pixel_p1, pixel_p2 = self._effective_patch_shape(
+            image_height=image_height,
+            image_width=image_width,
+            grid_size=grid_size,
+        )
+        return nn.Sequential(
+            Rearrange(
+                "b c 1 (h p1) (w p2) -> b 1 h w (c p1 p2)", p1=pixel_p1, p2=pixel_p2
+            ),
+            nn.LayerNorm(channels * pixel_p1 * pixel_p2),
+            nn.Linear(channels * pixel_p1 * pixel_p2, dim),
+            nn.LayerNorm(dim),
+        )
+
+    @staticmethod
+    def _build_pixels_head(
+        *,
+        dim: int,
+        channels: int,
+        patch_height: int,
+        patch_width: int,
+    ) -> nn.Sequential:
+        return nn.Sequential(
+            nn.Linear(dim, channels * patch_height * patch_width),
+            Rearrange(
+                "b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)",
+                p1=patch_height,
+                p2=patch_width,
+            ),
+        )
+
+    def _initialize_encoder_projections(
+        self,
+        *,
+        dim: int,
+        channels: int,
+        image_height: int,
+        image_width: int,
+        patch_height: int,
+        patch_width: int,
+        use_dinov3_encoder: bool,
+        dinov3_model_name: str,
+        dinov3_pool_to_grid,
+    ) -> None:
+        assert (image_height % patch_height) == 0 and (image_width % patch_width) == 0
+
+        self.dino_feature_extractor = None
+        self.dino_encoder = None
+        self.encoder_projection = None
+
+        if use_dinov3_encoder:
+            logger.info("Using DINOv3 Encoder: %s", dinov3_model_name)
+            self.dino_feature_extractor = DINOFeatureExtractor(
+                model_name=dinov3_model_name,
+                target_size=self.image_size[0],
+            )
+            self.dino_encoder = DINOEncoder(
+                self.dino_feature_extractor,
+                dim,
+                pool_to_grid=dinov3_pool_to_grid,
+            )
+            self.encoder_projection = DINOWrapper(self.dino_encoder)
+            output_grid = self.dino_encoder.output_grid_size
+            self._effective_grid_size = (output_grid, output_grid)
+            logger.info("  - Effective grid size: %s", self._effective_grid_size)
+        else:
+            self._effective_grid_size = (
+                image_height // patch_height,
+                image_width // patch_width,
+            )
+
+        self.pixel_projection = self._build_pixel_projection(
             dim=dim,
-            dim_head=dim_head,
-            heads=heads,
-            attn_dropout=attn_dropout,
-            ff_dropout=ff_dropout,
-            peg=True,
-            peg_causal=True,
-            has_cross_attn=True,
-            dim_context=dim,
-        )
-
-        self.enc_spatial_transformer = Transformer(
-            depth=spatial_depth, **transformer_kwargs
-        )
-        self.enc_temporal_transformer = Transformer(
-            depth=temporal_depth, **transformer_kwargs
-        )
-
-        self.vq = NSVQ(
-            dim=dim,
-            num_embeddings=codebook_size,
-            embedding_dim=quant_dim,
-            discarding_threshold=vq_discarding_threshold,
-            code_seq_len=code_seq_len,
-            patch_size=patch_size,
-            image_size=image_size,
+            channels=channels,
+            image_height=image_height,
+            image_width=image_width,
             grid_size=self._effective_grid_size,
         )
+        self.decoder_context_projection = self.pixel_projection
 
-        # Compute pixel projection parameters (shared by pixel decoders)
-        eff_h, eff_w = self._effective_grid_size
-        eff_patch_h = image_height // eff_h
-        eff_patch_w = image_width // eff_w
+        if self.encoder_projection is None:
+            self.encoder_projection = self.pixel_projection
 
-        # --- DINO Decoder (Training) ---
-        # Predicts next frame's DINO embeddings
+    def _initialize_decoder_modules(
+        self,
+        *,
+        spatial_depth: int,
+        dim: int,
+        dim_head: int,
+        heads: int,
+        channels: int,
+        attn_dropout: float,
+        ff_dropout: float,
+        eff_patch_h: int,
+        eff_patch_w: int,
+    ) -> None:
+        self.dino_decoder = None
         if self.use_dino_decoder:
-            self.dino_decoder = Transformer(
-                depth=spatial_depth, **transformer_with_action_kwargs
-            )
-        else:
-            self.dino_decoder = None
-
-        # --- Pixel Decoder (Training) ---
-        # Predicts next frame's pixels with gradients flowing to encoder
-        if use_pixel_decoder:
-            self.pixel_decoder = Transformer(
-                depth=spatial_depth, **transformer_with_action_kwargs
-            )
-            self.pixel_to_pixels = nn.Sequential(
-                nn.Linear(dim, channels * eff_patch_h * eff_patch_w),
-                Rearrange(
-                    "b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)",
-                    p1=eff_patch_h,
-                    p2=eff_patch_w,
-                ),
-            )
-        else:
-            self.pixel_decoder = None
-            self.pixel_to_pixels = None
-
-        # --- Aux Decoder (Interpretability) ---
-        # Predicts next frame's pixels for visualization (gradients detached from encoder)
-        if use_aux_decoder:
-            self.aux_decoder = Transformer(
-                depth=spatial_depth, **transformer_with_action_kwargs
-            )
-            self.aux_to_pixels = nn.Sequential(
-                nn.Linear(dim, channels * eff_patch_h * eff_patch_w),
-                Rearrange(
-                    "b 1 h w (c p1 p2) -> b c 1 (h p1) (w p2)",
-                    p1=eff_patch_h,
-                    p2=eff_patch_w,
-                ),
-            )
-        else:
-            self.aux_decoder = None
-            self.aux_to_pixels = None
-
-        # --- Flow Decoder (Optional) ---
-        # Predicts optical flow from pixel context + latent action
-        if flow_config is not None:
-            from lam.models.flow import FlowDecoder, RAFTTeacher
-
-            logger.info(
-                f"Initializing flow supervision (model={flow_config.model}, "
-                f"depth={flow_config.decoder_depth}, weight={flow_config.loss_weight})"
-            )
-
-            self.flow_decoder = FlowDecoder(
+            self.dino_decoder = self._build_transformer(
+                depth=spatial_depth,
                 dim=dim,
-                depth=flow_config.decoder_depth,
-                heads=heads,
                 dim_head=dim_head,
-                image_size=self.image_size,
-                effective_grid_size=self._effective_grid_size,
+                heads=heads,
                 attn_dropout=attn_dropout,
                 ff_dropout=ff_dropout,
+                has_cross_attn=True,
             )
-            self.flow_teacher = RAFTTeacher(
-                flow_config.model,
-                chunk_size=flow_config.teacher_chunk_size,
-                num_flow_updates=flow_config.teacher_num_flow_updates,
-            )
-        else:
-            self.flow_decoder = None
-            self.flow_teacher = None
 
-        # Pre-compute action shape from code_seq_len (used in forward/inference)
+        self.pixel_decoder = None
+        self.pixel_to_pixels = None
+        if self.use_pixel_decoder:
+            self.pixel_decoder = self._build_transformer(
+                depth=spatial_depth,
+                dim=dim,
+                dim_head=dim_head,
+                heads=heads,
+                attn_dropout=attn_dropout,
+                ff_dropout=ff_dropout,
+                has_cross_attn=True,
+            )
+            self.pixel_to_pixels = self._build_pixels_head(
+                dim=dim,
+                channels=channels,
+                patch_height=eff_patch_h,
+                patch_width=eff_patch_w,
+            )
+
+        self.aux_decoder = None
+        self.aux_to_pixels = None
+        if self.use_aux_decoder:
+            self.aux_decoder = self._build_transformer(
+                depth=spatial_depth,
+                dim=dim,
+                dim_head=dim_head,
+                heads=heads,
+                attn_dropout=attn_dropout,
+                ff_dropout=ff_dropout,
+                has_cross_attn=True,
+            )
+            self.aux_to_pixels = self._build_pixels_head(
+                dim=dim,
+                channels=channels,
+                patch_height=eff_patch_h,
+                patch_width=eff_patch_w,
+            )
+
+    def _initialize_flow_components(
+        self,
+        *,
+        dim: int,
+        dim_head: int,
+        heads: int,
+        attn_dropout: float,
+        ff_dropout: float,
+    ) -> None:
+        self.flow_decoder = None
+        self.flow_teacher = None
+        if self.flow_config is None:
+            return
+
+        from lam.models.flow import FlowDecoder, RAFTTeacher
+
+        logger.info(
+            "Initializing flow supervision (model=%s, depth=%s, weight=%s)",
+            self.flow_config.model,
+            self.flow_config.decoder_depth,
+            self.flow_config.loss_weight,
+        )
+        self.flow_decoder = FlowDecoder(
+            dim=dim,
+            depth=self.flow_config.decoder_depth,
+            heads=heads,
+            dim_head=dim_head,
+            image_size=self.image_size,
+            effective_grid_size=self._effective_grid_size,
+            attn_dropout=attn_dropout,
+            ff_dropout=ff_dropout,
+        )
+        self.flow_teacher = RAFTTeacher(
+            self.flow_config.model,
+            chunk_size=self.flow_config.teacher_chunk_size,
+            num_flow_updates=self.flow_config.teacher_num_flow_updates,
+        )
+
+    @staticmethod
+    def _derive_action_shape(code_seq_len: int) -> tuple[int, int]:
         if math.sqrt(code_seq_len) % 1 == 0:
-            self._action_shape = (
-                int(math.sqrt(code_seq_len)),
-                int(math.sqrt(code_seq_len)),
-            )
-        elif code_seq_len == 2:
-            self._action_shape = (2, 1)
-        else:
-            raise ValueError(
-                f"code_seq_len must be a square number or 2, got {code_seq_len}"
-            )
+            action_size = int(math.sqrt(code_seq_len))
+            return action_size, action_size
+        if code_seq_len == 2:
+            return 2, 1
+        raise ValueError(
+            f"code_seq_len must be a square number or 2, got {code_seq_len}"
+        )
 
     def _get_enabled_training_decoders(self) -> List[str]:
         """
@@ -592,6 +826,174 @@ class LatentActionModel(nn.Module):
 
         return recon_video
 
+    def _codebook_ids_from_video(self, video: torch.Tensor) -> torch.Tensor:
+        encoded = self._encode_video_pair(video)
+        return self.vq.get_indices(encoded.first_tokens, encoded.last_tokens)
+
+    def _inference_vq_outputs(
+        self,
+        video: torch.Tensor,
+        *,
+        user_action_token_num=None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        encoded = self._encode_video_pair(video)
+        if user_action_token_num is not None:
+            tokens, indices = self.vq.inference(
+                encoded.first_tokens,
+                encoded.last_tokens,
+                user_action_token_num=user_action_token_num,
+            )
+        else:
+            tokens, indices = self.vq.inference(
+                encoded.first_tokens, encoded.last_tokens
+            )
+        return encoded.first_frame, tokens, indices
+
+    def _normalize_video_input(self, video: torch.Tensor) -> torch.Tensor:
+        if video.ndim not in {4, 5}:
+            raise ValueError(f"Expected 4D or 5D input, got {video.ndim}D")
+        if video.ndim == 4:
+            video = rearrange(video, "b c h w -> b c 1 h w")
+        if tuple(video.shape[3:]) != self.image_size:
+            raise ValueError(
+                f"Expected image size {self.image_size}, got {tuple(video.shape[3:])}"
+            )
+        return video
+
+    def _encode_video_pair(self, video: torch.Tensor) -> EncodedFrames:
+        first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
+        enc_first_frame_tokens, enc_rest_frames_tokens, first_tokens, last_tokens = (
+            self._encode_frames(first_frame, rest_frames)
+        )
+        return EncodedFrames(
+            batch_size=int(video.shape[0]),
+            device=video.device,
+            first_frame=first_frame,
+            rest_frames=rest_frames,
+            enc_first_frame_tokens=enc_first_frame_tokens,
+            enc_rest_frames_tokens=enc_rest_frames_tokens,
+            first_tokens=first_tokens,
+            last_tokens=last_tokens,
+        )
+
+    def _quantize_encoded_video(self, encoded: EncodedFrames) -> EncodedBatch:
+        tokens, perplexity, _, indices = self.vq(
+            encoded.first_tokens,
+            encoded.last_tokens,
+            codebook_training_only=False,
+        )
+        return EncodedBatch(
+            batch_size=encoded.batch_size,
+            device=encoded.device,
+            first_frame=encoded.first_frame,
+            rest_frames=encoded.rest_frames,
+            enc_first_frame_tokens=encoded.enc_first_frame_tokens,
+            enc_rest_frames_tokens=encoded.enc_rest_frames_tokens,
+            first_tokens=encoded.first_tokens,
+            last_tokens=encoded.last_tokens,
+            tokens=tokens,
+            indices=indices,
+            perplexity=perplexity,
+        )
+
+    def _prepare_action_tokens(self, encoded: EncodedBatch) -> torch.Tensor:
+        action_h, action_w = self.action_shape
+        action_tokens = rearrange(
+            encoded.tokens,
+            "b (t h w) d -> b t h w d",
+            h=action_h,
+            w=action_w,
+        )
+        if self.latent_ablation == "permute_batch" and encoded.batch_size > 1:
+            perm = torch.randperm(encoded.batch_size, device=action_tokens.device)
+            action_tokens = action_tokens[perm]
+        return action_tokens
+
+    def _update_codebook_stats(self, step: int) -> CodebookStats:
+        step_i = int(step)
+        current_vq_discarding_threshold = self._get_vq_discarding_threshold(step_i)
+        window_total = self.vq.codebooks_used.sum().detach()
+        unused_indices, used_indices, min_count_val = self.vq._get_replacement_indices(
+            discarding_threshold=current_vq_discarding_threshold
+        )
+
+        codebook_replaced = 0.0
+        replaced_count = float(unused_indices.shape[0])
+        used_count = float(used_indices.shape[0])
+        min_count = float(min_count_val)
+
+        if step_i != 0 and self._should_replace_codebook(step_i):
+            logger.debug("Replacing unused codebook entries at step %s", step_i)
+            codebook_replaced = 1.0
+            unused_c, used_c, total_c, min_c = self.vq.replace_unused_codebooks(
+                discarding_threshold=current_vq_discarding_threshold
+            )
+            replaced_count = float(unused_c)
+            used_count = float(used_c)
+            min_count = float(min_c)
+            window_total = window_total.new_tensor(float(total_c))
+            if int(os.environ.get("RANK", "0")) == 0:
+                print(
+                    f"[Codebook] step={step_i} replaced={int(replaced_count)} "
+                    f"used={int(used_count)} total={int(total_c)} min_count={min_count:.4f} "
+                    f"threshold={current_vq_discarding_threshold:.6f}"
+                )
+
+        return CodebookStats(
+            current_threshold=current_vq_discarding_threshold,
+            window_total=window_total,
+            codebook_replaced=codebook_replaced,
+            replaced_count=replaced_count,
+            used_count=used_count,
+            min_count=min_count,
+        )
+
+    def _initialize_metrics(
+        self,
+        *,
+        perplexity: torch.Tensor,
+        indices: torch.Tensor,
+        step: int,
+        codebook: CodebookStats,
+    ) -> dict[str, object]:
+        metrics: dict[str, object] = {
+            "code_usage_perplexity_in_batch": perplexity.detach(),
+            "replacement_applied_this_step": codebook.codebook_replaced,
+            "entries_below_usage_threshold_count_in_window": codebook.replaced_count,
+            "entries_at_or_above_usage_threshold_count_in_window": codebook.used_count,
+            "usage_count_threshold_in_window": codebook.min_count,
+            "discarding_threshold_fraction_of_expected_usage": codebook.current_threshold,
+            "code_assignments_in_window": codebook.window_total,
+        }
+        if (
+            self.metrics_num_unique_codes_every_n_steps > 0
+            and int(step) % int(self.metrics_num_unique_codes_every_n_steps) == 0
+        ):
+            metrics["unique_codes_in_batch"] = int(indices.unique().size(0))
+        return metrics
+
+    def _build_decoder_shared_inputs(
+        self,
+        *,
+        first_frame: torch.Tensor,
+        device: torch.device,
+    ) -> tuple[int, int, torch.Tensor, Optional[torch.Tensor]]:
+        h_dec, w_dec = self.patch_height_width
+        attn_bias = self.spatial_rel_pos_bias(h_dec, w_dec, device=device)
+
+        pixel_context = None
+        if (
+            self.pixel_decoder is not None
+            or self.aux_decoder is not None
+            or self.flow_decoder is not None
+        ):
+            if self.decoder_context_projection is None:
+                raise RuntimeError(
+                    "decoder_context_projection is required when a pixel-context decoder is enabled"
+                )
+            pixel_context = self.decoder_context_projection(first_frame)
+        return h_dec, w_dec, attn_bias, pixel_context
+
     def forward(
         self,
         video,
@@ -613,21 +1015,17 @@ class LatentActionModel(nn.Module):
             If return_only_codebook_ids: codebook indices [B, code_seq_len]
             Otherwise: (loss, metrics_dict)
         """
-        video = normalize_video_input(self, video)
+        video = self._normalize_video_input(video)
 
         if return_only_codebook_ids:
-            first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
-            _, _, first_tokens, last_tokens = self._encode_frames(
-                first_frame, rest_frames
-            )
-            return self.vq.get_indices(first_tokens, last_tokens)
+            return self._codebook_ids_from_video(video)
 
-        encoded = encode_and_quantize(self, video)
-        codebook = update_codebook_stats(self, int(step))
+        encoded_frames = self._encode_video_pair(video)
+        encoded = self._quantize_encoded_video(encoded_frames)
+        codebook = self._update_codebook_stats(int(step))
 
-        action_tokens = prepare_action_tokens(self, encoded)
-        metrics = initialize_metrics(
-            self,
+        action_tokens = self._prepare_action_tokens(encoded)
+        metrics = self._initialize_metrics(
             perplexity=encoded.perplexity,
             indices=encoded.indices,
             step=int(step),
@@ -635,8 +1033,7 @@ class LatentActionModel(nn.Module):
         )
         total_loss = encoded.rest_frames.new_zeros((), requires_grad=True)
 
-        h_dec, w_dec, attn_bias, pixel_context = build_decoder_shared_inputs(
-            self,
+        h_dec, w_dec, attn_bias, pixel_context = self._build_decoder_shared_inputs(
             first_frame=encoded.first_frame,
             device=encoded.device,
         )
@@ -718,19 +1115,11 @@ class LatentActionModel(nn.Module):
             If return_only_codebook_ids: codebook indices [B, code_seq_len]
             Otherwise: reconstructed frames [B, C, H, W], or None if aux_decoder disabled
         """
-        video = normalize_video_input(self, video)
-
-        first_frame, rest_frames = video[:, :, :1], video[:, :, 1:]
-
-        # Encode both frames (enc tokens not needed for inference)
-        _, _, first_tokens, last_tokens = self._encode_frames(first_frame, rest_frames)
-
-        if user_action_token_num is not None:
-            tokens, indices = self.vq.inference(
-                first_tokens, last_tokens, user_action_token_num=user_action_token_num
-            )
-        else:
-            tokens, indices = self.vq.inference(first_tokens, last_tokens)
+        video = self._normalize_video_input(video)
+        first_frame, tokens, indices = self._inference_vq_outputs(
+            video,
+            user_action_token_num=user_action_token_num,
+        )
 
         if return_only_codebook_ids:
             return indices
