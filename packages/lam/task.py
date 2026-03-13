@@ -1,7 +1,7 @@
 """
 PyTorch Lightning task wrapper for LAM training.
 
-Wraps LatentActionQuantization in a LightningModule with:
+Wraps LatentActionModel in a LightningModule with:
 - LAPA-style optimizer (separate weight decay groups)
 - Loss logging and codebook usage tracking
 - Hydra configuration integration
@@ -23,7 +23,7 @@ from common.batch_utils import (
     temporal_frames_to_bcthw,
     uint8_image_streams_to_float32,
 )
-from lam.models.latent_action_quantization import LatentActionQuantization, DinoConfig
+from lam.models.latent_action_model import LatentActionModel, DinoConfig
 from lam.models.flow import FlowConfig
 from common.lerobot_v3_types import Stage1Batch
 
@@ -63,7 +63,7 @@ class LAMTask(pl.LightningModule):
     """
     PyTorch Lightning task for LAM training.
 
-    Wraps LatentActionQuantization model with training logic matching LAPA:
+    Wraps LatentActionModel with training logic matching LAPA:
     - AdamW optimizer with separated weight decay groups
     - Cosine annealing LR scheduler with warmup
     - Reconstruction loss + codebook usage tracking
@@ -127,7 +127,7 @@ class LAMTask(pl.LightningModule):
         metrics_cfg = training_config.metrics
 
         # Initialize LAM model
-        self.model = LatentActionQuantization(
+        self.model = LatentActionModel(
             dim=model_config.dim,
             quant_dim=model_config.quant_dim,
             codebook_size=model_config.codebook_size,

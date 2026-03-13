@@ -74,7 +74,7 @@ class DinoConfig:
         return self.loss_weight * warmup_factor
 
 
-class LatentActionQuantization(nn.Module):
+class LatentActionModel(nn.Module):
     """
     Latent Action Quantization (LAM) model.
 

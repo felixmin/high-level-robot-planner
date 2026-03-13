@@ -1,12 +1,12 @@
 """
-Test LatentActionQuantization Model
+Test LatentActionModel
 
 Tests the complete LAM model that combines transformers + NSVQ.
 """
 
 import pytest
 import torch
-from lam.models.latent_action_quantization import DinoConfig, LatentActionQuantization
+from lam.models.latent_action_model import DinoConfig, LatentActionModel
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ def lam_model_config(device):
 def lam_model(lam_model_config):
     """Create LAM model instance."""
     device = lam_model_config.pop("device")
-    model = LatentActionQuantization(**lam_model_config).to(device)
+    model = LatentActionModel(**lam_model_config).to(device)
     return model
 
 
@@ -208,7 +208,7 @@ class TestLAMShapes:
     def test_different_batch_sizes(self, lam_model_config, device):
         """Test LAM with different batch sizes."""
         lam_model_config.pop("device")
-        model = LatentActionQuantization(**lam_model_config).to(device)
+        model = LatentActionModel(**lam_model_config).to(device)
 
         for batch_size in [1, 2, 4]:
             video = torch.randn(batch_size, 3, 2, 256, 256, device=device)
@@ -272,7 +272,7 @@ class TestLAMCodebookManagement:
             (0.1, 100),
             (0.01, 1000),
         ]
-        model = LatentActionQuantization(**lam_model_config).to(device)
+        model = LatentActionModel(**lam_model_config).to(device)
 
         assert model._get_vq_discarding_threshold(0) == pytest.approx(0.1)
         assert model._get_vq_discarding_threshold(99) == pytest.approx(0.1)
@@ -290,13 +290,13 @@ class TestLAMCodebookManagement:
         ]
 
         with pytest.raises(ValueError, match="strictly increasing"):
-            LatentActionQuantization(**lam_model_config).to(device)
+            LatentActionModel(**lam_model_config).to(device)
 
     def test_dino_warmup_weight(self, lam_model_config, device):
         """Test DINO warmup weight follows configured schedule."""
         lam_model_config.pop("device")
         lam_model_config["dino_config"] = DinoConfig(loss_weight=2.0, warmup_steps=100)
-        model = LatentActionQuantization(**lam_model_config).to(device)
+        model = LatentActionModel(**lam_model_config).to(device)
 
         video = torch.randn(2, 3, 2, 256, 256, device=device)
         _, metrics_step0 = model(video, step=0)
@@ -323,14 +323,14 @@ class TestLAMStateDict:
     def test_load_from_checkpoint(self, lam_model_config, device, tmp_path):
         """Test model can load from checkpoint file."""
         lam_model_config.pop("device")
-        model1 = LatentActionQuantization(**lam_model_config).to(device)
+        model1 = LatentActionModel(**lam_model_config).to(device)
 
         # Save checkpoint
         checkpoint_path = tmp_path / "test_checkpoint.pt"
         torch.save(model1.state_dict(), checkpoint_path)
 
         # Create new model and load
-        model2 = LatentActionQuantization(**lam_model_config).to(device)
+        model2 = LatentActionModel(**lam_model_config).to(device)
         model2.load(checkpoint_path)
 
         # Check parameters match

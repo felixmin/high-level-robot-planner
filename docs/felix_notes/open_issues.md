@@ -43,7 +43,7 @@ Option 2 is cleaner since bucket infrastructure exists. The binding would specif
 
 ### 3. Magic numbers in codebook replacement schedule
 
-**Location**: `packages/laq/models/latent_action_quantization.py` (line 344)
+**Location**: `packages/lam/models/latent_action_model.py` (line 344)
 
 **Analysis**: Hardcoded schedule `(step % 10 < 100) or (step % 100 < 1000) or (step % 500 < 5000)` is unclear.
 

@@ -16,7 +16,7 @@ __all__ = [
     "Transformer",
     "ContinuousPositionBias",
     "PEG",
-    "LatentActionQuantization",
+    "LatentActionModel",
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
@@ -25,9 +25,9 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "Transformer": ("lam.models.attention", "Transformer"),
     "ContinuousPositionBias": ("lam.models.attention", "ContinuousPositionBias"),
     "PEG": ("lam.models.attention", "PEG"),
-    "LatentActionQuantization": (
-        "lam.models.latent_action_quantization",
-        "LatentActionQuantization",
+    "LatentActionModel": (
+        "lam.models.latent_action_model",
+        "LatentActionModel",
     ),
 }
 

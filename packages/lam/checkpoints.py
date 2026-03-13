@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 
 from lam.inference import LAMEncoderVQInference
 from lam.models.flow import FlowConfig
-from lam.models.latent_action_quantization import DinoConfig, LatentActionQuantization
+from lam.models.latent_action_model import DinoConfig, LatentActionModel
 
 if TYPE_CHECKING:
     from lam.task import LAMTask
@@ -57,7 +57,7 @@ def _extract_model_state_dict(checkpoint: dict[str, Any]) -> dict[str, Any]:
 
 def _build_lam_model_from_configs(
     *, model_config: Any, training_config: Any
-) -> LatentActionQuantization:
+) -> LatentActionModel:
     flow_cfg = model_config.flow
     flow_enabled = bool(flow_cfg.enabled)
     flow_config = None
@@ -96,7 +96,7 @@ def _build_lam_model_from_configs(
 
     metrics_cfg = training_config.metrics
 
-    return LatentActionQuantization(
+    return LatentActionModel(
         dim=model_config.dim,
         quant_dim=model_config.quant_dim,
         codebook_size=model_config.codebook_size,

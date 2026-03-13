@@ -18,7 +18,7 @@ __all__ = [
     "EMACallback",
     "TrainPreviewBufferCallback",
     "ValidationStrategyCallback",
-    "LatentActionQuantization",
+    "LatentActionModel",
     "NSVQ",
     "Attention",
     "Transformer",
@@ -47,9 +47,9 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "EMACallback": ("lam.callbacks", "EMACallback"),
     "TrainPreviewBufferCallback": ("lam.callbacks", "TrainPreviewBufferCallback"),
     "ValidationStrategyCallback": ("lam.callbacks", "ValidationStrategyCallback"),
-    "LatentActionQuantization": (
-        "lam.models.latent_action_quantization",
-        "LatentActionQuantization",
+    "LatentActionModel": (
+        "lam.models.latent_action_model",
+        "LatentActionModel",
     ),
     "NSVQ": ("lam.models.nsvq", "NSVQ"),
     "Attention": ("lam.models.attention", "Attention"),

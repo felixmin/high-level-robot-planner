@@ -3,7 +3,7 @@
 
 name: lam_vit
 
-# Model architecture (matches LAPA's LatentActionQuantization)
+# Model architecture (matches LAPA's LatentActionModel)
 dim: 1024                # Transformer embedding dimension
 quant_dim: 32           # Quantization dimension
 codebook_size: 2048        # Number of codebook entries

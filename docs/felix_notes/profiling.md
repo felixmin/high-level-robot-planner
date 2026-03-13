@@ -46,7 +46,7 @@ python scripts/2_train_stage1_lam.py experiment=laq_oxe_local \
 ```
 Action                              | Total Time (s)
 -----------------------------------------------------------------
-[LightningModule]LatentActionQuantization.forward | 2.456
+[LightningModule]LatentActionModel.forward | 2.456
 [Callback]on_validation_epoch_end   | 1.234
 [Optimizer]AdamW.step                | 0.543
 ```

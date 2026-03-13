@@ -180,12 +180,12 @@ class TestLAMWithDINO:
     @pytest.fixture
     def lam_with_dino(self, device, dino_model_name):
         """Create LAM model with DINO encoder."""
-        from lam.models.latent_action_quantization import (
-            LatentActionQuantization,
+        from lam.models.latent_action_model import (
+            LatentActionModel,
             DinoConfig,
         )
 
-        model = LatentActionQuantization(
+        model = LatentActionModel(
             dim=512,
             quant_dim=32,
             codebook_size=8,

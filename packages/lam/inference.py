@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 
 from lam.models.forward_core import normalize_video_input
-from lam.models.latent_action_quantization import LatentActionQuantization
+from lam.models.latent_action_model import LatentActionModel
 
 # Decoder/teacher attributes not needed for encoder+VQ inference.
 # Setting these to None on the wrapped model frees their VRAM.
@@ -25,7 +25,7 @@ class LAMEncoderVQInference(torch.nn.Module):
     """
     Frozen encoder+VQ wrapper for Stage-2 code generation.
 
-    Wraps a LatentActionQuantization model and prunes decoder/teacher
+    Wraps a LatentActionModel and prunes decoder/teacher
     submodules on construction to reclaim VRAM.
     """
 
@@ -33,7 +33,7 @@ class LAMEncoderVQInference(torch.nn.Module):
     code_seq_len: int
     codebook_dim: int
 
-    def __init__(self, model: LatentActionQuantization, prune_decoders: bool = True):
+    def __init__(self, model: LatentActionModel, prune_decoders: bool = True):
         super().__init__()
 
         self.codebook_size = model.vq.num_embeddings
