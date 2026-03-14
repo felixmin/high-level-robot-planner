@@ -394,6 +394,7 @@ def main(cfg: DictConfig):
     check_val_every_n_epoch = val_config.check_val_every_n_epoch
 
     log_every_n_steps = int(training_config.log_every_n_steps)
+    num_sanity_val_steps = OmegaConf.select(training_config, "num_sanity_val_steps")
 
     model_summary_cfg = training_config.model_summary
 
@@ -421,6 +422,9 @@ def main(cfg: DictConfig):
         val_check_interval=val_check_interval,  # Configurable validation frequency
         limit_val_batches=limit_val_batches,  # Limit validation batches
         check_val_every_n_epoch=check_val_every_n_epoch,
+        num_sanity_val_steps=(
+            int(num_sanity_val_steps) if num_sanity_val_steps is not None else None
+        ),
         enable_progress_bar=bool(progress_bar_cfg.enabled),
         enable_model_summary=bool(model_summary_cfg.enabled),
     )
@@ -430,6 +434,7 @@ def main(cfg: DictConfig):
     logger.info(f"  - Val check interval: {val_check_interval}")
     logger.info(f"  - Limit val batches: {limit_val_batches}")
     logger.info(f"  - Check val every n epoch: {check_val_every_n_epoch}")
+    logger.info(f"  - Num sanity val steps: {num_sanity_val_steps}")
     logger.info(f"  - Precision: {cfg.precision}")
     logger.info("  - Accelerator: auto")
     logger.info("  - Devices: auto")
