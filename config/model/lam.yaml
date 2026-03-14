@@ -35,10 +35,10 @@ latent_ablation: none
 
 # Training decoder flags (at least one must be enabled, or flow must be configured)
 dino:
-  enabled: true
+  enabled: false
   loss_weight: 1.0
   warmup_steps: 0
-use_pixel_decoder: false # Predict next frame's pixels with gradients to encoder
+use_pixel_decoder: true # Predict next frame's pixels with gradients to encoder
 
 flow:
   enabled: true
