@@ -211,8 +211,12 @@ export NCCL_DEBUG=WARN
 
     gpu_info_block = ""
     if gpus > 0:
-        gpu_info_block = """# Show GPU info
-nvidia-smi
+        gpu_info_block = """# Show GPU info when available without making it a hard requirement.
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi || true
+else
+  echo "nvidia-smi not found inside container; continuing without GPU summary"
+fi
 """
     else:
         gpu_info_block = 'echo "CPU-only job (no GPUs requested)"\n'

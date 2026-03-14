@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/cuda:12.4.0-devel-ubuntu22.04
+FROM nvcr.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04
 
 ARG PYTHON_VERSION=3.10
 ARG VENV_PATH=/opt/hlrp-venv
@@ -22,8 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev \
     && useradd --create-home --shell /bin/bash user_hlrp \
     && usermod -aG sudo user_hlrp \
-    && mkdir -p /workspace/high-level-robot-planner ${VENV_PATH} \
-    && chown -R user_hlrp:user_hlrp /workspace ${VENV_PATH} \
+    && mkdir -p /workspace/high-level-robot-planner ${VENV_PATH} /opt/pip-tmp \
+    && chown -R user_hlrp:user_hlrp /workspace ${VENV_PATH} /opt/pip-tmp \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace/high-level-robot-planner
@@ -34,7 +34,9 @@ ENV HOME=/home/user_hlrp \
     HF_HOME=/home/user_hlrp/.cache/huggingface \
     HF_LEROBOT_HOME=/home/user_hlrp/.cache/huggingface/lerobot \
     TORCH_HOME=/home/user_hlrp/.cache/torch \
-    TRITON_CACHE_DIR=/home/user_hlrp/.cache/triton
+    TRITON_CACHE_DIR=/home/user_hlrp/.cache/triton \
+    TMPDIR=/opt/pip-tmp \
+    PIP_NO_CACHE_DIR=1
 
 COPY --chown=user_hlrp:user_hlrp containers/requirements.unified.txt /opt/hlrp-unified.txt
 COPY --chown=user_hlrp:user_hlrp config/ config/
