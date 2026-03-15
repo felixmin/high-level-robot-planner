@@ -18,6 +18,8 @@ lerobot:
   install_editables: [lerobot, lerobot_policy_hlrp]
   output_dir: ${logging.runs_dir}/lerobot
   job_name: ${experiment.name}
+  resume: false
+  resume_from: null
   steps: 100000
   batch_size: ${stage3_profile.batch_size}
   grad_accum_steps: 1

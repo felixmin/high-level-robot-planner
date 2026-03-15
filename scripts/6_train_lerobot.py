@@ -183,6 +183,35 @@ def _copy_group_config(
     return result
 
 
+def _resolve_resume_train_config_path(cfg: DictConfig) -> Path | None:
+    raw_path = OmegaConf.select(cfg, "lerobot.resume_from")
+    if raw_path is None:
+        return None
+
+    resume_path = Path(str(raw_path))
+    if not resume_path.is_absolute():
+        resume_path = workspace_root / resume_path
+    resume_path = resume_path.resolve()
+
+    candidates: list[Path]
+    if resume_path.is_dir():
+        candidates = [
+            resume_path / "train_config.json",
+            resume_path / "pretrained_model" / "train_config.json",
+        ]
+    else:
+        candidates = [resume_path]
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+
+    raise FileNotFoundError(
+        "Stage-3 resume path must point to a checkpoint/pretrained_model directory or a "
+        f"train_config.json file, got: {resume_path}"
+    )
+
+
 def _write_lerobot_train_config(
     cfg: DictConfig,
     *,
@@ -198,6 +227,8 @@ def _write_lerobot_train_config(
     dataset_repo_id = OmegaConf.select(cfg, "lerobot.dataset.repo_id")
     output_dir = OmegaConf.select(cfg, "lerobot.output_dir")
     job_name = OmegaConf.select(cfg, "lerobot.job_name")
+    resume = OmegaConf.select(cfg, "lerobot.resume")
+    resume_config_path = _resolve_resume_train_config_path(cfg)
     steps = OmegaConf.select(cfg, "lerobot.steps")
     batch_size = OmegaConf.select(cfg, "lerobot.batch_size")
     grad_accum_steps = OmegaConf.select(cfg, "lerobot.grad_accum_steps")
@@ -224,6 +255,11 @@ def _write_lerobot_train_config(
     missing = [k for k, v in required.items() if v is None]
     if missing:
         raise ValueError(f"Missing required lerobot config keys: {missing}")
+    if bool(resume):
+        if resume_config_path is None:
+            raise ValueError("lerobot.resume=true requires lerobot.resume_from to be set")
+    elif resume_config_path is not None:
+        raise ValueError("lerobot.resume_from requires lerobot.resume=true")
 
     train_cfg: dict[str, object] = {
         "policy": {
@@ -236,6 +272,7 @@ def _write_lerobot_train_config(
         },
         "output_dir": str(output_dir),
         "job_name": str(job_name),
+        "resume": bool(resume),
         "steps": int(steps),
         "batch_size": int(batch_size),
         "num_workers": int(num_workers),
@@ -251,6 +288,8 @@ def _write_lerobot_train_config(
         train_cfg["grad_accum_steps"] = int(grad_accum_steps)
     if distributed_timeout_s is not None:
         train_cfg["distributed_timeout_s"] = float(distributed_timeout_s)
+    if resume_config_path is not None:
+        train_cfg["resume_config_path"] = str(resume_config_path)
 
     if str(policy_type) == "hlrp_smolvla_shared":
         if init_mode is None:
