@@ -1,3 +1,5 @@
+# Raw CUDA base so one image can serve stage 1/2 and stage 3 without inheriting
+# separate PyTorch env assumptions from the old split images.
 FROM nvcr.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04
 
 ARG PYTHON_VERSION=3.10
@@ -34,6 +36,9 @@ WORKDIR /workspace/high-level-robot-planner
 
 USER user_hlrp
 
+# These are image defaults for local/container-only use. Cluster jobs override
+# HOME and the heavy cache locations in scripts/submit_job.py after mounting the
+# real host home, runs, and DSS cache paths into the container.
 ENV HOME=/home/user_hlrp \
     HF_HOME=/home/user_hlrp/.cache/huggingface \
     HF_LEROBOT_HOME=/home/user_hlrp/.cache/huggingface/lerobot \
@@ -42,6 +47,8 @@ ENV HOME=/home/user_hlrp \
     TMPDIR=/opt/pip-tmp \
     PIP_NO_CACHE_DIR=1
 
+# Copy the shared HLRP sources plus the two local install targets that become part
+# of the single runtime: lerobot itself and the HLRP LeRobot policy plugin.
 COPY --chown=user_hlrp:user_hlrp containers/requirements.unified.txt /opt/hlrp-unified.txt
 COPY --chown=user_hlrp:user_hlrp config/ config/
 COPY --chown=user_hlrp:user_hlrp scripts/ scripts/
@@ -55,14 +62,19 @@ RUN python${PYTHON_VERSION} -m venv ${VENV_PATH} \
     && ${VENV_PATH}/bin/python -m ensurepip --upgrade \
     && ${VENV_PATH}/bin/python -m pip install --upgrade "pip<26" "setuptools>=71,<81" wheel \
     && ${VENV_PATH}/bin/python -m pip install --no-build-isolation egl_probe PyOpenGL-accelerate \
+    # Install the torch stack explicitly so the wheel channel can vary by target
+    # GPU generation while the rest of the dependency set stays identical.
     && ${VENV_PATH}/bin/python -m pip install --no-build-isolation \
         --index-url https://download.pytorch.org/whl/${PYTORCH_WHL_CHANNEL} \
         torch==${TORCH_VERSION} \
         torchvision==${TORCHVISION_VERSION} \
         torchaudio==${TORCHAUDIO_VERSION} \
+    # The unified requirements file layers local lerobot + HLRP policy installs
+    # together with the extra packages still needed by stage 1/2.
     && ${VENV_PATH}/bin/python -m pip install --no-build-isolation -r /opt/hlrp-unified.txt \
     && (${VENV_PATH}/bin/python -m pip uninstall -y torchao || true) \
     && ${VENV_PATH}/bin/python -m pip check \
+    # Build-time smoke test to catch dependency drift before the image reaches the cluster.
     && ${VENV_PATH}/bin/python -c "import importlib, torch; import common, stage2, lam, lerobot, lerobot_policy_hlrp; importlib.import_module('lerobot.scripts.lerobot_train'); print(f'unified image python env ok ({torch.__version__}, cuda={torch.version.cuda})')"
 
 CMD ["/bin/bash"]
