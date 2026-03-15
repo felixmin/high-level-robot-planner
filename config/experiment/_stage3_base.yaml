@@ -21,6 +21,7 @@ lerobot:
   steps: 100000
   batch_size: ${stage3_profile.batch_size}
   grad_accum_steps: 1
+  distributed_timeout_s: null
   num_workers: 8
   log_freq: 200
   save_freq: 20000
@@ -55,5 +56,5 @@ lerobot:
 
   eval:
     freq: 20000
-    batch_size: 2
+    batch_size: 5
     n_episodes: 10

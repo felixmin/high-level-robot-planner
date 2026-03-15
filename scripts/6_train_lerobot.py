@@ -201,6 +201,7 @@ def _write_lerobot_train_config(
     steps = OmegaConf.select(cfg, "lerobot.steps")
     batch_size = OmegaConf.select(cfg, "lerobot.batch_size")
     grad_accum_steps = OmegaConf.select(cfg, "lerobot.grad_accum_steps")
+    distributed_timeout_s = OmegaConf.select(cfg, "lerobot.distributed_timeout_s")
     num_workers = OmegaConf.select(cfg, "lerobot.num_workers")
     eval_freq = OmegaConf.select(cfg, "lerobot.eval.freq")
     log_freq = OmegaConf.select(cfg, "lerobot.log_freq")
@@ -248,6 +249,8 @@ def _write_lerobot_train_config(
 
     if grad_accum_steps is not None:
         train_cfg["grad_accum_steps"] = int(grad_accum_steps)
+    if distributed_timeout_s is not None:
+        train_cfg["distributed_timeout_s"] = float(distributed_timeout_s)
 
     if str(policy_type) == "hlrp_smolvla_shared":
         if init_mode is None:

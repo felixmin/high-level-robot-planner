@@ -1,12 +1,27 @@
 # Latent Action Model Versions
 
-## Randomly initialized checkpoint without training for comparisons
+## Base checkpoint
+Octo24 + Libero dataset
+Pixel encoder
+Pixel + flow decoder
+TODO
 
+## Randomly initialized checkpoint without training for comparisons
+2026-03-15_18-57-14_stage1_cluster_test2_tiny_lam_ckpt_for_stage3_multitask
 
 ## Libero overfitting run
+Only Libero dataset
 Pixel encoder
 Pixel + flow decoder
 2026-03-14_19-27-26_stage1_local
+
+## Custom encoder / decoder checkpoint (This was the default until 2026-03-15)
+Octo24 + Libero dataset
+?
+?
+
+
+
 
 # LIBERO Experiments
 
