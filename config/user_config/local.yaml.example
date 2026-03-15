@@ -32,9 +32,10 @@ paths:
 artifacts:
   lam_checkpoint_path: null  # e.g. /mnt/data/workspace/runs_root/runs/.../checkpoints/last.ckpt
 
-# Optional: override cluster container image per user.
+# Optional: set your own imported unified cluster image here.
 # Most experiments include this file as optional `/user_config: local`,
-# so this value cleanly overrides `cluster.container.image`.
+# so this value cleanly overrides the shared `cluster.container.image: null`.
+# See containers/README.md for the build/push/import workflow.
 cluster:
   container:
-    image: null            # e.g. /dss/.../enroot/hlrp_stage12.sqsh or hlrp_stage3_lerobot.sqsh
+    image: null            # e.g. /dss/.../enroot/hlrp_unified_cu128_imported_2026-03-14_2248.sqsh

@@ -20,6 +20,7 @@ slurm:
   account: null
 
 container:
-  # Default to a per-user container path on DSSHOME. Override via
-  # `cluster.container.image=/path/to/container.sqsh` if needed.
-  image: ${oc.env:HOME}/workspace/containers/hlrp_stage12.sqsh
+  # Set this in config/user_config/local.yaml to your own imported unified image.
+  # See containers/README.md for the build/push/import workflow.
+  image: null
+  python_bin: /opt/hlrp-venv/bin/python

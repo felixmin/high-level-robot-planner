@@ -9,11 +9,6 @@ defaults:
 submit:
   script: 6_train_lerobot
 
-cluster:
-  container:
-    image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/enroot/hlrp_stage3_lerobot.sqsh
-    python_bin: /opt/lerobot-venv/bin/python
-
 logging:
   use_wandb: true
   tags: ${stage3_profile.logging_tags}

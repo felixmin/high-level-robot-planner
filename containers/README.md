@@ -1,48 +1,56 @@
 # HLRP Containers
 
-This repo maintains two container build targets:
-
-- `containers/Dockerfile.stage12`
-  Builds the stage-1/2 image for LAQ and foundation training.
-  Docker tag: `felixmin/hlrp:stage12`
-  Cluster image path: `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/enroot/hlrp_stage12.sqsh`
-- `containers/Dockerfile.stage3`
-  Builds the stage-3 LeRobot image.
-  Docker tag: `felixmin/hlrp:stage3`
-  Cluster image path: `/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/enroot/hlrp_stage3_lerobot.sqsh`
-
-The preferred workflow is:
-
-1. Build on the workstation.
-2. Push the matching Docker tag to Docker Hub.
-3. Import the tag to the cluster with Enroot.
-4. Swap the imported `.sqsh` into the matching target path.
-
-For stage 3, the image contains the baseline LeRobot runtime from the published package. During active development, jobs can overlay mounted source from this repo with:
-
-```bash
-pip install --no-deps --no-build-isolation -e /dss/.../high-level-robot-planner/lerobot
-pip install --no-deps --no-build-isolation -e /dss/.../high-level-robot-planner/lerobot_policy_hlrp
-```
-
-There is also an experimental unified raw-CUDA build target:
+The unified container is now the intended runtime for all stages:
 
 - `containers/Dockerfile.unified`
-  Starts from `nvcr.io/nvidia/cuda`, creates a single Python 3.10 venv, and installs the complete all-stage runtime from `containers/requirements.unified.txt`. Stage-specific additions are grouped by comments inside that one file instead of being split across multiple requirement manifests.
-  The torch stack is installed explicitly in the Dockerfile so the same dependency set can target different GPU generations:
-  - cluster default: `PYTORCH_WHL_CHANNEL=cu126`
-  - local RTX 5090 variant: `PYTORCH_WHL_CHANNEL=cu128`
+  Builds one raw-CUDA image with a single Python 3.10 environment at
+  `/opt/hlrp-venv` for stage 1, stage 2, and stage 3.
+- `containers/requirements.unified.txt`
+  Holds the shared Python dependency set, including local installs of
+  `lerobot` and `lerobot_policy_hlrp`.
 
-This image is intended as the candidate path for consolidating stage-1/2 and stage-3 runtimes once it has been validated with smoke runs across all stages.
+The torch stack is installed explicitly in the Dockerfile so the wheel channel
+can stay parameterized by build args. The currently validated unified image uses
+`PYTORCH_WHL_CHANNEL=cu128` on both cluster H100 and local RTX 5090 targets.
 
-Example build commands:
+## Cluster Setup
+
+Cluster presets no longer hardcode a user-specific container path. Set your own
+imported unified image in `config/user_config/local.yaml`:
+
+```yaml
+cluster:
+  container:
+    image: /dss/.../enroot/hlrp_unified_cu128_imported_2026-03-14_2248.sqsh
+```
+
+The shared cluster configs already set:
+
+```yaml
+cluster:
+  container:
+    python_bin: /opt/hlrp-venv/bin/python
+```
+
+so stage 1, stage 2, and stage 3 all use the same interpreter inside the
+unified image.
+
+## Refresh Workflow
+
+1. Build on the workstation.
+2. Push the image tag to Docker Hub.
+3. Import that tag to the cluster with Enroot.
+4. Point your `config/user_config/local.yaml` at the imported `.sqsh`.
+
+Example build command:
 
 ```bash
-# Cluster H100 image
-docker build -f containers/Dockerfile.unified -t felixmin/hlrp:unified-cuda-cu126 .
-
-# Local RTX 5090 image
 docker build -f containers/Dockerfile.unified \
-  --build-arg PYTORCH_WHL_CHANNEL=cu128 \
   -t felixmin/hlrp:unified-cuda-cu128 .
+```
+
+Example Enroot import target:
+
+```bash
+/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/<user>/enroot/hlrp_unified_cu128_imported_<date>.sqsh
 ```
