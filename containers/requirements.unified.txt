@@ -1,9 +1,6 @@
---extra-index-url https://download.pytorch.org/whl/cu124
-
-# CUDA-matched PyTorch stack for the raw CUDA base image.
-torch==2.7.1
-torchvision==0.22.1
-torchaudio==2.7.1
+# The torch stack is installed explicitly in the Dockerfile so the wheel
+# channel stays parameterized by build args. The currently validated unified
+# image uses cu128 on both cluster H100 and local RTX 5090 targets.
 
 # Bundled local packages shared across all stages.
 /opt/lerobot-src[libero,smolvla]

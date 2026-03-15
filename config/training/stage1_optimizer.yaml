@@ -6,6 +6,7 @@ max_steps: 200000  # If set, overrides epochs
 num_sanity_val_steps: null
 resume_from_checkpoint: null
 load_weights_from: null
+strategy: auto
 use_ema: false
 ema_decay: 0.999
 ema_update_every: 1

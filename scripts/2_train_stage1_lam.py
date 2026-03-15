@@ -395,6 +395,7 @@ def main(cfg: DictConfig):
 
     log_every_n_steps = int(training_config.log_every_n_steps)
     num_sanity_val_steps = OmegaConf.select(training_config, "num_sanity_val_steps")
+    trainer_strategy = OmegaConf.select(training_config, "strategy", default="auto")
 
     model_summary_cfg = training_config.model_summary
 
@@ -409,7 +410,7 @@ def main(cfg: DictConfig):
         max_steps=int(training_config.max_steps),
         accelerator="auto",
         devices="auto",
-        strategy="auto",
+        strategy=trainer_strategy,
         plugins=trainer_plugins,
         precision=cfg.precision,
         gradient_clip_val=training_config.gradient.clip_val,
@@ -438,6 +439,7 @@ def main(cfg: DictConfig):
     logger.info(f"  - Precision: {cfg.precision}")
     logger.info("  - Accelerator: auto")
     logger.info("  - Devices: auto")
+    logger.info(f"  - Strategy: {trainer_strategy}")
     logger.info(f"  - Profiler: {profiler_type if profiler else 'disabled'}")
 
     # Train

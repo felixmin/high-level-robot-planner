@@ -2,6 +2,10 @@ FROM nvcr.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04
 
 ARG PYTHON_VERSION=3.10
 ARG VENV_PATH=/opt/hlrp-venv
+ARG TORCH_VERSION=2.7.1
+ARG TORCHVISION_VERSION=0.22.1
+ARG TORCHAUDIO_VERSION=2.7.1
+ARG PYTORCH_WHL_CHANNEL=cu128
 
 ENV DEBIAN_FRONTEND=noninteractive \
     MUJOCO_GL=osmesa \
@@ -51,9 +55,14 @@ RUN python${PYTHON_VERSION} -m venv ${VENV_PATH} \
     && ${VENV_PATH}/bin/python -m ensurepip --upgrade \
     && ${VENV_PATH}/bin/python -m pip install --upgrade "pip<26" "setuptools>=71,<81" wheel \
     && ${VENV_PATH}/bin/python -m pip install --no-build-isolation egl_probe PyOpenGL-accelerate \
+    && ${VENV_PATH}/bin/python -m pip install --no-build-isolation \
+        --index-url https://download.pytorch.org/whl/${PYTORCH_WHL_CHANNEL} \
+        torch==${TORCH_VERSION} \
+        torchvision==${TORCHVISION_VERSION} \
+        torchaudio==${TORCHAUDIO_VERSION} \
     && ${VENV_PATH}/bin/python -m pip install --no-build-isolation -r /opt/hlrp-unified.txt \
     && (${VENV_PATH}/bin/python -m pip uninstall -y torchao || true) \
     && ${VENV_PATH}/bin/python -m pip check \
-    && ${VENV_PATH}/bin/python -c "import importlib; import common, stage2, lam, lerobot, lerobot_policy_hlrp; importlib.import_module('lerobot.scripts.lerobot_train'); print('unified image python env ok')"
+    && ${VENV_PATH}/bin/python -c "import importlib, torch; import common, stage2, lam, lerobot, lerobot_policy_hlrp; importlib.import_module('lerobot.scripts.lerobot_train'); print(f'unified image python env ok ({torch.__version__}, cuda={torch.version.cuda})')"
 
 CMD ["/bin/bash"]

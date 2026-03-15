@@ -29,5 +29,20 @@ There is also an experimental unified raw-CUDA build target:
 
 - `containers/Dockerfile.unified`
   Starts from `nvcr.io/nvidia/cuda`, creates a single Python 3.10 venv, and installs the complete all-stage runtime from `containers/requirements.unified.txt`. Stage-specific additions are grouped by comments inside that one file instead of being split across multiple requirement manifests.
+  The torch stack is installed explicitly in the Dockerfile so the same dependency set can target different GPU generations:
+  - cluster default: `PYTORCH_WHL_CHANNEL=cu126`
+  - local RTX 5090 variant: `PYTORCH_WHL_CHANNEL=cu128`
 
 This image is intended as the candidate path for consolidating stage-1/2 and stage-3 runtimes once it has been validated with smoke runs across all stages.
+
+Example build commands:
+
+```bash
+# Cluster H100 image
+docker build -f containers/Dockerfile.unified -t felixmin/hlrp:unified-cuda-cu126 .
+
+# Local RTX 5090 image
+docker build -f containers/Dockerfile.unified \
+  --build-arg PYTORCH_WHL_CHANNEL=cu128 \
+  -t felixmin/hlrp:unified-cuda-cu128 .
+```

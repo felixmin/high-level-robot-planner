@@ -205,7 +205,9 @@ fi
     gres_line = f"#SBATCH --gres=gpu:{gpus}" if gpus > 0 else ""
     nccl_block = ""
     if gpus > 0:
-        nccl_block = """export NCCL_SOCKET_IFNAME=ib0
+        nccl_block = """if [ -d /sys/class/net/ib0 ]; then
+  export NCCL_SOCKET_IFNAME=ib0
+fi
 export NCCL_DEBUG=WARN
 """
 
@@ -223,6 +225,16 @@ fi
 
     cpus_line = f"#SBATCH --cpus-per-task={cpus}" if cpus is not None else ""
     mem_line = f"#SBATCH --mem={mem}" if mem else ""
+    cache_block = f"""# Keep auth in the real cluster home, but redirect heavy caches to DSS.
+mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/huggingface/datasets" "{cache_dir}/huggingface/lerobot" "{cache_dir}/torch" "{cache_dir}/triton"
+export HOME="{home_dir}"
+export HF_HOME="$HOME/.cache/huggingface"
+export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
+export HF_DATASETS_CACHE="{cache_dir}/huggingface/datasets"
+export HF_LEROBOT_HOME="{cache_dir}/huggingface/lerobot"
+export TORCH_HOME="{cache_dir}/torch"
+export TRITON_CACHE_DIR="{cache_dir}/triton"
+"""
 
     script_content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
@@ -252,16 +264,9 @@ echo "========================================"
 # Environment setup
 export PYTHONPATH={PROJECT_ROOT}/packages:${{PYTHONPATH:-}}
 {nccl_block}
+echo "NCCL_SOCKET_IFNAME=${{NCCL_SOCKET_IFNAME:-<auto>}}"
 
-# Keep auth in the real cluster home, but redirect heavy caches to DSS.
-mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/huggingface/datasets" "{cache_dir}/huggingface/lerobot" "{cache_dir}/torch" "{cache_dir}/triton"
-export HOME="{home_dir}"
-export HF_HOME="$HOME/.cache/huggingface"
-export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
-export HF_DATASETS_CACHE="{cache_dir}/huggingface/datasets"
-export HF_LEROBOT_HOME="{cache_dir}/huggingface/lerobot"
-export TORCH_HOME="{cache_dir}/torch"
-export TRITON_CACHE_DIR="{cache_dir}/triton"
+{cache_block}
 # Use node-local temp when available (wandb system monitor/GPU stats are sensitive to slow shared TMPDIR).
 # Fall back to /tmp if SLURM_TMPDIR isn't set.
 # Include SLURM_LOCALID so multi-task jobs don't contend for the same tmp directory.
@@ -324,7 +329,6 @@ def main():
     cache_dir = Path(OmegaConf.select(cfg, "submit.cache_dir") or "cache")
     if not cache_dir.is_absolute():
         cache_dir = resolved_logging_root / cache_dir
-
     pre_commands = normalize_shell_commands(
         OmegaConf.select(cfg, "submit.pre_commands"),
         field_name="submit.pre_commands",
@@ -513,13 +517,8 @@ def main():
             continue
         extra_mounts.append(mount_path)
 
-    mount_roots: list[Path] = [
-        PROJECT_ROOT,
-        runs_dir.parent,
-        cache_dir,
-        home_dir,
-        *extra_mounts,
-    ]
+    mount_roots: list[Path] = [PROJECT_ROOT, runs_dir.parent, home_dir, *extra_mounts]
+    mount_roots.append(cache_dir)
 
     # Ensure unique mount roots while preserving order.
     seen: set[Path] = set()
