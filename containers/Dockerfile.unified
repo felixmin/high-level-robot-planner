@@ -10,7 +10,8 @@ ARG TORCHAUDIO_VERSION=2.7.1
 ARG PYTORCH_WHL_CHANNEL=cu128
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    MUJOCO_GL=osmesa \
+    MUJOCO_GL=egl \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
     PYTHONPATH=/workspace/high-level-robot-planner/packages \
     VIRTUAL_ENV=${VENV_PATH} \
     PATH=${VENV_PATH}/bin:${PATH}
@@ -30,6 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && usermod -aG sudo user_hlrp \
     && mkdir -p /workspace/high-level-robot-planner ${VENV_PATH} /opt/pip-tmp \
     && chown -R user_hlrp:user_hlrp /workspace ${VENV_PATH} /opt/pip-tmp \
+    && mkdir -p /usr/share/glvnd/egl_vendor.d \
+    && printf '{"file_format_version": "1.0.0", "ICD": {"library_path": "libEGL_nvidia.so.0"}}\n' \
+       > /usr/share/glvnd/egl_vendor.d/10_nvidia.json \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace/high-level-robot-planner

@@ -19,7 +19,7 @@ dataset:
         state_key: observation.state
         action_key: action
         video_backend: pyav
-        tolerance_s: 1.0e-3
+        tolerance_s: 1.0e-2
         val_episode_count: 2
 
       - repo_id: FedorX8/bridge_v2_lerobot
@@ -30,19 +30,19 @@ dataset:
         state_key: observation.state
         action_key: action
         video_backend: pyav
-        tolerance_s: 1.0e-3
+        tolerance_s: 1.0e-2
         val_episode_count: 2
 
-      - repo_id: FedorX8/bc_z_lerobot
-        revision: main
-        weight: 10.997
-        camera_map:
-          primary: observation.images.image
-        state_key: observation.state
-        action_key: action
-        video_backend: pyav
-        tolerance_s: 1.0e-3
-        val_episode_count: 2
+      # - repo_id: FedorX8/bc_z_lerobot  # excluded: broken video timestamps
+      #   revision: main
+      #   weight: 10.997
+      #   camera_map:
+      #     primary: observation.images.image
+      #   state_key: observation.state
+      #   action_key: action
+      #   video_backend: pyav
+      #   tolerance_s: 1.0e-2
+      #   val_episode_count: 2
 
       - repo_id: FedorX8/stanford_hydra_dataset_lerobot
         revision: main

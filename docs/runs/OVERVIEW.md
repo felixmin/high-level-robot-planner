@@ -32,6 +32,13 @@ Octo24 + Libero dataset
 TODO
 
 
+
+## Baseline multitask
+5% action labeled: train multitask action head and latent head at the same time
+
+
+
+
 ## Libero with 5% action labeled and 95% without real action labels
 
 ### Baseline only action
@@ -52,7 +59,7 @@ Caution: here the latent loss was not underweighted! redo.
 Latent action model: Randomly initialized
 5% action labeled: train multitask action head and latent head at the same time
 95% no action labeles: train latent head only
-2026-03-15_19-44-01_stage3_cluster_libero_95latent_5mt_from_test2_lam_4gpu_bs16_latent0p1
+Not run
 
 ### 95% for latents balanced 50/50 Libero overfitting
 Latent action model: Pretrained on Libero only (2026-03-14_19-27-26_stage1_local)
@@ -60,7 +67,7 @@ Latent action model: Pretrained on Libero only (2026-03-14_19-27-26_stage1_local
 95% no action labeles: train latent head only
 2026-03-15_01-43-48_stage3_local_libero_95latent_5mt_balanced_bs64_latent0p1
 
-## Baseline multitask
-5% action labeled: train multitask action head and latent head at the same time
+
+
 
 

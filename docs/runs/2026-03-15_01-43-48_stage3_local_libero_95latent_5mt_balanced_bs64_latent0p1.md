@@ -67,3 +67,62 @@ conda run -n lerobot python scripts/6_train_lerobot.py experiment=runs/2026-03-1
   - `100k`: `20%` success, `avg_sum_reward=0.20`
 - The run appears stable throughout training: loss decays cleanly, no crash markers appear in the local logs, and the final checkpoint/eval pair completed successfully.
 - An earlier local Stage 3 attempt with the same Stage 1 checkpoint exists at `2026-03-15_01-20-13_stage3_local_libero_95latent_5mt_balanced_bs64_lam50k`; this documented run is the follow-up `latent_loss_weight=0.1` variant.
+
+## Full Rollout (10 episodes per task, seed=1000)
+
+- Rollout run: `2026-03-15_22-09-51_stage3_rollout_local_from_2026-03-15_01-43-48_stage3_local_libero_95latent_5mt_balanced_bs64_latent0p1`
+- Checkpoint: `lerobot/checkpoints/last/pretrained_model` (step 100k)
+- Completed: 2026-03-15 23:18 CET (~66 min wall time)
+
+| Suite | Success Rate |
+|---|---|
+| libero_spatial | 37.0% |
+| libero_object | 40.0% |
+| libero_goal | 51.0% |
+| libero_10 | 15.0% |
+| **Overall** | **35.8%** |
+
+### Per-task breakdown
+
+| Suite | Task | Success |
+|---|---|---|
+| libero_spatial | 0 | 80% |
+| libero_spatial | 1 | 30% |
+| libero_spatial | 2 | 90% |
+| libero_spatial | 3 | 10% |
+| libero_spatial | 4 | 0% |
+| libero_spatial | 5 | 0% |
+| libero_spatial | 6 | 100% |
+| libero_spatial | 7 | 30% |
+| libero_spatial | 8 | 0% |
+| libero_spatial | 9 | 30% |
+| libero_object | 0 | 0% |
+| libero_object | 1 | 100% |
+| libero_object | 2 | 100% |
+| libero_object | 3 | 100% |
+| libero_object | 4 | 0% |
+| libero_object | 5 | 100% |
+| libero_object | 6 | 0% |
+| libero_object | 7 | 0% |
+| libero_object | 8 | 0% |
+| libero_object | 9 | 0% |
+| libero_goal | 0 | 30% |
+| libero_goal | 1 | 100% |
+| libero_goal | 2 | 90% |
+| libero_goal | 3 | 0% |
+| libero_goal | 4 | 30% |
+| libero_goal | 5 | 0% |
+| libero_goal | 6 | 0% |
+| libero_goal | 7 | 90% |
+| libero_goal | 8 | 80% |
+| libero_goal | 9 | 90% |
+| libero_10 | 0 | 0% |
+| libero_10 | 1 | 0% |
+| libero_10 | 2 | 0% |
+| libero_10 | 3 | 40% |
+| libero_10 | 4 | 0% |
+| libero_10 | 5 | 60% |
+| libero_10 | 6 | 0% |
+| libero_10 | 7 | 20% |
+| libero_10 | 8 | 20% |
+| libero_10 | 9 | 10% |
