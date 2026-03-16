@@ -9,7 +9,7 @@ dataset:
     sources:
       - repo_id: HuggingFaceVLA/libero
         revision: main
-        weight: 5.0
+        weight: 100.0
         camera_map:
           primary: observation.images.image
         state_key: observation.state

@@ -1,0 +1,29 @@
+# @package _global_
+
+defaults:
+  - _stage3_base
+  - /cluster@cluster: local_dev
+  - /runtime: stage3_local
+  - optional /user_config: local
+  - override /stage3_dataset: libero_5pct_latent_rest_balanced
+
+experiment:
+  name: test
+  description: "Local Stage 3 Libero training (HLRP shared SmolVLA policy)"
+
+logging:
+  runs_dir: /mnt/data/workspace/runs_root/runs/2026-03-13_15-54-35_test
+
+artifacts:
+  lam_checkpoint_path: /mnt/data/workspace/runs_root/runs/2026-03-12_16-51-27_lam_dino_encoder_disabled/checkpoints/last.ckpt
+
+lerobot:
+  batch_size: 64
+  num_workers: 4
+  grad_accum_steps: 1
+  eval:
+    batch_size: 2
+    n_episodes: 10
+  policy:
+    latent_loss_weight: 1.0
+    action_loss_weight: 1.0

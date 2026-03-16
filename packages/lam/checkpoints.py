@@ -62,6 +62,12 @@ def _build_lam_model_from_configs(
     flow_enabled = bool(flow_cfg.enabled)
     flow_config = None
     if flow_enabled:
+        summary_loss_weight = OmegaConf.select(flow_cfg, "summary_loss_weight")
+        if summary_loss_weight is None:
+            summary_loss_weight = 0.0
+        summary_static_eps = OmegaConf.select(flow_cfg, "summary_static_eps")
+        if summary_static_eps is None:
+            summary_static_eps = 1e-6
         flow_config = FlowConfig(
             model=flow_cfg.model,
             loss_weight=flow_cfg.loss_weight,
@@ -69,8 +75,8 @@ def _build_lam_model_from_configs(
             warmup_steps=flow_cfg.warmup_steps,
             teacher_num_flow_updates=flow_cfg.teacher_num_flow_updates,
             teacher_chunk_size=flow_cfg.teacher_chunk_size,
-            summary_loss_weight=flow_cfg.summary_loss_weight,
-            summary_static_eps=flow_cfg.summary_static_eps,
+            summary_loss_weight=summary_loss_weight,
+            summary_static_eps=summary_static_eps,
         )
 
     dino_cfg = model_config.dino

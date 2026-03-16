@@ -13,13 +13,8 @@ timm
 transformers==4.57.3
 huggingface-hub==0.35.3
 
-# Deep Learning (TensorFlow - for OXE datasets)
-tensorflow
-tensorflow-datasets
-
 # Data Handling & Configuration
 hydra-core
-hydra-submitit-launcher
 submitit
 omegaconf
 webdataset

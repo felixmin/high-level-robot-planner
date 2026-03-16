@@ -156,6 +156,7 @@ def generate_sbatch_script(
     python_bin: str = "python",
     *,
     time_limit: str | None = None,
+    use_torchrun: bool = False,
 ) -> str:
     """Generate sbatch script content."""
 
@@ -169,8 +170,14 @@ def generate_sbatch_script(
     # Build the python command with overrides.
     # Quote each override so bash doesn't expand Hydra interpolations like `${now:...}`
     # or `${hydra.job.num}` inside the sbatch script.
-    python_args = [python_bin, f"scripts/{script}.py", *overrides]
-    python_cmd = " ".join(shlex.quote(str(arg)) for arg in python_args).strip()
+    # When use_torchrun is True, torchrun spawns one process per GPU for DDP.
+    # The $SLURM_GPUS_ON_NODE variable is NOT quoted so bash expands it at runtime.
+    script_args = [f"scripts/{script}.py", *overrides]
+    quoted_args = " ".join(shlex.quote(str(arg)) for arg in script_args).strip()
+    if use_torchrun:
+        python_cmd = f"torchrun --standalone --nproc_per_node=$SLURM_GPUS_ON_NODE {quoted_args}"
+    else:
+        python_cmd = f"{python_bin} {quoted_args}"
 
     pre_command_block = ""
     if pre_commands:
@@ -205,20 +212,36 @@ fi
     gres_line = f"#SBATCH --gres=gpu:{gpus}" if gpus > 0 else ""
     nccl_block = ""
     if gpus > 0:
-        nccl_block = """export NCCL_SOCKET_IFNAME=ib0
+        nccl_block = """if [ -d /sys/class/net/ib0 ]; then
+  export NCCL_SOCKET_IFNAME=ib0
+fi
 export NCCL_DEBUG=WARN
 """
 
     gpu_info_block = ""
     if gpus > 0:
-        gpu_info_block = """# Show GPU info
-nvidia-smi
+        gpu_info_block = """# Show GPU info when available without making it a hard requirement.
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi || true
+else
+  echo "nvidia-smi not found inside container; continuing without GPU summary"
+fi
 """
     else:
         gpu_info_block = 'echo "CPU-only job (no GPUs requested)"\n'
 
     cpus_line = f"#SBATCH --cpus-per-task={cpus}" if cpus is not None else ""
     mem_line = f"#SBATCH --mem={mem}" if mem else ""
+    cache_block = f"""# Keep auth in the real cluster home, but redirect heavy caches to DSS.
+mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/huggingface/datasets" "{cache_dir}/huggingface/lerobot" "{cache_dir}/torch" "{cache_dir}/triton"
+export HOME="{home_dir}"
+export HF_HOME="$HOME/.cache/huggingface"
+export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
+export HF_DATASETS_CACHE="{cache_dir}/huggingface/datasets"
+export HF_LEROBOT_HOME="{cache_dir}/huggingface/lerobot"
+export TORCH_HOME="{cache_dir}/torch"
+export TRITON_CACHE_DIR="{cache_dir}/triton"
+"""
 
     script_content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
@@ -248,16 +271,9 @@ echo "========================================"
 # Environment setup
 export PYTHONPATH={PROJECT_ROOT}/packages:${{PYTHONPATH:-}}
 {nccl_block}
+echo "NCCL_SOCKET_IFNAME=${{NCCL_SOCKET_IFNAME:-<auto>}}"
 
-# Keep auth in the real cluster home, but redirect heavy caches to DSS.
-mkdir -p "{cache_dir}/huggingface/hub" "{cache_dir}/huggingface/datasets" "{cache_dir}/huggingface/lerobot" "{cache_dir}/torch" "{cache_dir}/triton"
-export HOME="{home_dir}"
-export HF_HOME="$HOME/.cache/huggingface"
-export HF_HUB_CACHE="{cache_dir}/huggingface/hub"
-export HF_DATASETS_CACHE="{cache_dir}/huggingface/datasets"
-export HF_LEROBOT_HOME="{cache_dir}/huggingface/lerobot"
-export TORCH_HOME="{cache_dir}/torch"
-export TRITON_CACHE_DIR="{cache_dir}/triton"
+{cache_block}
 # Use node-local temp when available (wandb system monitor/GPU stats are sensitive to slow shared TMPDIR).
 # Fall back to /tmp if SLURM_TMPDIR isn't set.
 # Include SLURM_LOCALID so multi-task jobs don't contend for the same tmp directory.
@@ -320,7 +336,6 @@ def main():
     cache_dir = Path(OmegaConf.select(cfg, "submit.cache_dir") or "cache")
     if not cache_dir.is_absolute():
         cache_dir = resolved_logging_root / cache_dir
-
     pre_commands = normalize_shell_commands(
         OmegaConf.select(cfg, "submit.pre_commands"),
         field_name="submit.pre_commands",
@@ -448,11 +463,22 @@ def main():
         )
     container_image_path = Path(str(container_image))
     if not container_image_path.exists():
-        raise SystemExit(
-            "Container image not found: "
-            f"{container_image_path}\n"
-            "Set `cluster.container.image=/path/to/container.sqsh` (or update your cluster config)."
-        )
+        container_image_str = str(container_image_path)
+        remote_ok = False
+        if container_image_str.startswith("/dss/"):
+            remote_check = subprocess.run(
+                ["ssh", "ai", "test", "-e", container_image_str],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            remote_ok = remote_check.returncode == 0
+        if not remote_ok:
+            raise SystemExit(
+                "Container image not found: "
+                f"{container_image_path}\n"
+                "Set `cluster.container.image=/path/to/container.sqsh` (or update your cluster config)."
+            )
     container_python_bin = str(
         OmegaConf.select(cfg, "cluster.container.python_bin") or "python"
     )
@@ -509,13 +535,8 @@ def main():
             continue
         extra_mounts.append(mount_path)
 
-    mount_roots: list[Path] = [
-        PROJECT_ROOT,
-        runs_dir.parent,
-        cache_dir,
-        home_dir,
-        *extra_mounts,
-    ]
+    mount_roots: list[Path] = [PROJECT_ROOT, runs_dir.parent, home_dir, *extra_mounts]
+    mount_roots.append(cache_dir)
 
     # Ensure unique mount roots while preserving order.
     seen: set[Path] = set()
@@ -608,6 +629,10 @@ def main():
             combined_overrides.append("hydra.sweep.subdir=.")
 
         # Generate sbatch script
+        use_torchrun = (
+            gpus > 1
+            and bool(OmegaConf.select(cfg, "submit.torchrun", default=False))
+        )
         sbatch_content = generate_sbatch_script(
             script=script,
             overrides=combined_overrides,
@@ -627,6 +652,7 @@ def main():
             hf_token_path=hf_token_path,
             pre_commands=pre_commands,
             python_bin=container_python_bin,
+            use_torchrun=use_torchrun,
         )
 
         if dry_run:

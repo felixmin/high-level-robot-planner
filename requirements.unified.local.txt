@@ -1,0 +1,28 @@
+# Unified Python requirements for a non-Docker local/conda environment.
+#
+# Install from the repo root after creating a Python 3.10 env and installing
+# the torch stack separately for the target GPU, for example:
+#   python -m pip install --index-url https://download.pytorch.org/whl/cu128 \
+#     torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1
+#
+# Stage 1/2 code still lives under packages/, so stage 1/2 runs also need:
+#   export PYTHONPATH=$PWD/packages:$PYTHONPATH
+
+# Bundled local packages shared across all stages.
+./lerobot[libero,smolvla]
+./lerobot_policy_hlrp
+
+# Shared HLRP runtime additions not provided by the LeRobot install.
+hydra-core
+omegaconf
+wandb==0.24.0
+transformers==4.57.3
+huggingface-hub==0.35.3
+matplotlib
+rich
+beartype
+nvidia-ml-py
+
+# Stage-1/2-only additions.
+lightning
+lightning-fabric

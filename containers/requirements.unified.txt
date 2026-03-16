@@ -1,0 +1,22 @@
+# The torch stack is installed explicitly in the Dockerfile so the wheel
+# channel stays parameterized by build args. The currently validated unified
+# image uses cu128 on both cluster H100 and local RTX 5090 targets.
+
+# Bundled local packages shared across all stages.
+/opt/lerobot-src[libero,smolvla]
+/opt/lerobot-policy-hlrp-src
+
+# Shared HLRP runtime additions not provided by the LeRobot install.
+hydra-core
+omegaconf
+wandb==0.24.0
+transformers==4.57.3
+huggingface-hub==0.35.3
+matplotlib
+rich
+beartype
+nvidia-ml-py
+
+# Stage-1/2-only additions.
+lightning
+lightning-fabric

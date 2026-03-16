@@ -3,16 +3,11 @@
 defaults:
   - /model/shared@stage2_policy_core: stage2_policy_core
   - /lerobot_policy@lerobot.policy: smolvla_shared_base
-  - /stage3_profile@stage3_profile: action_scratch
+  - /stage3_profile@stage3_profile: multitask_scratch
   - /stage3_dataset: libero
 
 submit:
   script: 6_train_lerobot
-
-cluster:
-  container:
-    image: /dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/felix_minzenmay/enroot/hlrp_stage3_lerobot.sqsh
-    python_bin: /opt/lerobot-venv/bin/python
 
 logging:
   use_wandb: true
@@ -23,10 +18,13 @@ lerobot:
   install_editables: [lerobot, lerobot_policy_hlrp]
   output_dir: ${logging.runs_dir}/lerobot
   job_name: ${experiment.name}
+  resume: false
+  resume_from: null
   steps: 100000
   batch_size: ${stage3_profile.batch_size}
   grad_accum_steps: 1
-  num_workers: 4
+  distributed_timeout_s: null
+  num_workers: 8
   log_freq: 200
   save_freq: 20000
   use_policy_training_preset: false

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import fcntl
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -11,6 +13,7 @@ from common.lerobot_v3_types import DatasetRequest
 from common.lerobot_v3_types import DatasetSample
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+from lerobot.utils.constants import HF_LEROBOT_HOME
 
 
 def _dataset_short_from_repo_id(repo_id: str) -> str:
@@ -270,6 +273,20 @@ class LeRobotSingleSource:
         self.compiled_val_index: CompiledSourceIndex | None = None
         self._runtime: LeRobotSourceRuntime | None = None
 
+    def _resolved_root(self) -> Path:
+        return Path(self.root) if self.root is not None else HF_LEROBOT_HOME / self.repo_id
+
+    def _resolved_request(self) -> dict[str, list[float]]:
+        if self.request is None:
+            raise RuntimeError("Source must be compiled before use")
+        return resolve_request_to_delta_timestamps(
+            request=self.request,
+            fps=int(self.meta.fps),
+            camera_role_to_key=self.camera_map,
+            state_key=self.state_key,
+            action_key=self.action_key,
+        )
+
     def compile(
         self,
         request: DatasetRequest,
@@ -296,45 +313,63 @@ class LeRobotSingleSource:
         )
         self._runtime = None
 
-    def _get_runtime(self) -> LeRobotSourceRuntime:
+    def prepare(self, *, lock: bool = False) -> None:
+        """Create the LeRobotDataset and store as runtime.
+
+        Must be called after compile() and before DataLoader workers fork.
+        Use lock=True on rank 0 to safely trigger any dataset downloads.
+        """
+        if self._runtime is not None:
+            return
         if self.request is None or self.compiled_train_index is None:
-            raise RuntimeError("Source must be compiled before use")
-        if self._runtime is None:
-            resolved = resolve_request_to_delta_timestamps(
-                request=self.request,
-                fps=int(self.meta.fps),
-                camera_role_to_key=self.camera_map,
-                state_key=self.state_key,
-                action_key=self.action_key,
-            )
-            dataset = LeRobotDataset(
-                repo_id=self.repo_id,
-                root=self.root,
-                revision=self.revision,
-                delta_timestamps=resolved,
-                video_backend=self.video_backend,
-                tolerance_s=self.tolerance_s if self.tolerance_s is not None else 1e-4,
-            )
-            requested_video_keys = {
-                dataset_key
-                for role, dataset_key in self.camera_map.items()
-                if role in self.request.image_requests
-            }
+            raise RuntimeError("Source must be compiled before prepare()")
+        resolved = self._resolved_request()
+        requested_video_keys = {
+            dataset_key
+            for role, dataset_key in self.camera_map.items()
+            if role in self.request.image_requests
+        }
+        root = self._resolved_root()
+        if lock:
+            root.mkdir(parents=True, exist_ok=True)
+            lock_path = root / ".hlrp_materialize.lock"
+            with open(lock_path, "w") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                dataset = self._create_dataset(resolved)
+                _restrict_dataset_video_features(dataset, requested_video_keys)
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        else:
+            dataset = self._create_dataset(resolved)
             _restrict_dataset_video_features(dataset, requested_video_keys)
-            self._runtime = LeRobotSourceRuntime(
-                dataset=dataset,
-                compiled_index=self.compiled_train_index,
-                resolved_delta_timestamps=resolved,
-            )
+        self._runtime = LeRobotSourceRuntime(
+            dataset=dataset,
+            compiled_index=self.compiled_train_index,
+            resolved_delta_timestamps=resolved,
+        )
+
+    def _create_dataset(self, delta_timestamps: dict[str, list[float]]) -> LeRobotDataset:
+        return LeRobotDataset(
+            repo_id=self.repo_id,
+            root=str(self._resolved_root()),
+            revision=self.revision,
+            delta_timestamps=delta_timestamps,
+            video_backend=self.video_backend,
+            tolerance_s=self.tolerance_s if self.tolerance_s is not None else 1e-4,
+        )
+
+    @property
+    def runtime(self) -> LeRobotSourceRuntime:
+        if self._runtime is None:
+            raise RuntimeError("Source must be prepared before use (call prepare())")
         return self._runtime
 
     def get_sample(self, anchor_abs_index: int) -> DatasetSample:
-        runtime = self._get_runtime()
+        rt = self.runtime
         if self.request is None:
             raise RuntimeError("Source request must be set before get_sample")
         if self.request.image_dtype != "uint8":
             raise NotImplementedError(self.request.image_dtype)
-        raw = runtime.dataset[int(anchor_abs_index)]
+        raw = rt.dataset[int(anchor_abs_index)]
         image_streams: dict[str, torch.Tensor] = {}
         image_padding_masks: dict[str, torch.Tensor] = {}
         for role, dataset_key in self.camera_map.items():

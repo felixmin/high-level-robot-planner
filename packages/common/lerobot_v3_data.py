@@ -297,6 +297,10 @@ class LeRobotV3DataModule(pl.LightningDataModule):
         if self.train_dataset is not None and self.val_dataset is not None:
             return
 
+        is_distributed = (
+            torch.distributed.is_available() and torch.distributed.is_initialized()
+        )
+        rank = torch.distributed.get_rank() if is_distributed else 0
         self.request = _request_from_config(self.request_cfg)
         self.sources = []
         for source_cfg in self.sources_cfg:
@@ -325,6 +329,15 @@ class LeRobotV3DataModule(pl.LightningDataModule):
             )
             self.sources.append(source)
 
+        if rank == 0:
+            for source in self.sources:
+                source.prepare(lock=True)
+        if is_distributed:
+            torch.distributed.barrier()
+            if rank != 0:
+                for source in self.sources:
+                    source.prepare()
+
         self.normalization_stats = build_run_normalization_stats(
             self.sources,
             weights_mode=str(self.adapter_cfg.get("weights_mode", "explicit")),
@@ -341,11 +354,7 @@ class LeRobotV3DataModule(pl.LightningDataModule):
 
         batch_size = int(self.loader_cfg["batch_size"])
         steps_per_epoch = self.adapter_cfg.get("steps_per_epoch")
-        is_distributed = (
-            torch.distributed.is_available() and torch.distributed.is_initialized()
-        )
         world_size = torch.distributed.get_world_size() if is_distributed else 1
-        rank = torch.distributed.get_rank() if is_distributed else 0
         if steps_per_epoch is None:
             train_num_samples = int(
                 sum(index.episodes.valid_anchor_count.sum() for index in train_compiled)

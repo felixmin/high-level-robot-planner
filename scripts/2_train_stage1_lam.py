@@ -107,22 +107,12 @@ def main(cfg: DictConfig):
     logger.info("=" * 80)
 
     datamodule = create_datamodule(cfg.data)
-    datamodule.setup()
 
     logger.info(f"✓ Data backend: {cfg.data.backend}")
     logger.info(f"  - Batch size: {cfg.data.loader.batch_size}")
     logger.info(f"  - Image size: {cfg.data.preprocess.image_size}")
 
-    if cfg.data.backend == "lerobot_v3":
-        if hasattr(datamodule, "sources"):
-            dataset_names = [src.repo_id for src in datamodule.sources]
-            logger.info(f"  - Sources: {dataset_names}")
-        est_samples = int(len(datamodule.train_dataset))
-        est_batches = est_samples // int(cfg.data.loader.batch_size)
-        logger.info(
-            f"  - Estimated train batches/epoch: ~{est_batches:,} (~{est_samples:,} samples)"
-        )
-    else:
+    if cfg.data.backend != "lerobot_v3":
         raise ValueError(
             f"Only data.backend='lerobot_v3' is supported, got {cfg.data.backend!r}"
         )
@@ -394,6 +384,8 @@ def main(cfg: DictConfig):
     check_val_every_n_epoch = val_config.check_val_every_n_epoch
 
     log_every_n_steps = int(training_config.log_every_n_steps)
+    num_sanity_val_steps = OmegaConf.select(training_config, "num_sanity_val_steps")
+    trainer_strategy = OmegaConf.select(training_config, "strategy", default="auto")
 
     model_summary_cfg = training_config.model_summary
 
@@ -408,7 +400,7 @@ def main(cfg: DictConfig):
         max_steps=int(training_config.max_steps),
         accelerator="auto",
         devices="auto",
-        strategy="auto",
+        strategy=trainer_strategy,
         plugins=trainer_plugins,
         precision=cfg.precision,
         gradient_clip_val=training_config.gradient.clip_val,
@@ -421,6 +413,9 @@ def main(cfg: DictConfig):
         val_check_interval=val_check_interval,  # Configurable validation frequency
         limit_val_batches=limit_val_batches,  # Limit validation batches
         check_val_every_n_epoch=check_val_every_n_epoch,
+        num_sanity_val_steps=(
+            int(num_sanity_val_steps) if num_sanity_val_steps is not None else None
+        ),
         enable_progress_bar=bool(progress_bar_cfg.enabled),
         enable_model_summary=bool(model_summary_cfg.enabled),
     )
@@ -430,9 +425,11 @@ def main(cfg: DictConfig):
     logger.info(f"  - Val check interval: {val_check_interval}")
     logger.info(f"  - Limit val batches: {limit_val_batches}")
     logger.info(f"  - Check val every n epoch: {check_val_every_n_epoch}")
+    logger.info(f"  - Num sanity val steps: {num_sanity_val_steps}")
     logger.info(f"  - Precision: {cfg.precision}")
     logger.info("  - Accelerator: auto")
     logger.info("  - Devices: auto")
+    logger.info(f"  - Strategy: {trainer_strategy}")
     logger.info(f"  - Profiler: {profiler_type if profiler else 'disabled'}")
 
     # Train
