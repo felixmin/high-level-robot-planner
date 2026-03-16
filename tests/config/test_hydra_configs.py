@@ -166,7 +166,7 @@ class TestExperimentConsistency:
         ("experiment", "cluster_name", "mujoco_gl"),
         [
             ("stage3_rollout_local", "local_dev", "egl"),
-            ("stage3_rollout_cluster", "mcml_h100", "osmesa"),
+            ("stage3_rollout_cluster", "mcml_h100", "egl"),
         ],
     )
     def test_stage3_rollout_experiments_load(
@@ -221,7 +221,7 @@ class TestExperimentConsistency:
                 ],
             )
 
-            assert cfg.lerobot.shell_env.MUJOCO_GL == "osmesa"
+            assert cfg.lerobot.shell_env.MUJOCO_GL == "egl"
             assert str(cfg.lerobot.shell_env.LIBERO_CONFIG_PATH).endswith(
                 "/cache/libero_config"
             )

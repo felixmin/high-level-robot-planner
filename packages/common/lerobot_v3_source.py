@@ -338,6 +338,10 @@ class LeRobotSingleSource:
         )
         self._runtime = None
 
+    def warmup_runtime(self) -> None:
+        """Eagerly initialize the runtime so forked DataLoader workers inherit it."""
+        self._get_runtime()
+
     def _get_runtime(self) -> LeRobotSourceRuntime:
         if self.request is None or self.compiled_train_index is None:
             raise RuntimeError("Source must be compiled before use")

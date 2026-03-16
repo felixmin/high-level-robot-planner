@@ -107,22 +107,12 @@ def main(cfg: DictConfig):
     logger.info("=" * 80)
 
     datamodule = create_datamodule(cfg.data)
-    datamodule.setup()
 
     logger.info(f"✓ Data backend: {cfg.data.backend}")
     logger.info(f"  - Batch size: {cfg.data.loader.batch_size}")
     logger.info(f"  - Image size: {cfg.data.preprocess.image_size}")
 
-    if cfg.data.backend == "lerobot_v3":
-        if hasattr(datamodule, "sources"):
-            dataset_names = [src.repo_id for src in datamodule.sources]
-            logger.info(f"  - Sources: {dataset_names}")
-        est_samples = int(len(datamodule.train_dataset))
-        est_batches = est_samples // int(cfg.data.loader.batch_size)
-        logger.info(
-            f"  - Estimated train batches/epoch: ~{est_batches:,} (~{est_samples:,} samples)"
-        )
-    else:
+    if cfg.data.backend != "lerobot_v3":
         raise ValueError(
             f"Only data.backend='lerobot_v3' is supported, got {cfg.data.backend!r}"
         )

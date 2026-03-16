@@ -169,8 +169,17 @@ def generate_sbatch_script(
     # Build the python command with overrides.
     # Quote each override so bash doesn't expand Hydra interpolations like `${now:...}`
     # or `${hydra.job.num}` inside the sbatch script.
-    python_args = [python_bin, f"scripts/{script}.py", *overrides]
-    python_cmd = " ".join(shlex.quote(str(arg)) for arg in python_args).strip()
+    # Lightning scripts (stages 1 & 2) need torchrun for multi-GPU DDP so that all
+    # ranks are spawned before the script runs (DDP initialized before setup()).
+    # Stage 3 (6_train_lerobot) uses Accelerate which spawns processes itself.
+    torchrun_scripts = {"2_train_stage1_lam", "4_train_stage2_policy"}
+    use_torchrun = gpus > 1 and script in torchrun_scripts
+    script_args = [f"scripts/{script}.py", *overrides]
+    quoted_args = " ".join(shlex.quote(str(arg)) for arg in script_args).strip()
+    if use_torchrun:
+        python_cmd = f"torchrun --standalone --nproc_per_node=$SLURM_GPUS_ON_NODE {quoted_args}"
+    else:
+        python_cmd = f"{python_bin} {quoted_args}"
 
     pre_command_block = ""
     if pre_commands:

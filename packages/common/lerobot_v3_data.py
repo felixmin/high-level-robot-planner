@@ -335,6 +335,9 @@ class LeRobotV3DataModule(pl.LightningDataModule):
         if is_distributed:
             torch.distributed.barrier()
 
+        for source in self.sources:
+            source.warmup_runtime()
+
         self.normalization_stats = build_run_normalization_stats(
             self.sources,
             weights_mode=str(self.adapter_cfg.get("weights_mode", "explicit")),
