@@ -3,7 +3,7 @@
 The unified container is now the intended runtime for all stages:
 
 - `containers/Dockerfile.unified`
-  Builds one raw-CUDA image with a single Python 3.10 environment at
+  Builds one raw-CUDA image with a single Python 3.12 environment at
   `/opt/hlrp-venv` for stage 1, stage 2, and stage 3.
 - `containers/requirements.unified.txt`
   Holds the shared Python dependency set, including local installs of
@@ -12,6 +12,13 @@ The unified container is now the intended runtime for all stages:
 The torch stack is installed explicitly in the Dockerfile so the wheel channel
 can stay parameterized by build args. The currently validated unified image uses
 `PYTORCH_WHL_CHANNEL=cu128` on both cluster H100 and local RTX 5090 targets.
+The image also installs `torchcodec` in the same venv and `ffmpeg` from the OS
+package layer so LeRobot video decoding works out of the box.
+The currently pinned container matrix is:
+- `torch==2.10.0`
+- `torchvision==0.25.0`
+- `torchaudio==2.10.0`
+- `torchcodec==0.10.0`
 
 ## Cluster Setup
 

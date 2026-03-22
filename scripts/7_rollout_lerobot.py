@@ -237,6 +237,10 @@ def _command_from_cfg(cfg: DictConfig) -> list[str]:
     if policy_use_amp is not None:
         cmd.append(f"--policy.use_amp={_to_bool_flag(policy_use_amp)}")
 
+    max_episodes_rendered = OmegaConf.select(cfg, "lerobot_eval.max_episodes_rendered")
+    if max_episodes_rendered is not None:
+        cmd.append(f"--max_episodes_rendered={int(max_episodes_rendered)}")
+
     output_dir = OmegaConf.select(cfg, "lerobot_eval.output_dir")
     if output_dir:
         cmd.append(f"--output_dir={output_dir}")
@@ -262,6 +266,10 @@ def _command_from_cfg(cfg: DictConfig) -> list[str]:
             raise ValueError(f"lerobot_eval.extra_args[{i}] must be a string")
         if arg.strip():
             stripped_extra_args.append(arg.strip())
+
+    render_mode = OmegaConf.select(cfg, "lerobot_eval.render_mode")
+    if render_mode is not None:
+        stripped_extra_args.insert(0, f"--env.render_mode={render_mode}")
 
     cmd.extend(
         _inherit_train_env_args(

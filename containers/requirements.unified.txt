@@ -1,6 +1,12 @@
 # The torch stack is installed explicitly in the Dockerfile so the wheel
 # channel stays parameterized by build args. The currently validated unified
 # image uses cu128 on both cluster H100 and local RTX 5090 targets.
+# torchcodec is also installed in the Dockerfile so its version stays aligned
+# with the selected torch build, while ffmpeg comes from the OS layer.
+#
+# LeRobot is installed from the local source tree, so its transitive
+# dependencies come from lerobot/pyproject.toml instead of being duplicated
+# here.
 
 # Bundled local packages shared across all stages.
 /opt/lerobot-src[libero,smolvla]
@@ -10,8 +16,6 @@
 hydra-core
 omegaconf
 wandb==0.24.0
-transformers==4.57.3
-huggingface-hub==0.35.3
 matplotlib
 rich
 beartype

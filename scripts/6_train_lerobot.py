@@ -328,13 +328,15 @@ def _write_lerobot_train_config(
     if resolved_mix_path is not None:
         train_cfg["dataset"]["mix_path"] = str(resolved_mix_path)
 
-    env_cfg = train_cfg.setdefault("env", {})
-    env_type = OmegaConf.select(cfg, "lerobot.env.type")
-    if env_type:
-        env_cfg["type"] = str(env_type)
-    env_task = OmegaConf.select(cfg, "lerobot.env.task")
-    if env_task:
-        env_cfg["task"] = str(env_task)
+    raw_env_cfg = OmegaConf.select(cfg, "lerobot.env")
+    if raw_env_cfg is not None:
+        env_cfg = train_cfg.setdefault("env", {})
+        env_type = OmegaConf.select(cfg, "lerobot.env.type")
+        if env_type:
+            env_cfg["type"] = str(env_type)
+        env_task = OmegaConf.select(cfg, "lerobot.env.task")
+        if env_task:
+            env_cfg["task"] = str(env_task)
 
     for section_name, cfg_path, skip_keys in (
         (
@@ -356,6 +358,8 @@ def _write_lerobot_train_config(
         ("scheduler", "lerobot.scheduler", None),
         ("wandb", "lerobot.wandb", {"enable"}),
     ):
+        if cfg_path == "lerobot.env" and raw_env_cfg is None:
+            continue
         section_cfg = _copy_group_config(cfg, cfg_path=cfg_path, skip_keys=skip_keys)
         if section_cfg:
             train_cfg.setdefault(section_name, {}).update(section_cfg)

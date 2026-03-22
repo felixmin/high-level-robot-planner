@@ -188,6 +188,8 @@ class TestExperimentConsistency:
             )
             assert cfg.lerobot_eval.eval_batch_size == 1
             assert cfg.lerobot_eval.eval_n_episodes == 10
+            assert cfg.lerobot_eval.max_episodes_rendered == 10
+            assert cfg.lerobot_eval.render_mode is None
             assert cfg.lerobot_eval.extra_args == ["--env.max_parallel_tasks=1"]
 
     def test_stage3_sweep_experiment_loads(self, config_dir):

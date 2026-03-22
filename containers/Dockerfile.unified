@@ -2,11 +2,12 @@
 # separate PyTorch env assumptions from the old split images.
 FROM nvcr.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04
 
-ARG PYTHON_VERSION=3.10
+ARG PYTHON_VERSION=3.12
 ARG VENV_PATH=/opt/hlrp-venv
-ARG TORCH_VERSION=2.7.1
-ARG TORCHVISION_VERSION=0.22.1
-ARG TORCHAUDIO_VERSION=2.7.1
+ARG TORCH_VERSION=2.10.0
+ARG TORCHVISION_VERSION=0.25.0
+ARG TORCHAUDIO_VERSION=2.10.0
+ARG TORCHCODEC_VERSION=0.10.0
 ARG PYTORCH_WHL_CHANNEL=cu128
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -73,6 +74,8 @@ RUN python${PYTHON_VERSION} -m venv ${VENV_PATH} \
         torch==${TORCH_VERSION} \
         torchvision==${TORCHVISION_VERSION} \
         torchaudio==${TORCHAUDIO_VERSION} \
+    && ${VENV_PATH}/bin/python -m pip install --no-build-isolation \
+        torchcodec==${TORCHCODEC_VERSION} \
     # The unified requirements file layers local lerobot + HLRP policy installs
     # together with the extra packages still needed by stage 1/2.
     && ${VENV_PATH}/bin/python -m pip install --no-build-isolation -r /opt/hlrp-unified.txt \

@@ -144,3 +144,33 @@ def test_rollout_command_prefers_explicit_env_extra_args_over_inherited(
 
     assert "--env.observation_height=360" in cmd
     assert "--env.observation_height=512" not in cmd
+
+
+def test_rollout_command_wires_render_controls_from_config(tmp_path) -> None:
+    mod = _load_script_module("7_rollout_lerobot.py", "stage3_rollout_script")
+    policy_dir = tmp_path / "pretrained_model"
+    policy_dir.mkdir()
+    with open(policy_dir / "train_config.json", "w") as f:
+        json.dump({"env": {"render_mode": "rgb_array"}}, f)
+
+    cfg = OmegaConf.create(
+        {
+            "lerobot_eval": {
+                "command": "lerobot-eval",
+                "policy_path": str(policy_dir),
+                "env_type": "libero",
+                "env_task": "libero_10",
+                "eval_n_episodes": 10,
+                "eval_batch_size": 1,
+                "max_episodes_rendered": 0,
+                "render_mode": "human",
+                "extra_args": [],
+            }
+        }
+    )
+
+    cmd = mod._command_from_cfg(cfg)
+
+    assert "--max_episodes_rendered=0" in cmd
+    assert "--env.render_mode=human" in cmd
+    assert "--env.render_mode=rgb_array" not in cmd

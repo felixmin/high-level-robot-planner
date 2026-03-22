@@ -94,14 +94,20 @@ ln -s ~/.cache/huggingface/token ~/.huggingface/token
 conda create -n hlrp python=3.12
 conda activate hlrp
 
-# Install Python dependencies
-pip install -r requirements.txt
-
 # Install the current PyTorch build with GPU support for your system.
 # Pick the right command for your CUDA/runtime from:
 # https://pytorch.org/get-started/locally/
-# Example for CUDA 12.8:
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# Validated local example for CUDA 12.8:
+pip install --index-url https://download.pytorch.org/whl/cu128 \
+  torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+
+# LeRobot video decoding expects torchcodec plus FFmpeg runtime libraries.
+pip install torchcodec==0.10.0
+conda install -n hlrp -c conda-forge ffmpeg -y
+
+# Install local LeRobot + HLRP overlay dependencies from the repo.
+# LeRobot's own dependencies are taken from lerobot/pyproject.toml.
+pip install -r requirements.unified.local.txt
 
 # Quick sanity check
 python -m pytest
@@ -126,8 +132,9 @@ Recommended stable reinstall pattern:
 
 ```bash
 pip uninstall -y torch torchvision torchaudio
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-pip install -U torchcodec
+pip install --index-url https://download.pytorch.org/whl/cu128 \
+  torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+pip install torchcodec==0.10.0
 conda install -n hlrp -c conda-forge ffmpeg -y
 ```
 
@@ -145,7 +152,13 @@ conda install -n hlrp -c conda-forge ffmpeg -y
 ```
 
 Important: keep `torch`, `torchvision`, `torchaudio`, and `torchcodec` aligned.
-Mixing arbitrary nightly dates with latest torchcodec wheels can break decoding.
+The currently validated local/container stack is:
+- `torch==2.10.0`
+- `torchvision==0.25.0`
+- `torchaudio==2.10.0`
+- `torchcodec==0.10.0`
+
+Mixing arbitrary nightly dates with unrelated `torchcodec` wheels can break decoding.
 
 Check the official PyTorch install selector for the current recommended command:
 https://pytorch.org/get-started/locally/
@@ -241,7 +254,7 @@ python -m ruff check packages/ scripts/ tests/
 
 ## Dependencies
 
-Python 3.12. Install base dependencies from `requirements.txt`, then install a current GPU-enabled PyTorch build from the official PyTorch selector.
+Python 3.12. Install a current GPU-enabled PyTorch build from the official PyTorch selector, then install the repo overlay from `requirements.unified.local.txt`. The local `lerobot/` submodule is installed directly, so its dependencies come from `lerobot/pyproject.toml` rather than being duplicated in a top-level requirements file.
 
 Key packages: lightning, transformers, webdataset, hydra-core, wandb, accelerate.
 
