@@ -1,0 +1,12 @@
+# @package _group_
+
+id: multitask_stage1_teleop
+logging_tags: ["stage3", "lerobot", "teleop", "hlrp-policy", "smolvla", "scratch", "cotrain", "stage1-baseline"]
+batch_size: 32
+
+policy:
+  repo_id: felixmin/hlrp_smolvla_shared_teleop_stage1_baseline
+  stage3_training_mode: multitask
+  lam_checkpoint_path: ${artifacts.lam_checkpoint_path}
+  lam_future_frames: 5
+  lam_camera_keys: [observation.images.fpv]

@@ -1,0 +1,60 @@
+# @package data
+
+# Octo-style 24-dataset OXE composition mapped onto LeRobot v3 repos after
+# excluding the unresolved `kuka` port and swapping broken official ports to
+# working community mirrors where needed.
+
+defaults:
+  - _lerobot_v3_mix_base
+  - _self_
+
+request:
+  image_requests:
+    primary:
+      deltas_steps: [0, 5]
+      required: true
+
+filtering:
+  enabled: true
+  mode: both
+  apply_at_sampling: true
+  trim_episode_ends: true
+
+  motion:
+    enabled: true
+    method: frame_diff
+    frame_gap: null
+    aggregate_all_cameras: true
+    aggregate_reduce: mean
+    low_threshold: 0.01
+    high_threshold: 0.02
+    use_hysteresis: true
+
+  action:
+    enabled: true
+    threshold: 0.015
+    exclude_dims: [6]
+    chunk_size: 3
+    chunk_reduce: max
+    min_nonzero_ratio: 0.2
+
+  cache:
+    enabled: true
+    reuse_if_config_unchanged: true
+    force_recompute: false
+
+dataset:
+  lerobot:
+    sources:
+      - repo_id: LSY-lab/simple_tasks_teleop_v1
+        revision: main
+        weight: 100
+        camera_map:
+          primary: observation.images.fpv
+          eagles_view: observation.images.eagles_view
+          orth: observation.images.orth
+          person_view_3rd_1st: observation.images.person_view_3rd_1st
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2

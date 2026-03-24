@@ -36,3 +36,50 @@ adapter:
     steps_per_epoch: 10000
     resample_each_epoch: true
     weights_mode: explicit
+
+filtering:
+  enabled: false
+  mode: none
+  apply_at_sampling: false
+  trim_episode_ends: true
+
+  motion:
+    enabled: false
+    method: frame_diff
+    frame_gap: null
+    aggregate_all_cameras: false
+    aggregate_reduce: mean
+    resize_short_side: 224
+    grayscale: true
+    blur_kernel: 5
+    diff_pixel_threshold: 0.03
+    smoothing_window: 5
+    consecutive_active_k: 3
+    low_threshold: 0.01
+    high_threshold: 0.02
+    use_hysteresis: true
+
+    sparse_flow:
+      enabled: false
+      only_on_uncertain: true
+      max_corners: 200
+      quality_level: 0.01
+      min_distance: 5.0
+      win_size: 15
+      max_level: 2
+      min_tracked_fraction: 0.25
+      median_flow_threshold: 0.6
+
+  action:
+    enabled: false
+    method: norm
+    threshold: 0.02
+    exclude_dims: []
+    chunk_size: 1
+    chunk_reduce: max
+    min_nonzero_ratio: 0.0
+
+  cache:
+    enabled: true
+    reuse_if_config_unchanged: true
+    force_recompute: false

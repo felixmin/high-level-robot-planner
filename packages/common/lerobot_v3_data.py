@@ -277,6 +277,7 @@ class LeRobotV3DataModule(pl.LightningDataModule):
         loader: Mapping[str, Any],
         adapter: Mapping[str, Any],
         output_format: str,
+        filtering: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.sources_cfg = [dict(src) for src in sources]
@@ -284,6 +285,7 @@ class LeRobotV3DataModule(pl.LightningDataModule):
         self.loader_cfg = dict(loader)
         self.adapter_cfg = dict(adapter)
         self.output_format = str(output_format)
+        self.filtering_cfg = None if filtering is None else dict(filtering)
         self.sources: list[LeRobotSingleSource] = []
         self.train_dataset = None
         self.val_dataset = None
@@ -313,6 +315,8 @@ class LeRobotV3DataModule(pl.LightningDataModule):
                 state_key=source_cfg.get("state_key"),
                 action_key=source_cfg.get("action_key"),
                 tolerance_s=source_cfg.get("tolerance_s"),
+                filtering_cfg=source_cfg.get("filtering"),
+                global_filtering_cfg=self.filtering_cfg,
             )
             _validate_source_image_requests(source, self.request)
             train_set, val_set = _resolve_split_episode_sets(
