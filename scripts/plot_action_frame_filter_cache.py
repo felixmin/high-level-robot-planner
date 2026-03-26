@@ -147,6 +147,27 @@ def _plot_one_cache(axes: np.ndarray, data: dict[str, Any], title: str, fps: flo
         if action_thr is not None:
             axes[1].axhline(action_thr, color="tab:olive", linestyle=":", label="action_threshold")
 
+        # Mark the two lowest action-score anchors for quick threshold debugging.
+        finite_idx = np.flatnonzero(finite_action)
+        finite_vals = action_score[finite_action]
+        low_k = min(2, int(finite_vals.shape[0]))
+        order = np.argsort(finite_vals)[:low_k]
+        low_idx = finite_idx[order]
+        low_vals = action_score[low_idx]
+        axes[1].scatter(low_idx, low_vals, color="tab:red", s=40, zorder=5, label="lowest_action")
+        for rank, (idx, val) in enumerate(zip(low_idx.tolist(), low_vals.tolist()), start=1):
+            t_sec = float(idx) / float(max(1.0e-6, fps))
+            offset_y = 10 if rank == 1 else -14
+            axes[1].annotate(
+                f"low{rank}: i={idx}, t={t_sec:.2f}s, s={val:.4f}",
+                xy=(idx, val),
+                xytext=(8, offset_y),
+                textcoords="offset points",
+                fontsize=8,
+                color="tab:red",
+                arrowprops={"arrowstyle": "-", "color": "tab:red", "lw": 0.8},
+            )
+
     keep_axis = axes[1].twinx()
     keep_axis.plot(x, keep_mask.astype(np.float32), label="keep_mask", color="black", linewidth=1.2)
     keep_axis.set_ylim(-0.05, 1.05)

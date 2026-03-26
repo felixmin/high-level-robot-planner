@@ -5,6 +5,11 @@ sources:
     root: null
     revision: main
     weight: 1.0
+    camera_map:
+      primary: observation.images.fpv
+      eagles_view: observation.images.eagles_view
+      orth: observation.images.orth
+      person_view_3rd_1st: observation.images.person_view_3rd_1st
     episodes: null
     exclude_episodes: null
     supervision: multitask

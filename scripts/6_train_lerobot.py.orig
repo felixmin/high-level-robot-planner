@@ -540,9 +540,6 @@ def _runtime_cwd_from_cfg(cfg: DictConfig) -> Path:
     if run_dir is None:
         raise ValueError("logging.runs_dir must be set for stage-3 runs")
     cwd = Path(str(run_dir))
-    if not cwd.is_absolute():
-        cwd = workspace_root / cwd
-    cwd = cwd.resolve()
     cwd.mkdir(parents=True, exist_ok=True)
     return cwd
 
@@ -636,7 +633,6 @@ def main(cfg: DictConfig) -> None:
         if v is None:
             continue
         env[str(k)] = str(v)
-    ensure_libero_config(env=env, logger=logger)
 
     for editable_path in _editable_paths_from_cfg(cfg):
         logger.info("Installing editable package: %s", editable_path)
@@ -647,6 +643,12 @@ def main(cfg: DictConfig) -> None:
             env=env,
         )
 
+<<<<<<< HEAD
+=======
+    ensure_libero_config(env=env, logger=logger)
+
+    cmd = _lerobot_run_command_from_cfg(cfg)
+>>>>>>> 647e516 ( add motiona nd action filtering without testing andfull finetuning)
     runtime_cwd = _runtime_cwd_from_cfg(cfg)
     config_path = _write_lerobot_train_config(cfg, runtime_cwd=runtime_cwd)
     cmd, launch_mode = _build_stage3_launch_cmd(cfg, env=env, config_path=config_path)

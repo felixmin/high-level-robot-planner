@@ -51,10 +51,38 @@ dataset:
         weight: 100
         camera_map:
           primary: observation.images.fpv
-          eagles_view: observation.images.eagles_view
-          orth: observation.images.orth
-          person_view_3rd_1st: observation.images.person_view_3rd_1st
         state_key: observation.state
         action_key: action
         video_backend: pyav
         val_episode_count: 2
+
+      - repo_id: LSY-lab/simple_tasks_teleop_v1
+        revision: main
+        weight: 100
+        camera_map:
+          primary: observation.images.eagles_view
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: LSY-lab/simple_tasks_teleop_v1
+        revision: main
+        weight: 100
+        camera_map:
+          primary: observation.images.orth
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
+      - repo_id: LSY-lab/simple_tasks_teleop_v1
+        revision: main
+        weight: 100
+        camera_map:
+          primary: observation.images.person_view_3rd_1st
+        state_key: observation.state
+        action_key: action
+        video_backend: pyav
+        val_episode_count: 2
+
