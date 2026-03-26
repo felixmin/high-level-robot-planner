@@ -314,6 +314,7 @@ class LeRobotV3DataModule(pl.LightningDataModule):
                 camera_map=dict(source_cfg["camera_map"]),
                 state_key=source_cfg.get("state_key"),
                 action_key=source_cfg.get("action_key"),
+                video_backend=source_cfg.get("video_backend"),
                 tolerance_s=source_cfg.get("tolerance_s"),
                 filtering_cfg=source_cfg.get("filtering"),
                 global_filtering_cfg=self.filtering_cfg,

@@ -264,6 +264,7 @@ class LeRobotSingleSource:
         camera_map: dict[str, str],
         state_key: str | None,
         action_key: str | None,
+        video_backend: str | None = None,
         tolerance_s: float | None = None,
         filtering_cfg: dict[str, Any] | None = None,
         global_filtering_cfg: dict[str, Any] | None = None,
@@ -275,6 +276,7 @@ class LeRobotSingleSource:
         self.camera_map = dict(camera_map)
         self.state_key = state_key
         self.action_key = action_key
+        self.video_backend = None if video_backend is None else str(video_backend)
 
         self.tolerance_s = tolerance_s
         self.filtering_cfg = None if filtering_cfg is None else dict(filtering_cfg)
@@ -428,7 +430,7 @@ class LeRobotSingleSource:
             filter_cache_path=result.cache_path,
         )
 
-   def prepare(self, *, lock: bool = False) -> None:
+    def prepare(self, *, lock: bool = False) -> None:
         """Create the LeRobotDataset and store as runtime.
 
         Must be called after compile() and before DataLoader workers fork.
