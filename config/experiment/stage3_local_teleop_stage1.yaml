@@ -1,0 +1,27 @@
+# @package _global_
+
+defaults:
+  - _stage3_base
+  - /cluster@cluster: local_dev
+  - /runtime: stage3_local
+  - optional /user_config: local
+  - override /stage3_profile@stage3_profile: multitask_stage1_teleop
+  - override /stage3_dataset: lsy_teleop_full_multitask
+
+experiment:
+  name: stage3_local_teleop_stage1
+  description: "Local Stage 3 teleop training with Stage-1 latent teacher baseline"
+
+lerobot:
+  shell_env:
+    MUJOCO_GL: egl
+    LIBERO_CONFIG_PATH: null
+  env: null
+  eval:
+    freq: 0
+  policy:
+    camera_keys:
+      - observation.images.fpv
+      - observation.images.orth
+      - observation.images.person_view_3rd_1st
+      - observation.images.eagles_view

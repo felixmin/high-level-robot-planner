@@ -1,0 +1,43 @@
+# @package lerobot.dataset
+
+id: lsy_teleop_full_multitask
+repo_id: hlrp/lsy_teleop_full_multitask
+mix_path: config/stage3_dataset_mix/lsy_teleop_full_multitask.yaml
+episodes: null
+root: null
+revision: null
+use_imagenet_stats: false
+video_backend: pyav
+filtering:
+  enabled: true
+  mode: both
+  apply_at_sampling: true
+  trim_episode_ends: true
+
+  motion:
+    enabled: true
+    method: frame_diff
+    frame_gap: null
+    device: cuda
+    decode_chunk_size: 64
+    prefetch_next_episode: true
+    prefetch_chunk_size: 64
+    aggregate_all_cameras: true
+    aggregate_reduce: mean
+    low_threshold: 0.01
+    high_threshold: 0.02
+    use_hysteresis: true
+
+  action:
+    enabled: true
+    threshold: 0.001
+    exclude_dims: []
+    chunk_size: 3
+    chunk_reduce: max
+    min_nonzero_ratio: 0.2
+
+
+  cache:
+    enabled: true
+    reuse_if_config_unchanged: true
+    force_recompute: false

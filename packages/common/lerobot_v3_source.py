@@ -3,17 +3,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 import fcntl
 from pathlib import Path
+import logging
 from typing import Any
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
+from common.action_frame_filtering import build_action_frame_filter
+from common.action_frame_filtering import normalize_filtering_config
 from common.lerobot_v3_types import DatasetRequest
 from common.lerobot_v3_types import DatasetSample
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.utils.constants import HF_LEROBOT_HOME
+
+logger = logging.getLogger(__name__)
 
 
 def _dataset_short_from_repo_id(repo_id: str) -> str:
@@ -31,6 +36,9 @@ class CompiledEpisodeIndex:
     valid_anchor_start: np.ndarray
     valid_anchor_end: np.ndarray
     valid_anchor_count: np.ndarray
+    sample_anchor_offsets_start: np.ndarray | None = None
+    sample_anchor_offsets_end: np.ndarray | None = None
+    sample_anchor_values: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +51,8 @@ class CompiledSourceIndex:
     episodes: CompiledEpisodeIndex
     sampleable_episode_ids: np.ndarray
     sampleable_episode_weights: np.ndarray
+    filter_summary: dict[str, Any] | None = None
+    filter_cache_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -194,10 +204,30 @@ def _filter_episodes(
         episodes = [
             ep for ep in meta.episodes if int(ep["episode_index"]) in episode_indices
         ]
+
+    # Some dataset shards can contain duplicate metadata rows for the same episode.
+    # Keep the first occurrence to avoid overcounting sampleable episodes.
+    deduped: list[dict[str, Any]] = []
+    seen_episode_indices: set[int] = set()
+    for episode in episodes:
+        ep_idx = int(episode["episode_index"])
+        if ep_idx in seen_episode_indices:
+            continue
+        seen_episode_indices.add(ep_idx)
+        deduped.append(episode)
+
+    duplicate_count = len(episodes) - len(deduped)
+    if duplicate_count > 0:
+        logger.warning(
+            "Deduplicated %d duplicate episode metadata rows for repo=%s",
+            duplicate_count,
+            str(meta.repo_id),
+        )
+
     return SourceMetaView(
         repo_id=str(meta.repo_id),
         fps=int(meta.fps),
-        episodes=episodes,
+        episodes=deduped,
         stats=dict(meta.stats),
     )
 
@@ -255,7 +285,10 @@ class LeRobotSingleSource:
         camera_map: dict[str, str],
         state_key: str | None,
         action_key: str | None,
+        video_backend: str | None = None,
         tolerance_s: float | None = None,
+        filtering_cfg: dict[str, Any] | None = None,
+        global_filtering_cfg: dict[str, Any] | None = None,
     ) -> None:
         self.repo_id = str(repo_id)
         self.root = root
@@ -264,7 +297,13 @@ class LeRobotSingleSource:
         self.camera_map = dict(camera_map)
         self.state_key = state_key
         self.action_key = action_key
+        self.video_backend = None if video_backend is None else str(video_backend)
+
         self.tolerance_s = tolerance_s
+        self.filtering_cfg = None if filtering_cfg is None else dict(filtering_cfg)
+        self.global_filtering_cfg = (
+            None if global_filtering_cfg is None else dict(global_filtering_cfg)
+        )
         self.meta = load_lerobot_meta(self.repo_id, root, revision)
         self.request: DatasetRequest | None = None
         self.compiled_train_index: CompiledSourceIndex | None = None
@@ -272,7 +311,9 @@ class LeRobotSingleSource:
         self._runtime: LeRobotSourceRuntime | None = None
 
     def _resolved_root(self) -> Path:
-        return Path(self.root) if self.root is not None else HF_LEROBOT_HOME / self.repo_id
+        return (
+            Path(self.root) if self.root is not None else HF_LEROBOT_HOME / self.repo_id
+        )
 
     def _resolved_request(self) -> dict[str, list[float]]:
         if self.request is None:
@@ -309,7 +350,134 @@ class LeRobotSingleSource:
             state_key=self.state_key,
             action_key=self.action_key,
         )
+
+        logger.info(
+            "LeRobot source compile repo=%s root=%s total_episodes=%d train_episodes=%d val_episodes=%d",
+            self.repo_id,
+            str(self.meta.root),
+            int(self.meta.total_episodes),
+            int(self.compiled_train_index.episodes.episode_index.shape[0]),
+            int(self.compiled_val_index.episodes.episode_index.shape[0]),
+        )
+
+        normalized_filter_cfg = normalize_filtering_config(
+            global_filtering=self.global_filtering_cfg,
+            source_filtering=self.filtering_cfg,
+        )
+        if normalized_filter_cfg is not None and bool(
+            normalized_filter_cfg.get("apply_at_sampling", True)
+        ):
+            self.compiled_train_index = self._apply_action_frame_filtering(
+                compiled=self.compiled_train_index,
+                split="train",
+                filtering_cfg=normalized_filter_cfg,
+            )
+            self.compiled_val_index = self._apply_action_frame_filtering(
+                compiled=self.compiled_val_index,
+                split="val",
+                filtering_cfg=normalized_filter_cfg,
+            )
+
         self._runtime = None
+
+    def _apply_action_frame_filtering(
+        self,
+        *,
+        compiled: CompiledSourceIndex,
+        split: str,
+        filtering_cfg: dict[str, Any],
+    ) -> CompiledSourceIndex:
+        """Build/reuse action-frame filtering cache and project kept anchors into compiled index."""
+        role = next(iter(self.request.image_requests.keys()))
+        primary_camera_dataset_key = self.camera_map[role]
+        motion_cfg = dict(filtering_cfg.get("motion", {}))
+        use_all_cameras = bool(motion_cfg.get("aggregate_all_cameras", False))
+        if use_all_cameras:
+            camera_keys_from_map = [
+                str(v) for v in self.camera_map.values() if v is not None
+            ]
+            camera_dataset_keys = tuple(dict.fromkeys(camera_keys_from_map))
+            if len(camera_dataset_keys) == 0:
+                camera_dataset_keys = tuple(
+                    sorted(str(key) for key in self.meta.camera_keys)
+                )
+        else:
+            camera_dataset_keys = (str(primary_camera_dataset_key),)
+        camera_aggregate_reduce = str(motion_cfg.get("aggregate_reduce", "mean"))
+        request_deltas = tuple(
+            int(x) for x in self.request.image_requests[role].deltas_steps
+        )
+
+        logger.info(
+            "Action-frame filtering source=%s split=%s start cameras=%s mode=%s candidate_episodes=%d",
+            self.repo_id,
+            split,
+            list(camera_dataset_keys),
+            str(filtering_cfg.get("mode")),
+            int(compiled.episodes.episode_index.shape[0]),
+        )
+
+        result = build_action_frame_filter(
+            repo_id=self.repo_id,
+            root=self.root,
+            revision=self.revision,
+            video_backend=self.video_backend,
+            tolerance_s=self.tolerance_s,
+            request_image_deltas=request_deltas,
+            camera_dataset_keys=camera_dataset_keys,
+            camera_aggregate_reduce=camera_aggregate_reduce,
+            action_key=self.action_key,
+            episode_ids=compiled.episodes.episode_index,
+            candidate_start=compiled.episodes.valid_anchor_start,
+            candidate_end=compiled.episodes.valid_anchor_end,
+            filtering_cfg=filtering_cfg,
+            split=split,
+        )
+
+        counts = result.kept_counts.astype(np.int32)
+        range_start = result.kept_range_start.astype(np.int64)
+        range_end = result.kept_range_end.astype(np.int64)
+        sampleable_episode_ids = compiled.episodes.episode_index[counts > 0].astype(
+            np.int32
+        )
+        sampleable_episode_weights = counts[counts > 0].astype(np.float64)
+
+        logger.info(
+            "Action-frame filtering source=%s split=%s cache=%s before=%d after=%d trimmed=%.3f motion_only_removed=%d action_only_removed=%d",
+            self.repo_id,
+            split,
+            result.summary.get("cache"),
+            int(result.summary.get("anchors_before", 0)),
+            int(result.summary.get("anchors_after", 0)),
+            float(result.summary.get("trimmed_fraction", 0.0)),
+            int(result.summary.get("motion_only_removed", 0)),
+            int(result.summary.get("action_only_removed", 0)),
+        )
+
+        episode_bundle = CompiledEpisodeIndex(
+            episode_index=compiled.episodes.episode_index,
+            dataset_from_index=compiled.episodes.dataset_from_index,
+            dataset_to_index=compiled.episodes.dataset_to_index,
+            valid_anchor_start=range_start,
+            valid_anchor_end=range_end,
+            valid_anchor_count=counts,
+            sample_anchor_offsets_start=result.kept_offsets_start.astype(np.int64),
+            sample_anchor_offsets_end=result.kept_offsets_end.astype(np.int64),
+            sample_anchor_values=result.kept_anchor_values.astype(np.int64),
+        )
+
+        return CompiledSourceIndex(
+            repo_id=compiled.repo_id,
+            fps=compiled.fps,
+            camera_role_to_key=compiled.camera_role_to_key,
+            state_key=compiled.state_key,
+            action_key=compiled.action_key,
+            episodes=episode_bundle,
+            sampleable_episode_ids=sampleable_episode_ids,
+            sampleable_episode_weights=sampleable_episode_weights,
+            filter_summary=dict(result.summary),
+            filter_cache_path=result.cache_path,
+        )
 
     def prepare(self, *, lock: bool = False) -> None:
         """Create the LeRobotDataset and store as runtime.
@@ -345,12 +513,15 @@ class LeRobotSingleSource:
             resolved_delta_timestamps=resolved,
         )
 
-    def _create_dataset(self, delta_timestamps: dict[str, list[float]]) -> LeRobotDataset:
+    def _create_dataset(
+        self, delta_timestamps: dict[str, list[float]]
+    ) -> LeRobotDataset:
         return LeRobotDataset(
             repo_id=self.repo_id,
             root=str(self._resolved_root()),
             revision=self.revision,
             delta_timestamps=delta_timestamps,
+            video_backend=self.video_backend,
             tolerance_s=self.tolerance_s if self.tolerance_s is not None else 1e-4,
         )
 
@@ -361,12 +532,12 @@ class LeRobotSingleSource:
         return self._runtime
 
     def get_sample(self, anchor_abs_index: int) -> DatasetSample:
-        rt = self.runtime
+        runtime = self.runtime
         if self.request is None:
             raise RuntimeError("Source request must be set before get_sample")
         if self.request.image_dtype != "uint8":
             raise NotImplementedError(self.request.image_dtype)
-        raw = rt.dataset[int(anchor_abs_index)]
+        raw = runtime.dataset[int(anchor_abs_index)]
         image_streams: dict[str, torch.Tensor] = {}
         image_padding_masks: dict[str, torch.Tensor] = {}
         for role, dataset_key in self.camera_map.items():

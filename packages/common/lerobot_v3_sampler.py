@@ -100,13 +100,28 @@ class WeightedLeRobotTokenSampler(torch.utils.data.Sampler[SampleToken]):
         source = self.compiled_sources[source_id]
         episode_id = self._next_episode_id(source_id=source_id, state=state, rng=rng)
         row_idx = state.episode_row_by_id[episode_id]
-        start = int(source.episodes.valid_anchor_start[row_idx])
-        end = int(source.episodes.valid_anchor_end[row_idx])
-        if end <= start:
-            raise ValueError(
-                f"Episode {episode_id} of source {source.repo_id!r} has no valid anchors: [{start}, {end})"
-            )
-        anchor = int(rng.integers(start, end))
+        if (
+            source.episodes.sample_anchor_values is not None
+            and source.episodes.sample_anchor_offsets_start is not None
+            and source.episodes.sample_anchor_offsets_end is not None
+        ):
+            values = source.episodes.sample_anchor_values
+            offset_start = int(source.episodes.sample_anchor_offsets_start[row_idx])
+            offset_end = int(source.episodes.sample_anchor_offsets_end[row_idx])
+            if offset_end <= offset_start:
+                raise ValueError(
+                    f"Episode {episode_id} of source {source.repo_id!r} has no filtered anchors: [{offset_start}, {offset_end})"
+                )
+            select_idx = int(rng.integers(offset_start, offset_end))
+            anchor = int(values[select_idx])
+        else:
+            start = int(source.episodes.valid_anchor_start[row_idx])
+            end = int(source.episodes.valid_anchor_end[row_idx])
+            if end <= start:
+                raise ValueError(
+                    f"Episode {episode_id} of source {source.repo_id!r} has no valid anchors: [{start}, {end})"
+                )
+            anchor = int(rng.integers(start, end))
         return SampleToken(
             source_id=source_id, episode_id=episode_id, anchor_abs_index=anchor
         )

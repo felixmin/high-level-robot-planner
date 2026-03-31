@@ -53,6 +53,7 @@ def create_datamodule(cfg_data: Any):
             loader=loader,
             adapter=adapter,
             output_format=str(data["output_format"]),
+            filtering=data.get("filtering"),
         )
 
     raise ValueError(f"Only data.backend='lerobot_v3' is supported, got {backend!r}")

@@ -16,7 +16,7 @@ logging:
 lerobot:
   command: lerobot-train
   install_editables: [lerobot, lerobot_policy_hlrp]
-  output_dir: ${logging.runs_dir}/lerobot
+  output_dir: ${logging.runs_dir}
   job_name: ${experiment.name}
   resume: false
   resume_from: null

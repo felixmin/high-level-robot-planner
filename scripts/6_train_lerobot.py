@@ -540,6 +540,9 @@ def _runtime_cwd_from_cfg(cfg: DictConfig) -> Path:
     if run_dir is None:
         raise ValueError("logging.runs_dir must be set for stage-3 runs")
     cwd = Path(str(run_dir))
+    if not cwd.is_absolute():
+        cwd = workspace_root / cwd
+    cwd = cwd.resolve()
     cwd.mkdir(parents=True, exist_ok=True)
     return cwd
 

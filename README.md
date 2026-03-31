@@ -208,6 +208,21 @@ That file is gitignored and is the right place for things like:
 
 Start from `config/user_config/local.yaml.example` if you need to create or update your local file.
 
+### Filtering Config Locations
+
+Action-frame filtering is configured separately for Stage 1/2 and Stage 3.
+
+- Stage 1/2 filtering lives in data configs under `config/data/*.yaml`.
+- Example: `config/data/lsy_teleop_only.yaml` -> `data.filtering`.
+- Stage 3 filtering lives in stage-3 dataset configs under `config/stage3_dataset/*.yaml`.
+- Example: `config/stage3_dataset/lsy_teleop_full_multitask.yaml` -> `lerobot.dataset.filtering`.
+- Stage 3 source list lives in `config/stage3_dataset_mix/*.yaml` and can optionally override filtering per source via `sources[i].filtering`.
+- Merge order at runtime is: Stage 3 global dataset filtering, then per-source override (if present).
+
+Implication: Stage 3 does not automatically inherit Stage 1 filtering values unless you set matching values explicitly.
+
+For filtering semantics and cache/debugging details, see `docs/action_frame_filtering.md`.
+
 ## Dataset Sources and Downloads
 
 - Optional predownload step for Stage 1/2:
